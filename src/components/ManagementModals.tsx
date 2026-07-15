@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Button, Card, Select } from 'animal-island-ui'
 import { api, errorMessage, jsonRequest } from '../api'
+import { requestPwaInstall, usePwaInstall } from '../pwa'
 import { useTheme } from '../theme'
 import type { AppPreferences, Category, ImageAsset } from '../types'
 import { AppIcon } from './AppIcon'
 import { BackupManager } from './BackupManager'
 import { ErrorNotice, Modal } from './Modal'
+import { OfflineStatusContent } from './OfflineManager'
 
 function AccountPanel({ className, label, children }: { className: string; label: string; children: ReactNode }) {
   const { theme } = useTheme()
@@ -140,6 +142,8 @@ export function AccountManager({
   const [busy, setBusy] = useState(false)
   const [quickCategoryId, setQuickCategoryId] = useState('')
   const [preferenceBusy, setPreferenceBusy] = useState(false)
+  const [showInstallGuide, setShowInstallGuide] = useState(false)
+  const installMode = usePwaInstall()
 
   useEffect(() => {
     void api<AppPreferences>('/api/preferences').then((preferences) => {
@@ -223,15 +227,41 @@ export function AccountManager({
           </div>
         </AccountPanel>
 
-        <AccountPanel className="iphone-install" label="安装到 iPhone 主屏幕">
+        <AccountPanel className="home-screen-install" label="安装到主屏幕">
           <div className="account-section-heading">
             <AppIcon name="install" size={24} />
             <div>
-              <h3>安装到 iPhone 15 Pro Max 主屏幕</h3>
-              <p>用 Safari 打开正式网址，点底部“分享”按钮，选择“添加到主屏幕”，再点“添加”。之后会像独立应用一样全屏打开。</p>
+              <h3>安装到主屏幕</h3>
+              <p>安装后可以从桌面直接打开，并以独立应用窗口运行。</p>
             </div>
           </div>
-          <div className="notice notice-warning">首次从主屏幕打开时，可能需要重新登录一次。本轮暂不加入 iOS 系统分享菜单。</div>
+          {installMode === 'installed' ? (
+            <div className="notice notice-success">当前已经从主屏幕应用中打开。</div>
+          ) : installMode === 'prompt' ? (
+            <Button type="primary" size="small" icon={<AppIcon name="install" size={17} />} onClick={() => void requestPwaInstall()}>
+              安装应用
+            </Button>
+          ) : installMode === 'ios-guide' ? (
+            <>
+              <Button size="small" icon={<AppIcon name="install" size={17} />} onClick={() => setShowInstallGuide((value) => !value)}>
+                {showInstallGuide ? '收起安装步骤' : '查看安装步骤'}
+              </Button>
+              {showInstallGuide && (
+                <ol className="install-steps">
+                  <li>请在 Safari 中打开当前正式网址。</li>
+                  <li>点浏览器的“分享”按钮。</li>
+                  <li>选择“添加到主屏幕”，再点“添加”。</li>
+                </ol>
+              )}
+            </>
+          ) : (
+            <div className="notice notice-warning">当前浏览器没有提供直接安装按钮；可在浏览器菜单中查找“安装应用”或“添加到主屏幕”。</div>
+          )}
+          <p className="install-note">首次从主屏幕打开时，可能需要重新登录一次。</p>
+        </AccountPanel>
+
+        <AccountPanel className="offline-settings" label="离线阅读与自动同步">
+          <OfflineStatusContent onChanged={onChanged} />
         </AccountPanel>
 
         <BackupManager onRestored={onChanged} />

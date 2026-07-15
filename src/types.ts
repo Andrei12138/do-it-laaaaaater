@@ -58,7 +58,7 @@ export interface AppPreferences {
   quickSaveCategoryId: string | null
 }
 
-export type SyncPhase = 'idle' | 'saving' | 'saved' | 'offline' | 'error'
+export type SyncPhase = 'idle' | 'saving' | 'syncing' | 'queued' | 'saved' | 'offline' | 'error'
 
 export interface SyncSnapshot {
   phase: SyncPhase

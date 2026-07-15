@@ -33,6 +33,7 @@ function cleanOriginalName(value: string) {
 export async function prepareImage(
   context: AppContext,
   input: {
+    id?: string
     buffer: Buffer
     originalName: string
     itemId: string
@@ -51,7 +52,7 @@ export async function prepareImage(
     throw new Error('只支持 PNG、JPEG 和 WebP 图片')
   }
 
-  const id = randomUUID()
+  const id = input.id || randomUUID()
   const fileName = id + '.' + detected.ext
   const thumbName = id + '.webp'
   const originalPath = path.join(context.originalsDir, fileName)

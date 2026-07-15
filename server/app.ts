@@ -115,6 +115,26 @@ function categoryColor(value: unknown) {
   return color.toLowerCase()
 }
 
+function clientUuid(value: unknown) {
+  const parsed = z.string().uuid().safeParse(String(value || '').trim())
+  return parsed.success ? parsed.data : randomUUID()
+}
+
+function clientAssetIds(value: unknown, count: number) {
+  try {
+    const parsed = JSON.parse(String(value || '[]')) as unknown
+    if (!Array.isArray(parsed) || parsed.length !== count) return Array.from({ length: count }, () => randomUUID())
+    return parsed.map((entry) => clientUuid(entry))
+  } catch {
+    return Array.from({ length: count }, () => randomUUID())
+  }
+}
+
+function clientCreatedAt(value: unknown) {
+  const timestamp = Number(value)
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now()
+}
+
 function setSession(context: AppContext, res: Response, userId: string) {
   const token = createSessionToken()
   const now = Date.now()
@@ -169,12 +189,19 @@ async function prepareFiles(
   itemId: string,
   userId: string,
   role: 'attachment' | 'gallery',
-  startOrder: number
+  startOrder: number,
+  assetIds: string[] = []
 ) {
   const prepared: PreparedAsset[] = []
   try {
     for (let index = 0; index < files.length; index += 1) {
+      const assetId = assetIds[index] || randomUUID()
+      const existing = context.db.prepare(
+        'SELECT id FROM assets WHERE id=? AND item_id=? AND user_id=?'
+      ).get(assetId, itemId, userId)
+      if (existing) continue
       prepared.push(await prepareImage(context, {
+        id: assetId,
         buffer: files[index].buffer,
         originalName: files[index].originalname,
         itemId,
@@ -192,6 +219,35 @@ async function prepareFiles(
 
 function findRawItem(context: AppContext, userId: string, itemId: string) {
   return context.db.prepare('SELECT * FROM items WHERE id=? AND user_id=?').get(itemId, userId) as Row | undefined
+}
+
+function assertItemVersion(context: AppContext, userId: string, itemId: string, body?: Record<string, unknown>) {
+  if (!body || !hasOwn(body, 'baseUpdatedAt')) return
+  const raw = findRawItem(context, userId, itemId)
+  if (!raw) throw new ApiError(404, '条目不存在')
+  if (Number(body.baseUpdatedAt) !== Number(raw.updated_at)) {
+    throw new ApiError(409, '云端条目已在其他设备更新，请选择保留云端或使用本机版本', {
+      conflict: true,
+      current: getItem(context, userId, itemId)
+    })
+  }
+}
+
+function itemChangesAlreadyApplied(raw: Row, body: Record<string, unknown>) {
+  let compared = 0
+  const compare = (key: string, current: unknown, normalize: (value: unknown) => unknown = (value) => value) => {
+    if (!hasOwn(body, key)) return true
+    compared += 1
+    return normalize(current) === normalize(body[key])
+  }
+  const nullable = (value: unknown) => String(value || '') || null
+  const boolean = (value: unknown) => Boolean(Number(value) || value === true)
+  return compare('title', raw.title, String) &&
+    compare('url', raw.url, nullable) &&
+    compare('status', raw.status, String) &&
+    compare('categoryId', raw.category_id, nullable) &&
+    compare('isStarred', raw.is_starred, boolean) &&
+    compare('plannedFor', raw.planned_for, nullable) && compared > 0
 }
 
 function insertItem(context: AppContext, input: {
@@ -580,7 +636,14 @@ export function createApp(context = createContext()) {
     const max = context.db.prepare('SELECT COALESCE(MAX(sort_order),-1) AS value FROM categories WHERE user_id=?').get(
       req.userId as string
     ) as Row
-    const id = randomUUID()
+    const id = clientUuid(req.body.id)
+    const existing = context.db.prepare(
+      'SELECT id,name,color,sort_order FROM categories WHERE id=? AND user_id=?'
+    ).get(id, req.userId as string)
+    if (existing) {
+      res.json(existing)
+      return
+    }
     try {
       context.db.prepare(
         'INSERT INTO categories (id,user_id,name,color,sort_order,created_at) VALUES (?,?,?,?,?,?)'
@@ -643,8 +706,11 @@ export function createApp(context = createContext()) {
       : []
     if (!ids.length) throw new ApiError(400, '请选择至少一个条目')
     const owned = ids.filter((id) => findRawItem(context, userId, id))
-    if (owned.length !== ids.length) throw new ApiError(404, '部分条目不存在')
     if (req.body.delete === true) {
+      if (!owned.length) {
+        res.json({ updated: 0, deleted: 0, succeededIds: ids, failed: [] })
+        return
+      }
       const placeholders = owned.map(() => '?').join(',')
       const assets = context.db.prepare(
         `SELECT file_name AS fileName,thumb_name AS thumbName FROM assets WHERE user_id=? AND item_id IN (${placeholders})`
@@ -657,9 +723,10 @@ export function createApp(context = createContext()) {
         fileName: asset.fileName,
         thumbName: asset.thumbName
       })))
-      res.json({ updated: 0, deleted: owned.length, succeededIds: owned, failed: [] })
+      res.json({ updated: 0, deleted: owned.length, succeededIds: ids, failed: [] })
       return
     }
+    if (owned.length !== ids.length) throw new ApiError(404, '部分条目不存在')
     const changes = req.body.changes && typeof req.body.changes === 'object'
       ? req.body.changes as Record<string, unknown>
       : {}
@@ -681,6 +748,12 @@ export function createApp(context = createContext()) {
     upload.array('images', MAX_IMAGES_PER_ITEM),
     async (req: UserRequest, res) => {
       const userId = req.userId as string
+      const itemId = clientUuid(req.body.id)
+      const existingById = findRawItem(context, userId, itemId)
+      if (existingById) {
+        res.json(getItem(context, userId, itemId))
+        return
+      }
       let normalizedUrl: string
       try {
         normalizedUrl = normalizeUrl(String(req.body.url || ''))
@@ -695,9 +768,10 @@ export function createApp(context = createContext()) {
       const categoryId = ensureCategory(context, userId, optionalCategory(req.body.categoryId))
       const fallback = new URL(normalizedUrl).hostname
       const title = requiredTitle(req.body.title, fallback)
-      const itemId = randomUUID()
       const files = (req.files || []) as Express.Multer.File[]
-      const prepared = await prepareFiles(context, files, itemId, userId, 'attachment', 0)
+      const prepared = await prepareFiles(
+        context, files, itemId, userId, 'attachment', 0, clientAssetIds(req.body.assetIds, files.length)
+      )
       try {
         runTransaction(context.db, () => {
           insertItem(context, {
@@ -708,7 +782,7 @@ export function createApp(context = createContext()) {
             url: normalizedUrl,
             normalizedUrl,
             categoryId,
-            createdAt: Date.now()
+            createdAt: clientCreatedAt(req.body.createdAt)
           })
           prepared.forEach((asset) => insertPreparedAsset(context, asset))
           syncItemTags(context, userId, itemId, parseTags(req.body.tags))
@@ -746,12 +820,19 @@ export function createApp(context = createContext()) {
     upload.array('images', MAX_IMAGES_PER_ITEM),
     async (req: UserRequest, res) => {
       const userId = req.userId as string
+      const itemId = clientUuid(req.body.id)
+      const existingById = findRawItem(context, userId, itemId)
+      if (existingById) {
+        res.json(getItem(context, userId, itemId))
+        return
+      }
       const files = (req.files || []) as Express.Multer.File[]
       if (!files.length) throw new ApiError(400, '请至少添加一张图片')
       const categoryId = ensureCategory(context, userId, optionalCategory(req.body.categoryId))
       const title = requiredTitle(req.body.title, '图片组')
-      const itemId = randomUUID()
-      const prepared = await prepareFiles(context, files, itemId, userId, 'gallery', 0)
+      const prepared = await prepareFiles(
+        context, files, itemId, userId, 'gallery', 0, clientAssetIds(req.body.assetIds, files.length)
+      )
       try {
         runTransaction(context.db, () => {
           insertItem(context, {
@@ -762,7 +843,7 @@ export function createApp(context = createContext()) {
             url: null,
             normalizedUrl: null,
             categoryId,
-            createdAt: Date.now()
+            createdAt: clientCreatedAt(req.body.createdAt)
           })
           prepared.forEach((asset) => insertPreparedAsset(context, asset))
           syncItemTags(context, userId, itemId, parseTags(req.body.tags))
@@ -777,9 +858,14 @@ export function createApp(context = createContext()) {
 
   app.post('/api/items/text', authRequired(context), (req: UserRequest, res) => {
     const userId = req.userId as string
+    const itemId = clientUuid(req.body.id)
+    const existingById = findRawItem(context, userId, itemId)
+    if (existingById) {
+      res.json(getItem(context, userId, itemId))
+      return
+    }
     const categoryId = ensureCategory(context, userId, optionalCategory(req.body.categoryId))
     const title = requiredTitle(req.body.title)
-    const itemId = randomUUID()
     runTransaction(context.db, () => {
       insertItem(context, {
         id: itemId,
@@ -789,7 +875,7 @@ export function createApp(context = createContext()) {
         url: null,
         normalizedUrl: null,
         categoryId,
-        createdAt: Date.now()
+        createdAt: clientCreatedAt(req.body.createdAt)
       })
       syncItemTags(context, userId, itemId, [])
     })
@@ -800,6 +886,11 @@ export function createApp(context = createContext()) {
     const userId = req.userId as string
     const raw = findRawItem(context, userId, routeId(req))
     if (!raw) throw new ApiError(404, '条目不存在')
+    if (itemChangesAlreadyApplied(raw, req.body as Record<string, unknown>)) {
+      res.json(getItem(context, userId, routeId(req)))
+      return
+    }
+    assertItemVersion(context, userId, routeId(req), req.body as Record<string, unknown>)
     const title = requiredTitle(req.body.title, String(raw.title))
     const categoryId = ensureCategory(context, userId, optionalCategory(req.body.categoryId))
     const status = req.body.status === 'completed' ? 'completed' : 'pending'
@@ -849,6 +940,13 @@ export function createApp(context = createContext()) {
   })
 
   app.patch('/api/items/:id', authRequired(context), (req: UserRequest, res) => {
+    const raw = findRawItem(context, req.userId as string, routeId(req))
+    if (!raw) throw new ApiError(404, '条目不存在')
+    if (itemChangesAlreadyApplied(raw, req.body as Record<string, unknown>)) {
+      res.json(getItem(context, req.userId as string, routeId(req)))
+      return
+    }
+    assertItemVersion(context, req.userId as string, routeId(req), req.body as Record<string, unknown>)
     res.json(patchItem(context, req.userId as string, routeId(req), req.body as Record<string, unknown>))
   })
 
@@ -893,6 +991,7 @@ export function createApp(context = createContext()) {
     const userId = req.userId as string
     const raw = findRawItem(context, userId, routeId(req))
     if (!raw) throw new ApiError(404, '条目不存在')
+    assertItemVersion(context, userId, routeId(req), req.body as Record<string, unknown>)
     const assets = context.db.prepare(
       'SELECT file_name AS fileName,thumb_name AS thumbName FROM assets WHERE item_id=? AND user_id=?'
     ).all(routeId(req), userId) as Array<{ fileName: string; thumbName: string }>
@@ -918,10 +1017,22 @@ export function createApp(context = createContext()) {
       if (String(raw.kind) === 'text') throw new ApiError(400, '文本条目不能添加图片')
       const files = (req.files || []) as Express.Multer.File[]
       if (!files.length) throw new ApiError(400, '请选择图片')
+      const requestedAssetIds = clientAssetIds(req.body.assetIds, files.length)
+      const alreadyStored = requestedAssetIds.every((id) => context.db.prepare(
+        'SELECT id FROM assets WHERE id=? AND item_id=? AND user_id=?'
+      ).get(id, routeId(req), userId))
+      if (alreadyStored) {
+        res.json(getItem(context, userId, routeId(req)))
+        return
+      }
+      assertItemVersion(context, userId, routeId(req), req.body as Record<string, unknown>)
       const current = context.db.prepare(
         "SELECT COUNT(*) AS count,COALESCE(MAX(sort_order),-1) AS maxOrder FROM assets WHERE item_id=? AND role<>'web_cover'"
       ).get(routeId(req)) as Row
-      if (Number(current.count) + files.length > MAX_IMAGES_PER_ITEM) {
+      const missingCount = requestedAssetIds.filter((id) => !context.db.prepare(
+        'SELECT id FROM assets WHERE id=? AND item_id=? AND user_id=?'
+      ).get(id, routeId(req), userId)).length
+      if (Number(current.count) + missingCount > MAX_IMAGES_PER_ITEM) {
         throw new ApiError(400, '每个条目最多保存 30 张图片')
       }
       const role = String(raw.kind) === 'link' ? 'attachment' : 'gallery'
@@ -931,7 +1042,8 @@ export function createApp(context = createContext()) {
         routeId(req),
         userId,
         role,
-        Number(current.maxOrder) + 1
+        Number(current.maxOrder) + 1,
+        requestedAssetIds
       )
       try {
         runTransaction(context.db, () => {
@@ -954,6 +1066,11 @@ export function createApp(context = createContext()) {
     const current: string[] = context.db.prepare(
       "SELECT id FROM assets WHERE item_id=? AND user_id=? AND role<>'web_cover' ORDER BY sort_order"
     ).all(routeId(req), userId).map((row) => String((row as Row).id))
+    if (ids.length === current.length && ids.every((id, index) => id === current[index])) {
+      res.json(getItem(context, userId, routeId(req)))
+      return
+    }
+    assertItemVersion(context, userId, routeId(req), req.body as Record<string, unknown>)
     if (ids.length !== current.length || new Set(ids).size !== ids.length || ids.some((id) => !current.includes(id))) {
       throw new ApiError(400, '图片顺序无效')
     }
@@ -977,6 +1094,7 @@ export function createApp(context = createContext()) {
       'SELECT a.*,i.kind FROM assets a JOIN items i ON i.id=a.item_id WHERE a.id=? AND a.user_id=? AND i.user_id=?'
     ).get(routeId(req), userId, userId) as Row | undefined
     if (!asset) throw new ApiError(404, '图片不存在')
+    assertItemVersion(context, userId, String(asset.item_id), req.body as Record<string, unknown>)
     if (String(asset.role) === 'web_cover') throw new ApiError(400, '网页封面不能在这里删除')
     if (String(asset.kind) === 'image_group') {
       const count = context.db.prepare(
@@ -985,6 +1103,7 @@ export function createApp(context = createContext()) {
       if (Number(count.count) <= 1) throw new ApiError(400, '图片组至少需要保留一张图片')
     }
     context.db.prepare('DELETE FROM assets WHERE id=? AND user_id=?').run(routeId(req), userId)
+    context.db.prepare('UPDATE items SET updated_at=? WHERE id=? AND user_id=?').run(Date.now(), String(asset.item_id), userId)
     await removePreparedAsset(context, {
       fileName: String(asset.file_name),
       thumbName: String(asset.thumb_name)

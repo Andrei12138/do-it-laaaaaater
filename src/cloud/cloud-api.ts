@@ -7,6 +7,7 @@ const BUCKET = 'library-images'
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 const MAX_IMAGES_PER_ITEM = 30
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 type ItemKind = 'link' | 'text' | 'image_group'
 type AssetRole = 'web_cover' | 'attachment' | 'gallery'
@@ -78,6 +79,21 @@ function requiredTitle(value: unknown, fallback = '') {
 function cleanOriginalName(value: string) {
   const name = value.replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_').trim()
   return (name || 'image').slice(0, 180)
+}
+
+function clientUuid(value: unknown) {
+  const id = String(value || '').trim()
+  return UUID_PATTERN.test(id) ? id : crypto.randomUUID()
+}
+
+function clientAssetIds(form: FormData, count: number) {
+  try {
+    const parsed = JSON.parse(String(form.get('assetIds') || '[]')) as unknown
+    if (!Array.isArray(parsed) || parsed.length !== count) return Array.from({ length: count }, () => crypto.randomUUID())
+    return parsed.map((value) => clientUuid(value))
+  } catch {
+    return Array.from({ length: count }, () => crypto.randomUUID())
+  }
 }
 
 function normalizeWebUrl(input: string) {
@@ -174,6 +190,7 @@ async function uploadAsset(input: {
   file: File
   role: AssetRole
   sortOrder: number
+  assetId?: string
 }) {
   const client = requireSupabase()
   const { file } = input
@@ -181,7 +198,7 @@ async function uploadAsset(input: {
   if (!file.size) apiError(400, '图片内容为空')
   if (file.size > MAX_IMAGE_BYTES) apiError(400, '单张图片不能超过 20 MB')
 
-  const assetId = crypto.randomUUID()
+  const assetId = clientUuid(input.assetId)
   const originalPath = `${input.userId}/${assetId}/original.${extensionFor(file.type)}`
   const thumbPath = `${input.userId}/${assetId}/thumb.webp`
   const { thumb, width, height } = await makeThumbnail(file)
@@ -189,14 +206,14 @@ async function uploadAsset(input: {
   const originalUpload = await client.storage.from(BUCKET).upload(originalPath, file, {
     contentType: file.type,
     cacheControl: '31536000',
-    upsert: false
+    upsert: true
   })
   if (originalUpload.error) apiError(400, messageFrom(originalUpload.error, '原图上传失败'))
 
   const thumbUpload = await client.storage.from(BUCKET).upload(thumbPath, thumb, {
     contentType: 'image/webp',
     cacheControl: '31536000',
-    upsert: false
+    upsert: true
   })
   if (thumbUpload.error) {
     await removeStorage([originalPath])
@@ -572,11 +589,44 @@ function validPlannedFor(value: unknown) {
   return plannedFor
 }
 
+function baseUpdatedAt(body: Record<string, unknown> | FormData) {
+  const value = body instanceof FormData ? body.get('baseUpdatedAt') : body.baseUpdatedAt
+  if (value === null || value === undefined || value === '') return null
+  const timestamp = Number(value)
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function assertCloudItemVersion(row: CloudItemRow, body: Record<string, unknown> | FormData) {
+  const expected = baseUpdatedAt(body)
+  if (expected === null) return
+  if (Date.parse(row.updated_at) !== expected) {
+    apiError(409, '云端条目已在其他设备更新，请选择保留云端或使用本机版本', { conflict: true })
+  }
+}
+
+function cloudChangesAlreadyApplied(row: CloudItemRow, body: Record<string, unknown>) {
+  let compared = 0
+  const nullable = (value: unknown) => String(value || '') || null
+  const compare = (key: string, current: unknown, normalize: (value: unknown) => unknown = (value) => value) => {
+    if (!Object.prototype.hasOwnProperty.call(body, key)) return true
+    compared += 1
+    return normalize(current) === normalize(body[key])
+  }
+  return compare('title', row.title, String) &&
+    compare('url', row.url, nullable) &&
+    compare('status', row.status, String) &&
+    compare('categoryId', row.category_id, nullable) &&
+    compare('isStarred', row.is_starred, Boolean) &&
+    compare('plannedFor', row.planned_for, nullable) && compared > 0
+}
+
 async function patchCloudItem(userId: string, itemId: string, body: Record<string, unknown>) {
   const client = requireSupabase()
   const rows = await loadItemRows(userId, itemId)
   if (!rows.length) apiError(404, '条目不存在')
   const raw = rows[0]
+  if (cloudChangesAlreadyApplied(raw, body)) return getItem(userId, itemId)
+  assertCloudItemVersion(raw, body)
   const changes: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (Object.prototype.hasOwnProperty.call(body, 'title')) changes.title = requiredTitle(body.title, raw.title)
   if (Object.prototype.hasOwnProperty.call(body, 'categoryId')) {
@@ -624,15 +674,17 @@ async function deleteItem(userId: string, itemId: string) {
 }
 
 async function insertItem(input: {
+  id?: string
   userId: string
   kind: ItemKind
   title: string
   url: string | null
   normalizedUrl: string | null
   categoryId: string | null
+  createdAt?: number
 }) {
-  const now = new Date().toISOString()
-  const id = crypto.randomUUID()
+  const now = new Date(Number.isFinite(input.createdAt) ? input.createdAt as number : Date.now()).toISOString()
+  const id = clientUuid(input.id)
   const result = await requireSupabase().from('items').insert({
     id,
     user_id: input.userId,
@@ -669,17 +721,23 @@ async function uploadFiles(input: {
   files: File[]
   role: 'attachment' | 'gallery'
   startOrder?: number
+  assetIds?: string[]
 }) {
   if (input.files.length > MAX_IMAGES_PER_ITEM) apiError(400, '每个条目最多保存 30 张图片')
   const uploaded: CloudAssetRow[] = []
   try {
     for (let index = 0; index < input.files.length; index += 1) {
+      const assetId = clientUuid(input.assetIds?.[index])
+      const existing = await requireSupabase().from('assets').select('*')
+        .eq('id', assetId).eq('item_id', input.itemId).eq('user_id', input.userId).maybeSingle()
+      if (existing.data) continue
       uploaded.push(await uploadAsset({
         userId: input.userId,
         itemId: input.itemId,
         file: input.files[index],
         role: input.role,
-        sortOrder: (input.startOrder || 0) + index
+        sortOrder: (input.startOrder || 0) + index,
+        assetId
       }))
     }
     return uploaded
@@ -789,7 +847,12 @@ async function handleCategories(path: string, method: string, options: RequestIn
     if (!/^#[0-9a-f]{6}$/.test(color)) apiError(400, '请选择有效的类别颜色')
     const maxResult = await client.from('categories').select('sort_order').eq('user_id', user.id)
       .order('sort_order', { ascending: false }).limit(1).maybeSingle()
+    const requestedId = clientUuid(body.id)
+    const existing = await client.from('categories').select('id,name,color,sort_order')
+      .eq('id', requestedId).eq('user_id', user.id).maybeSingle()
+    if (existing.data) return existing.data
     const inserted = await client.from('categories').insert({
+      id: requestedId,
       user_id: user.id,
       name,
       color,
@@ -825,6 +888,9 @@ async function createLink(options: RequestInit) {
   const user = await currentUser()
   if (!(options.body instanceof FormData)) apiError(400, '提交内容无效')
   const form = options.body
+  const requestedId = clientUuid(form.get('id'))
+  const existingById = await client.from('items').select('id').eq('id', requestedId).eq('user_id', user.id).maybeSingle()
+  if (existingById.data) return getItem(user.id, requestedId)
   const normalizedUrl = normalizeWebUrl(String(form.get('url') || ''))
   const duplicate = await client.from('items').select('id').eq('user_id', user.id).eq('kind', 'link')
     .eq('normalized_url', normalizedUrl).maybeSingle()
@@ -832,16 +898,18 @@ async function createLink(options: RequestInit) {
   const categoryId = await ensureCategory(user.id, form.get('categoryId'))
   const title = requiredTitle(form.get('title'), new URL(normalizedUrl).hostname)
   const itemId = await insertItem({
+    id: requestedId,
     userId: user.id,
     kind: 'link',
     title,
     url: normalizedUrl,
     normalizedUrl,
-    categoryId
+    categoryId,
+    createdAt: Number(form.get('createdAt') || Date.now())
   })
   try {
     const files = filesFrom(form)
-    await uploadFiles({ userId: user.id, itemId, files, role: 'attachment' })
+    await uploadFiles({ userId: user.id, itemId, files, role: 'attachment', assetIds: clientAssetIds(form, files.length) })
     await maybeUploadCover(user.id, itemId, String(form.get('coverUrl') || '').trim())
     return getItem(user.id, itemId)
   } catch (error) {
@@ -854,19 +922,24 @@ async function createImageGroup(options: RequestInit) {
   const user = await currentUser()
   if (!(options.body instanceof FormData)) apiError(400, '提交内容无效')
   const form = options.body
+  const requestedId = clientUuid(form.get('id'))
+  const existingById = await requireSupabase().from('items').select('id').eq('id', requestedId).eq('user_id', user.id).maybeSingle()
+  if (existingById.data) return getItem(user.id, requestedId)
   const files = filesFrom(form)
   if (!files.length) apiError(400, '请至少添加一张图片')
   const categoryId = await ensureCategory(user.id, form.get('categoryId'))
   const itemId = await insertItem({
+    id: requestedId,
     userId: user.id,
     kind: 'image_group',
     title: requiredTitle(form.get('title'), '图片组'),
     url: null,
     normalizedUrl: null,
-    categoryId
+    categoryId,
+    createdAt: Number(form.get('createdAt') || Date.now())
   })
   try {
-    await uploadFiles({ userId: user.id, itemId, files, role: 'gallery' })
+    await uploadFiles({ userId: user.id, itemId, files, role: 'gallery', assetIds: clientAssetIds(form, files.length) })
     return getItem(user.id, itemId)
   } catch (error) {
     await deleteItem(user.id, itemId).catch(() => undefined)
@@ -886,13 +959,18 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
   if (path === '/api/items/image-group' && method === 'POST') return createImageGroup(options)
   if (path === '/api/items/text' && method === 'POST') {
     const body = parseJsonBody(options)
+    const requestedId = clientUuid(body.id)
+    const existing = await client.from('items').select('id').eq('id', requestedId).eq('user_id', user.id).maybeSingle()
+    if (existing.data) return getItem(user.id, requestedId)
     const itemId = await insertItem({
+      id: requestedId,
       userId: user.id,
       kind: 'text',
       title: requiredTitle(body.title),
       url: null,
       normalizedUrl: null,
-      categoryId: await ensureCategory(user.id, body.categoryId)
+      categoryId: await ensureCategory(user.id, body.categoryId),
+      createdAt: Number(body.createdAt || Date.now())
     })
     return getItem(user.id, itemId)
   }
@@ -902,11 +980,14 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
     const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String))].slice(0, 500) : []
     if (!ids.length) apiError(400, '请选择至少一个条目')
     const rows = (await loadItemRows(user.id)).filter((row) => ids.includes(row.id))
-    if (rows.length !== ids.length) apiError(404, '部分条目不存在')
     const succeededIds: string[] = []
     const failed: Array<{ id: string; error: string }> = []
     if (body.delete === true) {
       for (const id of ids) {
+        if (!rows.some((row) => row.id === id)) {
+          succeededIds.push(id)
+          continue
+        }
         try {
           await deleteItem(user.id, id)
           succeededIds.push(id)
@@ -916,6 +997,7 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
       }
       return { updated: 0, deleted: succeededIds.length, succeededIds, failed }
     }
+    if (rows.length !== ids.length) apiError(404, '部分条目不存在')
     const changes = body.changes && typeof body.changes === 'object'
       ? body.changes as Record<string, unknown>
       : {}
@@ -945,13 +1027,18 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
   const assetOrderMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/assets\/order$/i)
   if (assetOrderMatch && method === 'PUT') {
     const itemId = assetOrderMatch[1]
-    await getItem(user.id, itemId)
+    const itemRows = await loadItemRows(user.id, itemId)
+    if (!itemRows.length) apiError(404, '条目不存在')
     const body = parseJsonBody(options)
     const ids = Array.isArray(body.ids) ? body.ids.map(String) : []
     const current = await client.from('assets').select('id').eq('item_id', itemId).eq('user_id', user.id)
       .neq('role', 'web_cover').order('sort_order')
     if (current.error) apiError(500, '无法读取图片顺序')
     const currentIds = (current.data || []).map((row) => row.id)
+    if (ids.length === currentIds.length && ids.every((id, index) => id === currentIds[index])) {
+      return getItem(user.id, itemId)
+    }
+    assertCloudItemVersion(itemRows[0], body)
     if (ids.length !== currentIds.length || new Set(ids).size !== ids.length || ids.some((id) => !currentIds.includes(id))) {
       apiError(400, '图片顺序无效')
     }
@@ -975,14 +1062,20 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
     const files = filesFrom(options.body)
     if (!files.length) apiError(400, '请选择图片')
     const current = (item.assets || []).filter((asset) => asset.role !== 'web_cover')
-    if (current.length + files.length > MAX_IMAGES_PER_ITEM) apiError(400, '每个条目最多保存 30 张图片')
+    const requestedAssetIds = clientAssetIds(options.body, files.length)
+    const currentIds = new Set((item.assets || []).map((asset) => asset.id))
+    if (requestedAssetIds.every((id) => currentIds.has(id))) return getItem(user.id, itemId)
+    assertCloudItemVersion(item, options.body)
+    const missingCount = requestedAssetIds.filter((id) => !currentIds.has(id)).length
+    if (current.length + missingCount > MAX_IMAGES_PER_ITEM) apiError(400, '每个条目最多保存 30 张图片')
     const startOrder = current.reduce((max, asset) => Math.max(max, asset.sort_order), -1) + 1
     await uploadFiles({
       userId: user.id,
       itemId,
       files,
       role: item.kind === 'link' ? 'attachment' : 'gallery',
-      startOrder
+      startOrder,
+      assetIds: requestedAssetIds
     })
     await client.from('items').update({ updated_at: new Date().toISOString() }).eq('id', itemId).eq('user_id', user.id)
     return getItem(user.id, itemId)
@@ -993,6 +1086,9 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
   const itemId = itemMatch[1]
   if (method === 'GET') return getItem(user.id, itemId)
   if (method === 'DELETE') {
+    const rows = await loadItemRows(user.id, itemId)
+    if (!rows.length) apiError(404, '条目不存在')
+    assertCloudItemVersion(rows[0], parseJsonBody(options))
     await deleteItem(user.id, itemId)
     return { ok: true }
   }
@@ -1002,6 +1098,8 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
     if (!rows.length) apiError(404, '条目不存在')
     const raw = rows[0]
     const body = parseJsonBody(options)
+    if (cloudChangesAlreadyApplied(raw, body)) return getItem(user.id, itemId)
+    assertCloudItemVersion(raw, body)
     const status = body.status === 'completed' ? 'completed' : 'pending'
     let normalizedUrl = raw.normalized_url
     let linkUrl = raw.url
@@ -1034,7 +1132,7 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
   apiError(405, '操作方式不支持')
 }
 
-async function handleAsset(path: string, method: string) {
+async function handleAsset(path: string, method: string, options: RequestInit) {
   if (method !== 'DELETE') apiError(405, '操作方式不支持')
   const match = path.match(/^\/api\/assets\/([0-9a-f-]+)$/i)
   if (!match) apiError(404, '图片不存在')
@@ -1046,6 +1144,7 @@ async function handleAsset(path: string, method: string) {
   if (asset.role === 'web_cover') apiError(400, '网页封面不能在这里删除')
   const itemRows = await loadItemRows(user.id, asset.item_id)
   if (!itemRows.length) apiError(404, '条目不存在')
+  assertCloudItemVersion(itemRows[0], parseJsonBody(options))
   if (itemRows[0].kind === 'image_group') {
     const count = (itemRows[0].assets || []).filter((entry) => entry.role === 'gallery').length
     if (count <= 1) apiError(400, '图片组至少需要保留一张图片')
@@ -1053,6 +1152,8 @@ async function handleAsset(path: string, method: string) {
   const deleted = await client.from('assets').delete().eq('id', asset.id).eq('user_id', user.id)
   if (deleted.error) apiError(500, '图片删除失败')
   await removeStorage([asset.original_path, asset.thumb_path])
+  await client.from('items').update({ updated_at: new Date().toISOString() })
+    .eq('id', asset.item_id).eq('user_id', user.id)
   return getItem(user.id, asset.item_id)
 }
 
@@ -1073,7 +1174,7 @@ export async function cloudApi<T>(path: string, options: RequestInit = {}): Prom
   } else if (url.pathname.startsWith('/api/items')) {
     result = await handleItems(url, method, options)
   } else if (url.pathname.startsWith('/api/assets/')) {
-    result = await handleAsset(url.pathname, method)
+    result = await handleAsset(url.pathname, method, options)
   } else {
     apiError(404, '功能不存在')
   }

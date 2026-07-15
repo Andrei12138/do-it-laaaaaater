@@ -4,13 +4,15 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent
+  type DragEvent as ReactDragEvent,
+  type ReactNode
 } from 'react'
 import {
   Button,
   Card,
   Checkbox,
   Divider,
+  Drawer,
   Footer,
   Input,
   Select,
@@ -23,6 +25,12 @@ import { api, errorMessage, jsonRequest } from '../api'
 import { chinaToday, plannedState, smartPriority } from '../china-date'
 import { discardDraft, readActiveDraft, type ActiveDraft } from '../draft-store'
 import { itemAgeLabel } from '../item-age'
+import { filterLibraryItems } from '../offline-query'
+import {
+  flushOfflineQueue,
+  getOfflineQueueSummaries,
+  useOfflineRuntime
+} from '../offline-store'
 import { useSyncStatus } from '../sync-status'
 import { getThemeDefinition, useTheme } from '../theme'
 import type {
@@ -45,6 +53,7 @@ import {
 import { EmptyState, Modal } from './Modal'
 import { ThemeControl } from './ThemeControl'
 import { showThemeNotification } from './ThemeNotification'
+import { OfflineManagerModal } from './OfflineManager'
 
 type Overlay =
   | { type: 'link'; initial?: { url?: string; title?: string } }
@@ -54,8 +63,60 @@ type Overlay =
   | { type: 'categories' }
   | { type: 'account' }
   | { type: 'bookmarklet' }
+  | { type: 'sync' }
   | { type: 'lightbox'; assets: ImageAsset[]; index: number }
   | null
+
+type MobilePanel = 'filters' | 'add' | 'more' | null
+
+function MobileActionSheet({
+  open,
+  title,
+  onClose,
+  children
+}: {
+  open: boolean
+  title: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  const { theme } = useTheme()
+
+  useEffect(() => {
+    if (!open || theme === 'animal-island') return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [onClose, open, theme])
+
+  if (theme === 'animal-island') {
+    return (
+      <Drawer
+        open={open}
+        title={title}
+        placement="bottom"
+        height="min(78dvh, 620px)"
+        pushBackground={false}
+        className="mobile-action-drawer"
+        onClose={onClose}
+      >
+        {children}
+      </Drawer>
+    )
+  }
+  if (!open) return null
+  return (
+    <div className="flat-mobile-sheet" role="presentation">
+      <button type="button" className="flat-mobile-sheet-mask" aria-label="关闭" onClick={onClose} />
+      <section role="dialog" aria-modal="true" aria-label={title} className="flat-mobile-sheet-panel">
+        <header><h2>{title}</h2><button type="button" aria-label="关闭" onClick={onClose}>×</button></header>
+        {children}
+      </section>
+    </div>
+  )
+}
 
 const defaultFilters: ItemFilters = {
   status: 'pending',
@@ -399,6 +460,7 @@ export function Dashboard({
   const { theme } = useTheme()
   const themeDefinition = getThemeDefinition(theme)
   const [categories, setCategories] = useState<Category[]>([])
+  const [allItems, setAllItems] = useState<LibraryItem[]>([])
   const [items, setItems] = useState<LibraryItem[]>([])
   const [filters, setFilters] = useState<ItemFilters>(initialFilters)
   const [overlay, setOverlay] = useState<Overlay>(null)
@@ -412,12 +474,17 @@ export function Dashboard({
   const [busyItems, setBusyItems] = useState<Set<string>>(() => new Set())
   const [retryItems, setRetryItems] = useState<Record<string, { changes: BulkItemChanges; label: string }>>({})
   const [focusMode, setFocusMode] = useState(false)
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null)
   const [activeDraft, setActiveDraft] = useState<ActiveDraft | null>(() => readActiveDraft())
   const syncStatus = useSyncStatus()
+  const offlineState = useOfflineRuntime()
   const requestNumber = useRef(0)
 
   const refreshReferences = useCallback(async () => {
-    const nextCategories = await api<Category[]>('/api/categories')
+    const [nextCategories] = await Promise.all([
+      api<Category[]>('/api/categories'),
+      api('/api/preferences')
+    ])
     setCategories(nextCategories)
     return nextCategories
   }, [])
@@ -430,18 +497,12 @@ export function Dashboard({
 
   const refreshItems = useCallback(async (activeFilters: ItemFilters) => {
     const currentRequest = ++requestNumber.current
-    const params = new URLSearchParams()
-    if (activeFilters.status !== 'all') params.set('status', activeFilters.status)
-    if (activeFilters.kind !== 'all') params.set('kind', activeFilters.kind)
-    if (activeFilters.category) params.set('category', activeFilters.category)
-    if (activeFilters.date) params.set('date', activeFilters.date)
-    if (activeFilters.q.trim()) params.set('q', activeFilters.q.trim())
-    if (activeFilters.priority !== 'all') params.set('priority', activeFilters.priority)
-    params.set('sort', activeFilters.sort)
     setLoading(true)
     try {
-      const result = await api<LibraryItem[]>('/api/items?' + params.toString())
+      const fetchedItems = await api<LibraryItem[]>('/api/items?status=all&sort=newest')
+      const result = filterLibraryItems(fetchedItems, activeFilters)
       if (currentRequest === requestNumber.current) {
+        setAllItems(fetchedItems)
         setItems(result)
         setError('')
       }
@@ -467,11 +528,25 @@ export function Dashboard({
   }, [])
 
   useEffect(() => {
+    void refreshItems(filters)
+    // Filters are applied locally after this complete offline snapshot is loaded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshItems])
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
-      void refreshItems(filters)
-    }, filters.q ? 250 : 0)
+      setItems(filterLibraryItems(allItems, filters))
+    }, filters.q ? 120 : 0)
     return () => window.clearTimeout(timer)
-  }, [filters, refreshItems])
+  }, [allItems, filters])
+
+  useEffect(() => {
+    const synced = () => {
+      void Promise.all([refreshReferences(), refreshItems(filters)])
+    }
+    window.addEventListener('offline-sync-complete', synced)
+    return () => window.removeEventListener('offline-sync-complete', synced)
+  }, [filters, refreshItems, refreshReferences])
 
   useEffect(() => {
     try {
@@ -755,8 +830,19 @@ export function Dashboard({
   }
 
   async function logout() {
-    await jsonRequest('/api/auth/logout', 'POST')
-    await onSessionChange()
+    try {
+      if (!navigator.onLine) {
+        notifyError('退出账号需要联网，以免本机尚未同步的内容丢失。')
+        return
+      }
+      await flushOfflineQueue()
+      const remaining = await getOfflineQueueSummaries()
+      if (remaining.length && !window.confirm(`还有 ${remaining.length} 项本地修改没有同步。继续退出会丢弃这些修改，确定吗？`)) return
+      await jsonRequest('/api/auth/logout', 'POST')
+      await onSessionChange()
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
+    }
   }
 
   function closeEditor() {
@@ -766,6 +852,34 @@ export function Dashboard({
 
   function dropOnMain(event: ReactDragEvent) {
     if (event.dataTransfer.files.length) event.preventDefault()
+  }
+
+  const queuedCount = offlineState.pendingCount + offlineState.failedCount
+  const displayedSyncPhase = !offlineState.online
+    ? 'offline'
+    : offlineState.syncing
+      ? 'syncing'
+      : queuedCount
+        ? 'queued'
+        : syncStatus.phase
+  const displayedSyncMessage = !offlineState.online
+    ? `离线模式${queuedCount ? ` · ${queuedCount} 项待同步` : ''}`
+    : offlineState.syncing
+      ? '正在同步离线修改…'
+      : queuedCount
+        ? `${queuedCount} 项等待同步`
+        : (offlineState.lastSyncedAt ? '数据已同步' : (syncStatus.message || '数据已就绪'))
+  const activeFilterCount = [
+    filters.kind !== 'all',
+    filters.priority !== 'all',
+    Boolean(filters.category),
+    Boolean(filters.date),
+    filters.sort !== 'smart'
+  ].filter(Boolean).length
+
+  function openFromMobile(nextOverlay: NonNullable<Overlay>) {
+    setMobilePanel(null)
+    setOverlay(nextOverlay)
   }
 
   return (
@@ -825,13 +939,18 @@ export function Dashboard({
             退出
           </Button>
         </nav>
-        <div className={`sync-indicator sync-${syncStatus.phase}`} role="status" aria-live="polite">
+        <button
+          type="button"
+          className={`sync-indicator sync-${displayedSyncPhase}`}
+          aria-label={`${displayedSyncMessage}，查看同步详情`}
+          onClick={() => setOverlay({ type: 'sync' })}
+        >
           <AppIcon
-            name={syncStatus.phase === 'error' || syncStatus.phase === 'offline' ? 'warning' : 'sync'}
+            name={displayedSyncPhase === 'error' || displayedSyncPhase === 'offline' ? 'warning' : 'sync'}
             size={17}
           />
-          <span>{syncStatus.message || '数据已就绪'}</span>
-        </div>
+          <span aria-live="polite">{displayedSyncMessage}</span>
+        </button>
       </header>
 
       <main className="main-content">
@@ -868,7 +987,7 @@ export function Dashboard({
               onClear={() => setFilters((current) => ({ ...current, q: '' }))}
             />
           </label>
-          <div className="filter-select">
+          <div className="filter-select advanced-filter">
             <Select
               aria-label="内容类型"
               value={filters.kind}
@@ -884,7 +1003,7 @@ export function Dashboard({
               }))}
             />
           </div>
-          <div className="filter-select">
+          <div className="filter-select advanced-filter">
             <Select
               aria-label="优先筛选"
               value={filters.priority}
@@ -899,7 +1018,7 @@ export function Dashboard({
               }))}
             />
           </div>
-          <div className="filter-select">
+          <div className="filter-select advanced-filter">
             <Select
               aria-label="类别"
               value={filters.category}
@@ -911,7 +1030,7 @@ export function Dashboard({
               onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
             />
           </div>
-          <label className="date-field">
+          <label className="date-field advanced-filter">
             <span className="visually-hidden">保存日期</span>
             <input
               type="date"
@@ -920,7 +1039,7 @@ export function Dashboard({
               onChange={(event) => setFilters((current) => ({ ...current, date: event.target.value }))}
             />
           </label>
-          <div className="filter-select sort-select">
+          <div className="filter-select sort-select advanced-filter">
             <Select
               aria-label="排序方式"
               value={filters.sort}
@@ -936,7 +1055,7 @@ export function Dashboard({
               }))}
             />
           </div>
-          <Button size="small" type="dashed" onClick={() => setFilters({ ...defaultFilters })}>清除筛选</Button>
+          <Button className="advanced-filter" size="small" type="dashed" onClick={() => setFilters({ ...defaultFilters })}>清除筛选</Button>
         </Card>
 
         {activeDraft && (
@@ -1058,6 +1177,162 @@ export function Dashboard({
         </div>
       </main>
 
+      <nav className="mobile-bottom-nav" aria-label="移动端主导航">
+        <button
+          type="button"
+          className={!mobilePanel && !selectionMode ? 'is-active' : ''}
+          onClick={() => {
+            setMobilePanel(null)
+            window.scrollTo({ top: 0, behavior: 'smooth' })
+          }}
+        >
+          <AppIcon name="focus" size={22} />
+          <span>清单</span>
+        </button>
+        <button
+          type="button"
+          className={mobilePanel === 'filters' ? 'is-active' : ''}
+          onClick={() => setMobilePanel((current) => current === 'filters' ? null : 'filters')}
+        >
+          <span className="mobile-nav-icon"><AppIcon name="sort" size={22} />{activeFilterCount > 0 && <b>{activeFilterCount}</b>}</span>
+          <span>筛选</span>
+        </button>
+        <button
+          type="button"
+          className={`mobile-add-action${mobilePanel === 'add' ? ' is-active' : ''}`}
+          onClick={() => setMobilePanel((current) => current === 'add' ? null : 'add')}
+        >
+          <span className="mobile-add-icon"><AppIcon name="add" size={27} /></span>
+          <span>添加</span>
+        </button>
+        <button
+          type="button"
+          className={selectionMode ? 'is-active' : ''}
+          onClick={() => {
+            setMobilePanel(null)
+            setSelectionMode((value) => !value)
+            if (selectionMode) setSelectedIds(new Set())
+          }}
+        >
+          <AppIcon name="select" size={22} />
+          <span>选择</span>
+        </button>
+        <button
+          type="button"
+          className={mobilePanel === 'more' ? 'is-active' : ''}
+          onClick={() => setMobilePanel((current) => current === 'more' ? null : 'more')}
+        >
+          <span className="mobile-nav-icon"><AppIcon name={queuedCount ? 'sync' : 'categories'} size={22} />{queuedCount > 0 && <b>{queuedCount}</b>}</span>
+          <span>更多</span>
+        </button>
+      </nav>
+
+      <MobileActionSheet open={mobilePanel === 'filters'} title="筛选与排序" onClose={() => setMobilePanel(null)}>
+        <div className="mobile-filter-sheet stack">
+          <label className="field">
+            <span>内容类型</span>
+            <Select
+              aria-label="内容类型"
+              value={filters.kind}
+              options={[
+                { key: 'all', label: '全部类型' },
+                { key: 'link', label: '网页' },
+                { key: 'text', label: '文本' },
+                { key: 'image_group', label: '图片' }
+              ]}
+              onChange={(value) => setFilters((current) => ({ ...current, kind: value as ItemFilters['kind'] }))}
+            />
+          </label>
+          <label className="field">
+            <span>优先级</span>
+            <Select
+              aria-label="优先筛选"
+              value={filters.priority}
+              options={[
+                { key: 'all', label: '全部优先级' },
+                { key: 'planned', label: '今日 / 逾期' },
+                { key: 'starred', label: '星标' }
+              ]}
+              onChange={(value) => setFilters((current) => ({ ...current, priority: value as ItemFilters['priority'] }))}
+            />
+          </label>
+          <label className="field">
+            <span>类别</span>
+            <Select
+              aria-label="类别"
+              value={filters.category}
+              options={[
+                { key: '', label: '全部类别' },
+                { key: 'uncategorized', label: '未分类' },
+                ...categories.map((category) => ({ key: category.id, label: category.name }))
+              ]}
+              onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
+            />
+          </label>
+          <label className="field">
+            <span>保存日期</span>
+            <input type="date" value={filters.date} onChange={(event) => setFilters((current) => ({ ...current, date: event.target.value }))} />
+          </label>
+          <label className="field">
+            <span>排序方式</span>
+            <Select
+              aria-label="排序方式"
+              value={filters.sort}
+              options={[
+                { key: 'smart', label: '智能优先' },
+                { key: 'newest', label: '最近保存' },
+                { key: 'oldest', label: '最久未看' },
+                { key: 'recently_completed', label: '最近完成' }
+              ]}
+              onChange={(value) => setFilters((current) => ({ ...current, sort: value as ItemFilters['sort'] }))}
+            />
+          </label>
+          <div className="mobile-sheet-actions">
+            <Button type="dashed" onClick={() => setFilters({ ...defaultFilters })}>清除筛选</Button>
+            <Button type="primary" onClick={() => setMobilePanel(null)}>查看结果</Button>
+          </div>
+        </div>
+      </MobileActionSheet>
+
+      <MobileActionSheet open={mobilePanel === 'add'} title="添加内容" onClose={() => setMobilePanel(null)}>
+        <div className="mobile-action-list">
+          <Button block type="primary" size="large" icon={<AppIcon name="link" size={24} />} onClick={() => openFromMobile({ type: 'link' })}>
+            添加网页
+          </Button>
+          <Button block size="large" icon={<AppIcon name="text" size={24} />} onClick={() => openFromMobile({ type: 'text', initialText: '' })}>
+            保存文本
+          </Button>
+          <Button block size="large" icon={<AppIcon name="image" size={24} />} onClick={() => openFromMobile({ type: 'images', files: [] })}>
+            保存图片
+          </Button>
+          <p>断网时也可以添加；内容会先安全保存在本机，联网后自动同步。</p>
+        </div>
+      </MobileActionSheet>
+
+      <MobileActionSheet open={mobilePanel === 'more'} title="更多功能" onClose={() => setMobilePanel(null)}>
+        <div className="mobile-action-list mobile-more-list">
+          <Button block size="large" icon={<AppIcon name="sync" size={24} />} onClick={() => openFromMobile({ type: 'sync' })}>
+            离线与同步{queuedCount ? `（${queuedCount}）` : ''}
+          </Button>
+          <Button block size="large" icon={<AppIcon name="categories" size={24} />} onClick={() => openFromMobile({ type: 'categories' })}>
+            类别管理
+          </Button>
+          <Button block size="large" icon={<AppIcon name="bookmark" size={24} />} onClick={() => openFromMobile({ type: 'bookmarklet' })}>
+            书签按钮
+          </Button>
+          <ThemeControl />
+          <Button block size="large" icon={<AppIcon name="account" size={24} />} onClick={() => openFromMobile({ type: 'account' })}>
+            账号设置
+          </Button>
+          <Button block size="large" danger icon={<AppIcon name="logout" size={24} />} onClick={() => {
+            setMobilePanel(null)
+            void logout()
+          }}>
+            退出账号
+          </Button>
+        </div>
+      </MobileActionSheet>
+
       <footer className="app-footer">
         {theme === 'animal-island' ? (
           <>
@@ -1153,6 +1428,9 @@ export function Dashboard({
           onChanged={reloadAll}
           onClose={() => setOverlay(null)}
         />
+      )}
+      {overlay?.type === 'sync' && (
+        <OfflineManagerModal onChanged={reloadAll} onClose={() => setOverlay(null)} />
       )}
       {overlay?.type === 'bookmarklet' && <BookmarkletHelp onClose={() => setOverlay(null)} />}
       {overlay?.type === 'lightbox' && (

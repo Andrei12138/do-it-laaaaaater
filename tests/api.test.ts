@@ -82,6 +82,48 @@ describe('本地应用接口', () => {
     })).status).toBe(200)
   })
 
+  it('离线队列使用客户端 ID 幂等重放，并检测跨设备冲突', async () => {
+    await setup()
+    const categoryId = randomUUID()
+    const categoryBody = { id: categoryId, name: '离线类别', color: '#123456' }
+    expect((await agent.post('/api/categories').send(categoryBody)).body.id).toBe(categoryId)
+    expect((await agent.post('/api/categories').send(categoryBody)).body.id).toBe(categoryId)
+
+    const itemId = randomUUID()
+    const createdAt = 1_700_000_000_000
+    const first = await agent.post('/api/items/text').send({
+      id: itemId,
+      createdAt,
+      title: '断网时写下的内容',
+      categoryId
+    })
+    expect(first.status).toBe(201)
+    expect(first.body).toMatchObject({ id: itemId, createdAt })
+
+    const replay = await agent.post('/api/items/text').send({
+      id: itemId,
+      createdAt,
+      title: '断网时写下的内容',
+      categoryId
+    })
+    expect(replay.status).toBe(200)
+    expect(replay.body.id).toBe(itemId)
+
+    const changed = await agent.patch('/api/items/' + itemId).send({
+      baseUpdatedAt: first.body.updatedAt,
+      isStarred: true
+    })
+    expect(changed.status).toBe(200)
+    expect(changed.body.isStarred).toBe(true)
+
+    const conflict = await agent.patch('/api/items/' + itemId).send({
+      baseUpdatedAt: first.body.updatedAt,
+      plannedFor: '2030-01-01'
+    })
+    expect(conflict.status).toBe(409)
+    expect(conflict.body.details.conflict).toBe(true)
+  })
+
   it('保存、搜索、去重并切换网页状态', async () => {
     await setup()
     const categories = (await agent.get('/api/categories')).body as Array<{ id: string; name: string }>

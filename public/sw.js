@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'do-it-laaaaaater-shell-'
-const CACHE_NAME = CACHE_PREFIX + '2026-07-15-v1'
+const CACHE_NAME = CACHE_PREFIX + '2026-07-16-offline-v2'
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -8,8 +8,19 @@ const APP_SHELL = [
   '/icons/app-icon-512.png'
 ]
 
+async function cacheAppShell() {
+  const cache = await caches.open(CACHE_NAME)
+  await cache.addAll(APP_SHELL)
+  const response = await fetch('/')
+  if (!response.ok) return
+  await cache.put('/', response.clone())
+  const html = await response.text()
+  const assets = [...html.matchAll(/(?:src|href)=["'](\/assets\/[^"']+)["']/g)].map((match) => match[1])
+  await Promise.allSettled([...new Set(assets)].map((asset) => cache.add(asset)))
+}
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)))
+  event.waitUntil(cacheAppShell())
 })
 
 self.addEventListener('activate', (event) => {

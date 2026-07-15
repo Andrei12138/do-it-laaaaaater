@@ -1,5 +1,72 @@
+import { useSyncExternalStore } from 'react'
+
 let waitingWorker: ServiceWorker | null = null
 const listeners = new Set<() => void>()
+
+interface InstallPromptEvent extends Event {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
+
+export type PwaInstallMode = 'prompt' | 'ios-guide' | 'installed' | 'unavailable'
+
+let installPrompt: InstallPromptEvent | null = null
+const installListeners = new Set<() => void>()
+
+function isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches ||
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+}
+
+function isIosLike() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+}
+
+function installMode(): PwaInstallMode {
+  if (isStandalone()) return 'installed'
+  if (installPrompt) return 'prompt'
+  if (isIosLike()) return 'ios-guide'
+  return 'unavailable'
+}
+
+function publishInstall() {
+  installListeners.forEach((listener) => listener())
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault()
+    installPrompt = event as InstallPromptEvent
+    publishInstall()
+  })
+  window.addEventListener('appinstalled', () => {
+    installPrompt = null
+    publishInstall()
+  })
+  window.matchMedia('(display-mode: standalone)').addEventListener?.('change', publishInstall)
+}
+
+export function usePwaInstall() {
+  return useSyncExternalStore(
+    (listener) => {
+      installListeners.add(listener)
+      return () => installListeners.delete(listener)
+    },
+    installMode,
+    () => 'unavailable' as PwaInstallMode
+  )
+}
+
+export async function requestPwaInstall() {
+  if (!installPrompt) return 'unavailable' as const
+  const prompt = installPrompt
+  await prompt.prompt()
+  const choice = await prompt.userChoice
+  if (choice.outcome === 'accepted') installPrompt = null
+  publishInstall()
+  return choice.outcome
+}
 
 function announce(worker: ServiceWorker) {
   waitingWorker = worker
@@ -29,7 +96,8 @@ export function applyPwaUpdate() {
 }
 
 export async function registerPwa() {
-  if (!('serviceWorker' in navigator) || (location.protocol !== 'https:' && location.hostname !== 'localhost')) return
+  const loopback = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1'
+  if (!('serviceWorker' in navigator) || (location.protocol !== 'https:' && !loopback)) return
   try {
     const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
     if (registration.waiting && navigator.serviceWorker.controller) announce(registration.waiting)
