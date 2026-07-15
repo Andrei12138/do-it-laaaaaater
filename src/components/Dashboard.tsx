@@ -11,7 +11,6 @@ import {
   Card,
   Divider,
   Footer,
-  Icon,
   Input,
   Notification,
   Select,
@@ -28,6 +27,7 @@ import type {
   LibraryItem
 } from '../types'
 import { validateImageFiles } from './FormFields'
+import { AppIcon, type AppIconName } from './AppIcon'
 import { EditItemForm, ImageGroupForm, LinkForm, TextItemForm } from './ItemForms'
 import {
   AccountManager,
@@ -36,6 +36,8 @@ import {
   Lightbox
 } from './ManagementModals'
 import { EmptyState, Modal } from './Modal'
+import { ThemeControl } from './ThemeControl'
+import { useTheme } from '../theme'
 
 type Overlay =
   | { type: 'link'; initial?: { url?: string; title?: string } }
@@ -201,7 +203,7 @@ function ItemCard({
       ? manual
       : []
   const kindLabel = item.kind === 'link' ? '网页' : item.kind === 'text' ? '文本' : '图片'
-  const kindIcon = item.kind === 'link' ? 'icon-map' : item.kind === 'text' ? 'icon-chat' : 'icon-camera'
+  const kindIcon: AppIconName = item.kind === 'link' ? 'link' : item.kind === 'text' ? 'text' : 'image'
 
   return (
     <article className="item-card-shell">
@@ -229,7 +231,7 @@ function ItemCard({
               {item.status === 'pending' ? '待处理' : '已完成'}
             </Tag>
             <Tag size="small" color="app-teal" variant="outlined" className="kind-tag">
-              <Icon name={kindIcon} size={18} />
+              <AppIcon name={kindIcon} size={18} />
               {kindLabel}
             </Tag>
             <time>{timeLabel(item.createdAt)}</time>
@@ -267,11 +269,16 @@ function ItemCard({
             )}
           </div>
           <div className="item-actions">
-            <Button size="small" type="primary" onClick={onToggle}>
+            <Button
+              size="small"
+              type="primary"
+              icon={<AppIcon name={item.status === 'pending' ? 'complete' : 'restore'} size={17} />}
+              onClick={onToggle}
+            >
               {item.status === 'pending' ? '标记完成' : '恢复待处理'}
             </Button>
-            <Button size="small" onClick={onEdit}>编辑</Button>
-            <Button size="small" danger onClick={onDelete}>删除</Button>
+            <Button size="small" icon={<AppIcon name="edit" size={17} />} onClick={onEdit}>编辑</Button>
+            <Button size="small" danger icon={<AppIcon name="delete" size={17} />} onClick={onDelete}>删除</Button>
           </div>
         </div>
       </Card>
@@ -286,6 +293,7 @@ export function Dashboard({
   userEmail: string
   onSessionChange: () => Promise<void>
 }) {
+  const { theme } = useTheme()
   const [categories, setCategories] = useState<Category[]>([])
   const [items, setItems] = useState<LibraryItem[]>([])
   const [filters, setFilters] = useState<ItemFilters>(defaultFilters)
@@ -471,53 +479,54 @@ export function Dashboard({
     <div className="app-shell" onDragOver={dropOnMain}>
       <header className="app-header">
         <div className="brand-lockup">
-          <img src={islandBag} alt="" className="brand-icon" />
+          {theme === 'animal-island' && <img src={islandBag} alt="" className="brand-icon" />}
           <div>
-            <span className="brand-kicker">PRIVATE ISLAND LIST</span>
+            <span className="brand-kicker">{theme === 'flat-2013' ? 'FLAT READING LIST / 2013' : 'PRIVATE ISLAND LIST'}</span>
             <h1>Do It Laaaaaater</h1>
-            <p>把白天发现的好东西带回自己的小岛</p>
+            <p>{theme === 'flat-2013' ? '把值得处理的网页、文字和图片集中起来' : '把白天发现的好东西带回自己的小岛'}</p>
           </div>
         </div>
         <nav className="header-actions" aria-label="主要操作">
           <Button
             type="primary"
             size="middle"
-            icon={<Icon name="icon-diy" size={26} />}
+            icon={<AppIcon name="add" size={26} />}
             onClick={() => setOverlay({ type: 'link' })}
           >
             添加网页
           </Button>
           <Button
             size="middle"
-            icon={<Icon name="icon-camera" size={26} />}
+            icon={<AppIcon name="image" size={26} />}
             onClick={() => setOverlay({ type: 'images', files: [] })}
           >
             保存图片
           </Button>
           <Button
             size="middle"
-            icon={<Icon name="icon-map" size={26} />}
+            icon={<AppIcon name="bookmark" size={26} />}
             onClick={() => setOverlay({ type: 'bookmarklet' })}
           >
             书签按钮
           </Button>
           <Button
             size="middle"
-            icon={<Icon name="icon-design" size={26} />}
+            icon={<AppIcon name="categories" size={26} />}
             onClick={() => setOverlay({ type: 'categories' })}
           >
             类别管理
           </Button>
+          <ThemeControl />
           <Button
             size="middle"
-            icon={<Icon name="icon-miles" size={26} />}
+            icon={<AppIcon name="account" size={26} />}
             onClick={() => setOverlay({ type: 'account' })}
           >
             账号
           </Button>
           <Button
             size="middle"
-            icon={<Icon name="icon-helicopter" size={26} />}
+            icon={<AppIcon name="logout" size={26} />}
             onClick={() => void logout()}
           >
             退出
@@ -552,7 +561,7 @@ export function Dashboard({
               allowClear
               aria-label="搜索"
               clearAriaLabel="清除搜索"
-              prefix={<span className="search-icon" aria-hidden="true">⌕</span>}
+              prefix={<AppIcon name="search" size={21} className="search-icon" />}
               placeholder="搜索标题、网址、类别或图片名"
               value={filters.q}
               onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
@@ -607,7 +616,7 @@ export function Dashboard({
 
         {!loading && !items.length && (
           <EmptyState>
-            <img src={islandBag} alt="" className="empty-mascot" />
+            {theme === 'animal-island' && <img src={islandBag} alt="" className="empty-mascot" />}
             <h2>这里还没有内容</h2>
             <p>复制图片、文字或网页链接，然后在这里按 Ctrl+V 即可添加。</p>
             <div className="empty-actions">
@@ -645,14 +654,26 @@ export function Dashboard({
       </main>
 
       <footer className="app-footer">
-        <Footer type="tree" seamless />
-        <p>
-          Animal Island UI by{' '}
-          <a href="https://github.com/guokaigdg/animal-island-ui" target="_blank" rel="noreferrer">
-            guokaigdg
-          </a>
-          {' '}· CC BY-NC 4.0
-        </p>
+        {theme === 'animal-island' ? (
+          <>
+            <Footer type="tree" seamless />
+            <p>
+              Animal Island UI by{' '}
+              <a href="https://github.com/guokaigdg/animal-island-ui" target="_blank" rel="noreferrer">
+                guokaigdg
+              </a>
+              {' '}· CC BY-NC 4.0
+            </p>
+          </>
+        ) : (
+          <p className="flat-credit">
+            Flat Design 2013 by{' '}
+            <a href="https://github.com/novusgfx/retro-design-system" target="_blank" rel="noreferrer">
+              NovusGFX
+            </a>
+            {' '}· MIT
+          </p>
+        )}
       </footer>
 
       {overlay?.type === 'link' && (

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { api, errorMessage, jsonRequest } from '../api'
 import type { Category, ImageAsset } from '../types'
+import { AppIcon } from './AppIcon'
 import { ErrorNotice, Modal } from './Modal'
 
 export function CategoriesManager({
@@ -82,8 +83,12 @@ export function CategoriesManager({
                   setRows(next)
                 }}
               />
-              <button type="button" className="small-button" onClick={() => void save(category)}>保存</button>
-              <button type="button" className="small-button danger-text" onClick={() => void remove(category)}>删除</button>
+              <button type="button" className="small-button" onClick={() => void save(category)}>
+                <AppIcon name="complete" size={16} />保存
+              </button>
+              <button type="button" className="small-button danger-text" onClick={() => void remove(category)}>
+                <AppIcon name="delete" size={16} />删除
+              </button>
             </li>
           ))}
         </ul>
@@ -169,11 +174,13 @@ export function AccountManager({
 export function BookmarkletHelp({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false)
   const bookmarkRef = useRef<HTMLAnchorElement>(null)
-  const origin = window.location.origin
+  const origin = window.location.protocol === 'http:'
+    ? window.location.origin
+    : 'https://do-it-laaaaaater.vercel.app'
   const code =
     'javascript:(()=>{const u=' +
     JSON.stringify(origin + '/?add=link&url=') +
-    "+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title);location.href=u})()"
+    "+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title);const w=window.open(u,'_blank');if(w){try{w.opener=null}catch(e){}}else{alert('浏览器阻止了新标签页，请允许弹出窗口后重试。')}})()"
 
   useEffect(() => {
     bookmarkRef.current?.setAttribute('href', code)
@@ -191,7 +198,10 @@ export function BookmarkletHelp({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="浏览器书签按钮" onClose={onClose}>
       <div className="stack">
-        <p>保持本应用正在运行，把下面的按钮拖到浏览器书签栏。以后浏览普通网页时点它，会在当前标签页回到添加页面并带入网址和标题。</p>
+        <p>把下面的按钮拖到浏览器书签栏。以后浏览普通网页时点它，会在新标签页打开添加页面并带入网址和标题，原网页保持不动。</p>
+        <div className="notice notice-warning bookmarklet-upgrade">
+          如果你已经安装过旧版“稍后保存”，请先删除旧书签，再重新拖入下面的新版本。
+        </div>
         <div className="bookmarklet-box">
           <a
             ref={bookmarkRef}
@@ -199,10 +209,11 @@ export function BookmarkletHelp({ onClose }: { onClose: () => void }) {
             draggable
             onClick={(event) => event.preventDefault()}
           >
-            稍后保存
+            <AppIcon name="bookmark" size={19} />
+            稍后保存（新标签）
           </a>
         </div>
-        <p className="muted">它不能在浏览器的新标签页、设置页等内部页面运行。如果拖动后仍无效，请复制代码，新建书签，并确认书签地址以 javascript: 开头。</p>
+        <p className="muted">它不能在浏览器的新标签页、设置页等内部页面运行。如果没有打开新标签页，请允许此网页弹出窗口；拖动无效时可复制代码，新建书签，并确认书签地址以 javascript: 开头。</p>
         <button type="button" className="button" onClick={() => void copy()}>
           {copied ? '已复制' : '复制书签代码'}
         </button>
@@ -244,6 +255,7 @@ export function Lightbox({
             disabled={assets.length <= 1}
             onClick={() => setIndex((value) => (value - 1 + assets.length) % assets.length)}
           >
+            <AppIcon name="previous" size={18} />
             上一张
           </button>
           <span>{index + 1} / {assets.length}</span>
@@ -254,6 +266,7 @@ export function Lightbox({
             onClick={() => setIndex((value) => (value + 1) % assets.length)}
           >
             下一张
+            <AppIcon name="next" size={18} />
           </button>
         </div>
       </div>

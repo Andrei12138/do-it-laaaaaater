@@ -1,5 +1,6 @@
 import { useEffect, useId, useState, type ClipboardEvent, type DragEvent } from 'react'
 import type { Category } from '../types'
+import { AppIcon } from './AppIcon'
 
 const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const MAX_BYTES = 20 * 1024 * 1024
@@ -38,7 +39,9 @@ function FilePreview({ file, onRemove }: { file: File; onRemove: () => void }) {
     <li className="pending-image">
       {url && <img src={url} alt="" />}
       <span title={file.name}>{file.name}</span>
-      <button type="button" className="small-button" onClick={onRemove}>移除</button>
+      <button type="button" className="small-button" onClick={onRemove}>
+        <AppIcon name="delete" size={16} />移除
+      </button>
     </li>
   )
 }

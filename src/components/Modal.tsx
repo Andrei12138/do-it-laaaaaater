@@ -1,5 +1,6 @@
 import { type ReactNode } from 'react'
 import { Button, Card, Modal as AnimalModal } from 'animal-island-ui'
+import { AppIcon } from './AppIcon'
 
 interface ModalProps {
   title: string
@@ -20,7 +21,7 @@ export function Modal({ title, children, onClose, wide = false }: ModalProps) {
       className={wide ? 'app-modal app-modal-wide' : 'app-modal'}
     >
       <Button type="text" size="small" className="app-modal-close" onClick={onClose} aria-label="关闭">
-        ×
+        <AppIcon name="close" size={22} />
       </Button>
       <div className="modal-body">{children}</div>
     </AnimalModal>

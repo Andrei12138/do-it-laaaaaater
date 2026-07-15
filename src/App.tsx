@@ -4,6 +4,8 @@ import islandBag from 'animal-island-ui/items/item-022.png'
 import { api, errorMessage, isCloudMode, jsonRequest } from './api'
 import { subscribeCloudAuth } from './cloud/supabase'
 import { Dashboard } from './components/Dashboard'
+import { ThemeControl } from './components/ThemeControl'
+import { useTheme } from './theme'
 import type { AuthStatus } from './types'
 
 function AuthScreen({
@@ -13,6 +15,7 @@ function AuthScreen({
   mode: 'setup' | 'login'
   onComplete: () => Promise<void>
 }) {
+  const { theme } = useTheme()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -67,14 +70,15 @@ function AuthScreen({
 
   return (
     <div className="auth-shell">
+      <div className="auth-theme-control"><ThemeControl placement="auth" /></div>
       <main className="auth-page">
         <Card className="auth-card" color="default" pattern="default">
           <div className="auth-brand">
-            <img src={islandBag} alt="" className="auth-mascot" />
+            {theme === 'animal-island' && <img src={islandBag} alt="" className="auth-mascot" />}
             <div>
-              <span className="brand-kicker">MY ISLAND LIST</span>
+              <span className="brand-kicker">{theme === 'flat-2013' ? 'FLAT READING LIST' : 'MY ISLAND LIST'}</span>
               <h1>Do It Laaaaaater</h1>
-              <p>{mode === 'setup' ? '创建你的唯一账号' : '欢迎回到你的稍后处理小岛'}</p>
+              <p>{mode === 'setup' ? '创建你的唯一账号' : theme === 'flat-2013' ? '欢迎回来，继续处理稍后内容' : '欢迎回到你的稍后处理小岛'}</p>
             </div>
           </div>
           <form onSubmit={submit} className="stack">
@@ -133,12 +137,13 @@ function AuthScreen({
           </form>
         </Card>
       </main>
-      <Footer type="sea" seamless className="auth-footer" />
+      {theme === 'animal-island' && <Footer type="sea" seamless className="auth-footer" />}
     </div>
   )
 }
 
 function RecoveryScreen({ onComplete }: { onComplete: () => Promise<void> }) {
+  const { theme } = useTheme()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
@@ -164,14 +169,15 @@ function RecoveryScreen({ onComplete }: { onComplete: () => Promise<void> }) {
 
   return (
     <div className="auth-shell">
+      <div className="auth-theme-control"><ThemeControl placement="auth" /></div>
       <main className="auth-page">
         <Card className="auth-card" color="default" pattern="default">
           <div className="auth-brand">
-            <img src={islandBag} alt="" className="auth-mascot" />
+            {theme === 'animal-island' && <img src={islandBag} alt="" className="auth-mascot" />}
             <div>
-              <span className="brand-kicker">MY ISLAND LIST</span>
+              <span className="brand-kicker">{theme === 'flat-2013' ? 'FLAT READING LIST' : 'MY ISLAND LIST'}</span>
               <h1>设置新密码</h1>
-              <p>为你的稍后处理小岛换一把新钥匙</p>
+              <p>{theme === 'flat-2013' ? '为你的账号设置一个新密码' : '为你的稍后处理小岛换一把新钥匙'}</p>
             </div>
           </div>
           <form onSubmit={submit} className="stack">
@@ -193,7 +199,7 @@ function RecoveryScreen({ onComplete }: { onComplete: () => Promise<void> }) {
           </form>
         </Card>
       </main>
-      <Footer type="sea" seamless className="auth-footer" />
+      {theme === 'animal-island' && <Footer type="sea" seamless className="auth-footer" />}
     </div>
   )
 }

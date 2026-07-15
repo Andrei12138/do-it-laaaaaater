@@ -10,13 +10,36 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await page.goto('/')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'flat-2013')
+  await page.evaluate(() => localStorage.setItem('do-it-laaaaaater.theme.v1', 'unknown-theme'))
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'flat-2013')
+  await expect(page.getByRole('button', { name: '设计风格' })).toBeVisible()
+  await page.getByRole('button', { name: '设计风格' }).click()
+  const setupThemeDialog = page.getByRole('dialog', { name: '选择设计风格' })
+  await page.screenshot({ path: 'test-results/flat-theme-picker.png', fullPage: true })
+  await setupThemeDialog.getByRole('radio', { name: /Animal Island UI/ }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'animal-island')
+  await page.screenshot({ path: 'test-results/animal-theme-picker.png', fullPage: true })
+  await setupThemeDialog.getByRole('radio', { name: /Flat Design 2013/ }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'flat-2013')
+  await setupThemeDialog.getByRole('button', { name: '关闭' }).click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('do-it-laaaaaater.theme.v1'))).toBe('flat-2013')
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'flat-2013')
   await expect(page.getByRole('heading', { name: 'Do It Laaaaaater' })).toBeVisible()
+  await expect(page.locator('.auth-card')).toHaveCSS('background-image', 'none')
+  await expect(page.locator('.auth-card')).toHaveCSS('box-shadow', 'none')
+  await expect(page.locator('.auth-card')).toHaveCSS('border-radius', '0px')
+  await expect(page.getByLabel(/^密码/)).toHaveCSS('border-top-width', '0px')
   await page.screenshot({ path: 'test-results/setup-screen.png', fullPage: true })
   await page.getByLabel('邮箱').fill('owner@example.com')
   await page.getByLabel(/^密码/).fill('a-secure-password')
   await page.getByLabel('再次输入密码').fill('a-secure-password')
   await page.getByRole('button', { name: '创建账号并开始使用' }).click()
   await expect(page.locator('.app-header')).toBeVisible()
+  await expect(page.locator('.app-header')).toHaveCSS('background-image', 'none')
+  await expect(page.locator('.toolbar')).toHaveCSS('box-shadow', 'none')
 
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.evaluate(() => navigator.clipboard.writeText('https://example.com/read-later'))
@@ -24,6 +47,9 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await page.keyboard.press('Control+V')
   const linkDialog = page.getByRole('dialog', { name: '添加网页' })
   await expect(linkDialog.getByLabel('网页地址')).toHaveValue('https://example.com/read-later')
+  await expect(linkDialog.locator(':scope > div')).toHaveCSS('clip-path', 'none')
+  await expect(linkDialog).toHaveCSS('border-radius', '0px')
+  await expect(linkDialog).toHaveCSS('box-shadow', 'none')
   await page.screenshot({ path: 'test-results/add-link-modal.png', fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })
   await page.screenshot({ path: 'test-results/mobile-add-link-modal.png', fullPage: true })
@@ -149,10 +175,11 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
 
   await page.locator('.app-header').getByRole('button', { name: '书签按钮' }).click()
   const bookmarkDialog = page.getByRole('dialog', { name: '浏览器书签按钮' })
-  const bookmarkLink = bookmarkDialog.getByRole('link', { name: '稍后保存' })
+  const bookmarkLink = bookmarkDialog.getByRole('link', { name: '稍后保存（新标签）' })
   await expect(bookmarkLink).toHaveAttribute('href', /^javascript:/)
   const bookmarkCode = await bookmarkLink.getAttribute('href') as string
-  expect(bookmarkCode).toContain('location.href=u')
+  expect(bookmarkCode).toContain("window.open(u,'_blank')")
+  expect(bookmarkCode).not.toContain('location.href=u')
   expect(bookmarkCode).not.toContain('React has blocked')
   await bookmarkDialog.getByRole('button', { name: '关闭' }).click()
 
@@ -162,10 +189,34 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
     body: '<!doctype html><meta charset="utf-8"><title>书签来源网页</title><h1>来源网页</h1>'
   }))
   await sourcePage.goto('https://source.example/article')
-  await sourcePage.evaluate((script) => window.eval(script.replace(/^javascript:/, '')), bookmarkCode)
-  const sourceDialog = sourcePage.getByRole('dialog', { name: '添加网页' })
+  const sourceUrl = sourcePage.url()
+  const [bookmarkPage] = await Promise.all([
+    context.waitForEvent('page'),
+    sourcePage.evaluate((script) => window.eval(script.replace(/^javascript:/, '')), bookmarkCode)
+  ])
+  await bookmarkPage.waitForLoadState('networkidle')
+  await expect(sourcePage).toHaveURL(sourceUrl)
+  const sourceDialog = bookmarkPage.getByRole('dialog', { name: '添加网页' })
   await expect(sourceDialog.getByLabel('网页地址')).toHaveValue('https://source.example/article')
   await expect(sourceDialog.getByLabel('标题')).toHaveValue('书签来源网页')
+  await bookmarkPage.close()
+
+  let blockedMessage = ''
+  sourcePage.once('dialog', async (dialog) => {
+    blockedMessage = dialog.message()
+    await dialog.dismiss()
+  })
+  await sourcePage.evaluate((script) => {
+    const open = window.open
+    window.open = () => null
+    try {
+      window.eval(script.replace(/^javascript:/, ''))
+    } finally {
+      window.open = open
+    }
+  }, bookmarkCode)
+  expect(blockedMessage).toContain('浏览器阻止了新标签页')
+  await expect(sourcePage).toHaveURL(sourceUrl)
   await sourcePage.close()
 
   await page.getByRole('tab', { name: '全部', exact: true }).click()
@@ -182,7 +233,30 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await page.screenshot({ path: 'test-results/laptop-home.png', fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(page.locator('.app-header')).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.screenshot({ path: 'test-results/mobile-home.png', fullPage: true })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const syncedPage = await context.newPage()
+  await syncedPage.goto('/')
+  await expect(syncedPage.locator('html')).toHaveAttribute('data-theme', 'flat-2013')
+  await page.locator('.app-header').getByRole('button', { name: '设计风格' }).click()
+  const themeDialog = page.getByRole('dialog', { name: '选择设计风格' })
+  await themeDialog.getByRole('radio', { name: /Animal Island UI/ }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'animal-island')
+  await expect(syncedPage.locator('html')).toHaveAttribute('data-theme', 'animal-island')
+  await page.screenshot({ path: 'test-results/animal-home-with-picker.png', fullPage: true })
+  await themeDialog.getByRole('button', { name: '关闭' }).click()
+  await page.locator('.app-header').getByRole('button', { name: '添加网页' }).click()
+  const animalDialog = page.getByRole('dialog', { name: '添加网页' })
+  await expect(animalDialog.locator(':scope > div')).not.toHaveCSS('clip-path', 'none')
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: 'test-results/animal-add-link-modal.png', fullPage: true })
+  await animalDialog.getByRole('button', { name: '关闭' }).click()
+  await page.locator('.app-header').getByRole('button', { name: '设计风格' }).click()
+  await page.getByRole('dialog', { name: '选择设计风格' }).getByRole('radio', { name: /Flat Design 2013/ }).click()
+  await page.getByRole('dialog', { name: '选择设计风格' }).getByRole('button', { name: '关闭' }).click()
+  await syncedPage.close()
 
   await page.locator('.app-header').getByRole('button', { name: '退出' }).click()
   await expect(page.getByRole('button', { name: '登录' })).toBeVisible()

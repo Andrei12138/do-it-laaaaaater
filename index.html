@@ -4,7 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#19c8b9" />
+    <meta name="theme-color" content="#34495e" />
+    <script>
+      (() => {
+        const key = 'do-it-laaaaaater.theme.v1'
+        const allowed = ['flat-2013', 'animal-island']
+        let theme = 'flat-2013'
+        try {
+          const stored = window.localStorage.getItem(key)
+          if (stored && allowed.includes(stored)) theme = stored
+        } catch {
+          // Storage can be disabled; Flat Design 2013 remains the default.
+        }
+        document.documentElement.dataset.theme = theme
+      })()
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
