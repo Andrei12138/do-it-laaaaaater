@@ -54,7 +54,7 @@ body {
 }
 
 button,
-input,
+input:not([type='checkbox']):not([type='radio']),
 select,
 textarea {
   font: inherit;
@@ -280,7 +280,7 @@ p {
   color: var(--ai-text-secondary);
 }
 
-input,
+input:not([type='checkbox']):not([type='radio']),
 select,
 textarea {
   width: 100%;
@@ -303,13 +303,13 @@ textarea {
   resize: vertical;
 }
 
-input:hover,
+input:not([type='checkbox']):not([type='radio']):hover,
 select:hover,
 textarea:hover {
   border-color: var(--ai-border-hover);
 }
 
-input:focus,
+input:not([type='checkbox']):not([type='radio']):focus,
 select:focus,
 textarea:focus {
   border-color: var(--ai-warning);
@@ -1802,6 +1802,14 @@ select {
 
 .item-card-shell {
   position: relative;
+}
+
+.item-card-shell:has(.card-category-field [role='combobox'][aria-expanded='true']) {
+  z-index: 19;
+}
+
+.item-card:has(.card-category-field [role='combobox'][aria-expanded='true']) {
+  overflow: visible;
 }
 
 .item-card-shell.is-selected .item-card {
