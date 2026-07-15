@@ -6,6 +6,7 @@ import { ErrorNotice } from './Modal'
 
 interface BaseFormProps {
   categories: Category[]
+  onCreateCategory: (name: string, color: string) => Promise<Category>
   onSaved: (item: LibraryItem) => void
   onClose: () => void
 }
@@ -25,6 +26,7 @@ interface MetadataResult {
 export function LinkForm({
   categories,
   initial,
+  onCreateCategory,
   onSaved,
   onClose,
   onDuplicate
@@ -136,6 +138,7 @@ export function LinkForm({
         categories={categories}
         categoryId={categoryId}
         onCategoryChange={setCategoryId}
+        onCreateCategory={onCreateCategory}
       />
       <div className="field">
         <span>相关截图（可选）</span>
@@ -158,6 +161,7 @@ function pastedTextTitle(value: string) {
 export function TextItemForm({
   categories,
   initialText,
+  onCreateCategory,
   onSaved,
   onClose
 }: BaseFormProps & { initialText: string }) {
@@ -196,6 +200,7 @@ export function TextItemForm({
         categories={categories}
         categoryId={categoryId}
         onCategoryChange={setCategoryId}
+        onCreateCategory={onCreateCategory}
       />
       <div className="form-actions">
         <button type="button" className="button" onClick={onClose}>取消</button>
@@ -223,6 +228,7 @@ function newImageGroupTitle() {
 export function ImageGroupForm({
   categories,
   initialFiles = [],
+  onCreateCategory,
   onSaved,
   onClose
 }: BaseFormProps & { initialFiles?: File[] }) {
@@ -264,6 +270,7 @@ export function ImageGroupForm({
         categories={categories}
         categoryId={categoryId}
         onCategoryChange={setCategoryId}
+        onCreateCategory={onCreateCategory}
       />
       <ImageInput files={files} onChange={setFiles} onError={setError} compact />
       <div className="form-actions">
@@ -283,6 +290,7 @@ function manualAssets(item: LibraryItem) {
 export function EditItemForm({
   item: initialItem,
   categories,
+  onCreateCategory,
   onSaved,
   onClose,
   onPreview
@@ -384,6 +392,7 @@ export function EditItemForm({
         categories={categories}
         categoryId={categoryId}
         onCategoryChange={setCategoryId}
+        onCreateCategory={onCreateCategory}
       />
       {webCover && (
         <div className="saved-cover">

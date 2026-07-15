@@ -667,6 +667,23 @@ html[data-theme='flat-2013'] .item-heading {
   font-weight: 300;
 }
 
+html[data-theme='flat-2013'] .kind-tag {
+  min-width: max-content;
+  line-height: 1 !important;
+}
+
+html[data-theme='flat-2013'] .item-age {
+  padding: 3px 7px;
+  color: var(--dark);
+  background: #e2e7e8;
+  border-left: 3px solid var(--yellow);
+  font-weight: 300;
+}
+
+html[data-theme='flat-2013'] .item-age-completed {
+  border-left-color: var(--green);
+}
+
 html[data-theme='flat-2013'] .category-chip i {
   border-radius: 0;
 }
@@ -688,6 +705,23 @@ html[data-theme='flat-2013'] .small-button {
   font-weight: 300;
   letter-spacing: 0.04em;
   transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+html[data-theme='flat-2013'] .category-add-trigger {
+  color: #168f7b;
+  font-weight: 300;
+}
+
+html[data-theme='flat-2013'] .category-quick-add {
+  background: #ecf0f1;
+  border: 1px solid var(--silver);
+  border-left: 6px solid var(--turq);
+  border-radius: 0;
+}
+
+html[data-theme='flat-2013'] .category-quick-error {
+  color: var(--red);
+  font-weight: 300;
 }
 
 html[data-theme='flat-2013'] .button:hover,

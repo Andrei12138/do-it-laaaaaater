@@ -3,6 +3,7 @@ import { Button } from 'animal-island-ui'
 import islandBag from 'animal-island-ui/items/item-022.png'
 import animalPreview from '../assets/animal-island/content_bg_pc.jpg'
 import flatPreview from '../assets/themes/flat-2013-preview.png'
+import gridPaperPreview from '../assets/themes/grid-paper-preview.png'
 import { useTheme, type ThemeId } from '../theme'
 import { AppIcon } from './AppIcon'
 import { Modal } from './Modal'
@@ -40,6 +41,8 @@ export function ThemeControl({ placement = 'header' }: { placement?: 'header' | 
                 <span className="theme-preview" aria-hidden="true">
                   {entry.id === 'flat-2013' ? (
                     <img src={flatPreview} alt="" />
+                  ) : entry.id === 'grid-paper' ? (
+                    <img src={gridPaperPreview} alt="" />
                   ) : (
                     <span className="theme-preview-animal" style={{ backgroundImage: `url(${animalPreview})` }}>
                       <img src={islandBag} alt="" />

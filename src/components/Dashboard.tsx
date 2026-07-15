@@ -20,6 +20,8 @@ import {
 } from 'animal-island-ui'
 import islandBag from 'animal-island-ui/items/item-022.png'
 import { api, errorMessage, jsonRequest } from '../api'
+import { itemAgeLabel } from '../item-age'
+import { getThemeDefinition, useTheme } from '../theme'
 import type {
   Category,
   ImageAsset,
@@ -37,7 +39,6 @@ import {
 } from './ManagementModals'
 import { EmptyState, Modal } from './Modal'
 import { ThemeControl } from './ThemeControl'
-import { useTheme } from '../theme'
 
 type Overlay =
   | { type: 'link'; initial?: { url?: string; title?: string } }
@@ -182,13 +183,15 @@ function ItemCard({
   onEdit,
   onToggle,
   onDelete,
-  onPreview
+  onPreview,
+  now
 }: {
   item: LibraryItem
   onEdit: () => void
   onToggle: () => void
   onDelete: () => void
   onPreview: (assets: ImageAsset[], index: number) => void
+  now: number
 }) {
   const webCover = item.assets.find((asset) => asset.role === 'web_cover')
   const manual = itemManualAssets(item)
@@ -232,8 +235,9 @@ function ItemCard({
             </Tag>
             <Tag size="small" color="app-teal" variant="outlined" className="kind-tag">
               <AppIcon name={kindIcon} size={18} />
-              {kindLabel}
+              <span className="kind-tag-label">{kindLabel}</span>
             </Tag>
+            <span className={`item-age item-age-${item.status}`}>{itemAgeLabel(item, now)}</span>
             <time>{timeLabel(item.createdAt)}</time>
           </div>
           <h3>
@@ -294,17 +298,27 @@ export function Dashboard({
   onSessionChange: () => Promise<void>
 }) {
   const { theme } = useTheme()
+  const themeDefinition = getThemeDefinition(theme)
   const [categories, setCategories] = useState<Category[]>([])
   const [items, setItems] = useState<LibraryItem[]>([])
   const [filters, setFilters] = useState<ItemFilters>(defaultFilters)
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [now, setNow] = useState(Date.now)
   const requestNumber = useRef(0)
 
   const refreshReferences = useCallback(async () => {
-    setCategories(await api<Category[]>('/api/categories'))
+    const nextCategories = await api<Category[]>('/api/categories')
+    setCategories(nextCategories)
+    return nextCategories
   }, [])
+
+  const createCategory = useCallback(async (name: string, color: string) => {
+    const created = await jsonRequest<Category>('/api/categories', 'POST', { name, color })
+    const nextCategories = await refreshReferences()
+    return nextCategories.find((category) => category.id === created.id) || created
+  }, [refreshReferences])
 
   const refreshItems = useCallback(async (activeFilters: ItemFilters) => {
     const currentRequest = ++requestNumber.current
@@ -331,6 +345,16 @@ export function Dashboard({
   useEffect(() => {
     void refreshReferences().catch((requestError) => setError(errorMessage(requestError)))
   }, [refreshReferences])
+
+  useEffect(() => {
+    const refreshNow = () => setNow(Date.now())
+    const timer = window.setInterval(refreshNow, 60_000)
+    document.addEventListener('visibilitychange', refreshNow)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshNow)
+    }
+  }, [])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -481,9 +505,9 @@ export function Dashboard({
         <div className="brand-lockup">
           {theme === 'animal-island' && <img src={islandBag} alt="" className="brand-icon" />}
           <div>
-            <span className="brand-kicker">{theme === 'flat-2013' ? 'FLAT READING LIST / 2013' : 'PRIVATE ISLAND LIST'}</span>
+            <span className="brand-kicker">{themeDefinition.dashboardKicker}</span>
             <h1>Do It Laaaaaater</h1>
-            <p>{theme === 'flat-2013' ? '把值得处理的网页、文字和图片集中起来' : '把白天发现的好东西带回自己的小岛'}</p>
+            <p>{themeDefinition.dashboardDescription}</p>
           </div>
         </div>
         <nav className="header-actions" aria-label="主要操作">
@@ -645,6 +669,7 @@ export function Dashboard({
                     onToggle={() => void toggleItem(item)}
                     onDelete={() => void deleteItem(item)}
                     onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
+                    now={now}
                   />
                 ))}
               </div>
@@ -665,6 +690,14 @@ export function Dashboard({
               {' '}· CC BY-NC 4.0
             </p>
           </>
+        ) : theme === 'grid-paper' ? (
+          <p className="grid-paper-credit">
+            — Grid Paper by{' '}
+            <a href={themeDefinition.creditUrl} target="_blank" rel="noreferrer">
+              NovusGFX
+            </a>
+            {' '}· MIT · end of page —
+          </p>
         ) : (
           <p className="flat-credit">
             Flat Design 2013 by{' '}
@@ -680,6 +713,7 @@ export function Dashboard({
         <Modal title="添加网页" onClose={() => setOverlay(null)} wide>
           <LinkForm
             categories={categories}
+            onCreateCategory={createCategory}
             initial={overlay.initial}
             onClose={() => setOverlay(null)}
             onSaved={() => void itemSaved()}
@@ -691,6 +725,7 @@ export function Dashboard({
         <Modal title="保存文本" onClose={() => setOverlay(null)}>
           <TextItemForm
             categories={categories}
+            onCreateCategory={createCategory}
             initialText={overlay.initialText}
             onClose={() => setOverlay(null)}
             onSaved={() => void itemSaved()}
@@ -701,6 +736,7 @@ export function Dashboard({
         <Modal title="保存图片" onClose={() => setOverlay(null)} wide>
           <ImageGroupForm
             categories={categories}
+            onCreateCategory={createCategory}
             initialFiles={overlay.files}
             onClose={() => setOverlay(null)}
             onSaved={() => void itemSaved()}
@@ -712,6 +748,7 @@ export function Dashboard({
           <EditItemForm
             item={overlay.item}
             categories={categories}
+            onCreateCategory={createCategory}
             onClose={closeEditor}
             onSaved={() => void itemSaved()}
             onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}

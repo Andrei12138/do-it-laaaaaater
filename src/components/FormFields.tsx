@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, type ClipboardEvent, type DragEvent } from 'react'
+import { errorMessage } from '../api'
 import type { Category } from '../types'
 import { AppIcon } from './AppIcon'
 
@@ -9,22 +10,98 @@ const MAX_FILES = 30
 export function CategoryField({
   categories,
   categoryId,
-  onCategoryChange
+  onCategoryChange,
+  onCreateCategory
 }: {
   categories: Category[]
   categoryId: string
   onCategoryChange: (value: string) => void
+  onCreateCategory?: (name: string, color: string) => Promise<Category>
 }) {
+  const selectId = useId()
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const [color, setColor] = useState('#64748b')
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState('')
+
+  async function createCategory() {
+    const trimmed = name.trim()
+    if (!trimmed || !onCreateCategory || creating) return
+    setCreating(true)
+    setError('')
+    try {
+      const category = await onCreateCategory(trimmed, color)
+      onCategoryChange(category.id)
+      setName('')
+      setAdding(false)
+    } catch (requestError) {
+      setError(errorMessage(requestError))
+    } finally {
+      setCreating(false)
+    }
+  }
+
   return (
-    <label className="field">
-      <span>类别</span>
-      <select value={categoryId} onChange={(event) => onCategoryChange(event.target.value)}>
+    <div className="field category-field">
+      <div className="field-label-row">
+        <label htmlFor={selectId}>类别</label>
+        {onCreateCategory && (
+          <button
+            type="button"
+            className="category-add-trigger"
+            aria-expanded={adding}
+            onClick={() => {
+              setAdding((value) => !value)
+              setError('')
+            }}
+          >
+            <AppIcon name="add" size={15} />
+            {adding ? '收起' : '新增类别'}
+          </button>
+        )}
+      </div>
+      <select id={selectId} value={categoryId} onChange={(event) => onCategoryChange(event.target.value)}>
         <option value="">未分类</option>
         {categories.map((category) => (
           <option key={category.id} value={category.id}>{category.name}</option>
         ))}
       </select>
-    </label>
+      {adding && onCreateCategory && (
+        <div className="category-quick-add" role="group" aria-label="新增类别">
+          <input
+            aria-label="新类别名称"
+            maxLength={40}
+            placeholder="输入类别名称"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void createCategory()
+              }
+            }}
+            autoFocus
+          />
+          <input
+            type="color"
+            aria-label="新类别颜色"
+            value={color}
+            onChange={(event) => setColor(event.target.value)}
+          />
+          <button type="button" className="button button-primary button-small" disabled={!name.trim() || creating} onClick={() => void createCategory()}>
+            {creating ? '添加中…' : '添加并选中'}
+          </button>
+          <button type="button" className="button button-small" disabled={creating} onClick={() => {
+            setAdding(false)
+            setError('')
+          }}>
+            取消
+          </button>
+          {error && <span className="category-quick-error" role="alert">{error}</span>}
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -70,17 +70,18 @@ export function AppIcon({
   if (theme === 'animal-island' && animalName) {
     return <Icon name={animalName} size={size} className={className} />
   }
+  const gridPaper = theme === 'grid-paper'
   return (
     <svg
-      className={['app-icon', className].filter(Boolean).join(' ')}
+      className={['app-icon', gridPaper ? 'app-icon-grid-paper' : '', className].filter(Boolean).join(' ')}
       width={size}
       height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="square"
-      strokeLinejoin="miter"
+      strokeWidth={gridPaper ? 1.9 : 1.8}
+      strokeLinecap={gridPaper ? 'round' : 'square'}
+      strokeLinejoin={gridPaper ? 'round' : 'miter'}
       aria-hidden="true"
       focusable="false"
     >

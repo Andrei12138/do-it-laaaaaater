@@ -5,6 +5,7 @@ import { ThemeProvider } from './theme'
 import 'animal-island-ui/style'
 import './styles.css'
 import './flat-2013.css'
+import './grid-paper.css'
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
