@@ -1,6 +1,6 @@
 import type { User } from '@supabase/supabase-js'
 import { ApiRequestError } from '../api-error'
-import type { AuthStatus, Category, ImageAsset, LibraryItem } from '../types'
+import type { AppPreferences, AuthStatus, Category, ImageAsset, LibraryItem } from '../types'
 import { requireSupabase } from './supabase'
 
 const BUCKET = 'library-images'
@@ -39,6 +39,8 @@ interface CloudItemRow {
   created_at: string
   updated_at: string
   completed_at: string | null
+  is_starred: boolean
+  planned_for: string | null
   category?: Category | Category[] | null
   assets?: CloudAssetRow[] | null
 }
@@ -272,13 +274,15 @@ async function serializeRows(rows: CloudItemRow[]): Promise<LibraryItem[]> {
       })),
       createdAt: dateValue(row.created_at),
       updatedAt: dateValue(row.updated_at),
-      completedAt: row.completed_at ? dateValue(row.completed_at) : null
+      completedAt: row.completed_at ? dateValue(row.completed_at) : null,
+      isStarred: Boolean(row.is_starred),
+      plannedFor: row.planned_for || null
     }
   })
 }
 
 const ITEM_SELECT = [
-  'id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at',
+  'id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,is_starred,planned_for',
   'category:categories(id,name,color)',
   'assets(id,item_id,user_id,role,original_name,original_path,thumb_path,mime_type,size,width,height,sort_order,created_at)'
 ].join(',')
@@ -315,6 +319,7 @@ function filterRows(rows: CloudItemRow[], params: URLSearchParams) {
   const kind = params.get('kind')
   const category = params.get('category')
   const date = params.get('date')
+  const priority = params.get('priority')
   const needle = (params.get('q') || '').trim().toLocaleLowerCase('zh-CN')
   return rows.filter((row) => {
     if ((status === 'pending' || status === 'completed') && row.status !== status) return false
@@ -322,6 +327,9 @@ function filterRows(rows: CloudItemRow[], params: URLSearchParams) {
     if (category === 'uncategorized' && row.category_id) return false
     if (category && category !== 'uncategorized' && row.category_id !== category) return false
     if (date && /^\d{4}-\d{2}-\d{2}$/.test(date) && chinaDate(row.created_at) !== date) return false
+    const today = chinaDate(new Date().toISOString())
+    if (priority === 'planned' && (!row.planned_for || row.planned_for > today)) return false
+    if (priority === 'starred' && !row.is_starred) return false
     if (needle) {
       const rawCategory = Array.isArray(row.category) ? row.category[0] : row.category
       const values = [
@@ -333,7 +341,220 @@ function filterRows(rows: CloudItemRow[], params: URLSearchParams) {
       if (!values.some((value) => value.toLocaleLowerCase('zh-CN').includes(needle))) return false
     }
     return true
+  }).sort((left, right) => {
+    const sort = params.get('sort') || 'smart'
+    if (sort === 'oldest') return dateValue(left.created_at) - dateValue(right.created_at)
+    if (sort === 'recently_completed') {
+      return dateValue(right.completed_at || '1970-01-01') - dateValue(left.completed_at || '1970-01-01') ||
+        dateValue(right.created_at) - dateValue(left.created_at)
+    }
+    if (sort === 'newest') return dateValue(right.created_at) - dateValue(left.created_at)
+    const today = chinaDate(new Date().toISOString())
+    const rank = (row: CloudItemRow) => row.planned_for && row.planned_for < today
+      ? 0
+      : row.planned_for === today
+        ? 1
+        : row.is_starred
+          ? 2
+          : 3
+    const rankDifference = rank(left) - rank(right)
+    if (rankDifference) return rankDifference
+    if (rank(left) <= 1) return dateValue(left.created_at) - dateValue(right.created_at)
+    return dateValue(right.created_at) - dateValue(left.created_at)
   })
+}
+
+async function handlePreferences(method: string, options: RequestInit): Promise<AppPreferences> {
+  const client = requireSupabase()
+  const user = await currentUser()
+  if (method === 'GET') {
+    const result = await client.from('user_preferences').select('quick_save_category_id')
+      .eq('user_id', user.id).maybeSingle()
+    if (result.error) apiError(500, messageFrom(result.error, '无法读取账号偏好'))
+    if (result.data) return { quickSaveCategoryId: result.data.quick_save_category_id || null }
+    const categories = await client.from('categories').select('id').eq('user_id', user.id).ilike('name', '其他').limit(1)
+    const categoryId = categories.data?.[0]?.id || null
+    const inserted = await client.from('user_preferences').upsert({
+      user_id: user.id,
+      quick_save_category_id: categoryId,
+      updated_at: new Date().toISOString()
+    }).select('quick_save_category_id').single()
+    if (inserted.error) apiError(500, '无法初始化账号偏好')
+    return { quickSaveCategoryId: inserted.data.quick_save_category_id || null }
+  }
+  if (method === 'PATCH') {
+    const body = parseJsonBody(options)
+    const categoryId = await ensureCategory(user.id, body.quickSaveCategoryId)
+    const result = await client.from('user_preferences').upsert({
+      user_id: user.id,
+      quick_save_category_id: categoryId,
+      updated_at: new Date().toISOString()
+    }).select('quick_save_category_id').single()
+    if (result.error) apiError(400, messageFrom(result.error, '默认类别保存失败'))
+    return { quickSaveCategoryId: result.data.quick_save_category_id || null }
+  }
+  apiError(405, '操作方式不支持')
+}
+
+interface BackupImportAsset {
+  role: AssetRole
+  originalName: string
+  mimeType: string
+  size: number
+  sortOrder: number
+  path: string | null
+}
+
+interface BackupImportItem {
+  id: string
+  kind: ItemKind
+  title: string
+  url: string | null
+  status: 'pending' | 'completed'
+  createdAt: number
+  updatedAt: number
+  completedAt: number | null
+  isStarred: boolean
+  plannedFor: string | null
+  assets: BackupImportAsset[]
+}
+
+function parseBackupImportItem(value: FormDataEntryValue | null): BackupImportItem {
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(String(value || '')) as Record<string, unknown>
+  } catch {
+    apiError(400, '备份条目格式无效')
+  }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(raw.id || ''))) {
+    apiError(400, '备份条目 ID 无效')
+  }
+  if (raw.kind !== 'link' && raw.kind !== 'text' && raw.kind !== 'image_group') apiError(400, '备份条目类型无效')
+  if (raw.status !== 'pending' && raw.status !== 'completed') apiError(400, '备份条目状态无效')
+  const title = requiredTitle(raw.title)
+  const createdAt = Number(raw.createdAt)
+  const updatedAt = Number(raw.updatedAt)
+  const completedAt = raw.completedAt === null || raw.completedAt === undefined ? null : Number(raw.completedAt)
+  if (![createdAt, updatedAt, ...(completedAt === null ? [] : [completedAt])].every((entry) => (
+    Number.isFinite(entry) && entry >= 0 && entry <= Date.now() + 24 * 60 * 60 * 1000
+  ))) apiError(400, '备份条目时间无效')
+  if (!Array.isArray(raw.assets) || raw.assets.length > MAX_IMAGES_PER_ITEM + 1) apiError(400, '备份图片清单无效')
+  const assets = raw.assets.map((value): BackupImportAsset => {
+    const asset = value as Record<string, unknown>
+    if (asset.role !== 'web_cover' && asset.role !== 'attachment' && asset.role !== 'gallery') apiError(400, '备份图片角色无效')
+    const mimeType = String(asset.mimeType || '')
+    const size = Number(asset.size)
+    const sortOrder = Number(asset.sortOrder)
+    if (!ALLOWED_TYPES.has(mimeType) || !Number.isFinite(size) || size < 1 || size > MAX_IMAGE_BYTES) apiError(400, '备份图片资料无效')
+    if (!Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > MAX_IMAGES_PER_ITEM) apiError(400, '备份图片顺序无效')
+    return {
+      role: asset.role,
+      originalName: cleanOriginalName(String(asset.originalName || 'image')),
+      mimeType,
+      size,
+      sortOrder,
+      path: asset.path ? String(asset.path) : null
+    }
+  })
+  const plannedFor = raw.plannedFor === null || raw.plannedFor === undefined ? null : validPlannedFor(raw.plannedFor)
+  const webCoverCount = assets.filter((asset) => asset.role === 'web_cover').length
+  const manualCount = assets.filter((asset) => asset.role !== 'web_cover').length
+  if (webCoverCount > 1 || manualCount > MAX_IMAGES_PER_ITEM) apiError(400, '备份图片数量超出限制')
+  return {
+    id: String(raw.id),
+    kind: raw.kind,
+    title,
+    url: raw.url === null || raw.url === undefined ? null : String(raw.url),
+    status: raw.status,
+    createdAt,
+    updatedAt,
+    completedAt,
+    isStarred: Boolean(raw.isStarred),
+    plannedFor,
+    assets
+  }
+}
+
+async function handleBackup(path: string, method: string, options: RequestInit) {
+  if (method !== 'POST') apiError(405, '操作方式不支持')
+  const client = requireSupabase()
+  const user = await currentUser()
+  if (path === '/api/backup/clear') {
+    const body = parseJsonBody(options)
+    if (body.confirmed !== true) apiError(400, '完整覆盖需要明确确认')
+    const assetRows = await client.from('assets').select('original_path,thumb_path').eq('user_id', user.id)
+    if (assetRows.error) apiError(500, '无法读取现有图片')
+    const removedItems = await client.from('items').delete().eq('user_id', user.id)
+    if (removedItems.error) apiError(500, messageFrom(removedItems.error, '无法清空现有条目'))
+    const removedCategories = await client.from('categories').delete().eq('user_id', user.id)
+    if (removedCategories.error) apiError(500, messageFrom(removedCategories.error, '无法清空现有类别'))
+    const preferences = await client.from('user_preferences').upsert({
+      user_id: user.id,
+      quick_save_category_id: null,
+      updated_at: new Date().toISOString()
+    })
+    if (preferences.error) apiError(500, '无法重置账号偏好')
+    await removeStorage((assetRows.data || []).flatMap((row) => [row.original_path, row.thumb_path]))
+    return { cleared: true }
+  }
+  if (path !== '/api/backup/item' || !(options.body instanceof FormData)) apiError(404, '功能不存在')
+  const form = options.body
+  const item = parseBackupImportItem(form.get('item'))
+  const existingId = await client.from('items').select('id').eq('user_id', user.id).eq('id', item.id).maybeSingle()
+  if (existingId.error) apiError(500, '无法检查重复条目')
+  if (existingId.data) return { status: 'skipped', reason: '备份 ID 已存在' }
+  let normalizedUrl: string | null = null
+  if (item.kind === 'link') {
+    normalizedUrl = normalizeWebUrl(String(item.url || ''))
+    const duplicate = await client.from('items').select('id').eq('user_id', user.id)
+      .eq('kind', 'link').eq('normalized_url', normalizedUrl).maybeSingle()
+    if (duplicate.error) apiError(500, '无法检查重复网址')
+    if (duplicate.data) return { status: 'skipped', reason: '网址已存在', existingId: duplicate.data.id }
+  }
+  const categoryId = await ensureCategory(user.id, form.get('categoryId'))
+  const files = filesFrom(form)
+  const fileAssets = item.assets.filter((asset) => asset.path)
+  if (files.length !== fileAssets.length) apiError(400, '备份图片数量与清单不一致')
+  if (item.kind === 'image_group' && !files.length) return { status: 'skipped', reason: '备份未包含图片组原图' }
+  if (item.kind === 'image_group' && item.assets.some((asset) => asset.role !== 'gallery')) apiError(400, '图片组清单角色无效')
+  if (item.kind === 'text' && item.assets.length) apiError(400, '文本条目不能包含图片')
+  if (item.kind === 'link' && item.assets.some((asset) => asset.role === 'gallery')) apiError(400, '网页图片清单角色无效')
+  for (let index = 0; index < files.length; index += 1) {
+    const asset = fileAssets[index]
+    if (files[index].type !== asset.mimeType || files[index].size !== asset.size) apiError(400, '图片与备份清单不一致')
+  }
+  const inserted = await client.from('items').insert({
+    id: item.id,
+    user_id: user.id,
+    kind: item.kind,
+    title: item.title,
+    url: normalizedUrl,
+    normalized_url: normalizedUrl,
+    status: item.status,
+    category_id: categoryId,
+    created_at: new Date(item.createdAt).toISOString(),
+    updated_at: new Date(item.updatedAt).toISOString(),
+    completed_at: item.status === 'completed' ? new Date(item.completedAt || item.updatedAt).toISOString() : null,
+    is_starred: item.isStarred,
+    planned_for: item.status === 'completed' ? null : item.plannedFor
+  }).select('id').single()
+  if (inserted.error) apiError(400, messageFrom(inserted.error, '条目恢复失败'))
+  try {
+    for (let index = 0; index < files.length; index += 1) {
+      const source = files[index]
+      const asset = fileAssets[index]
+      const namedFile = new File([source], asset.originalName, { type: source.type })
+      await uploadAsset({ userId: user.id, itemId: item.id, file: namedFile, role: asset.role, sortOrder: asset.sortOrder })
+    }
+  } catch (error) {
+    try {
+      await deleteItem(user.id, item.id)
+    } catch {
+      // Keep the original restore error; the report will flag this item.
+    }
+    throw error
+  }
+  return { status: 'added' }
 }
 
 async function ensureCategory(userId: string, categoryId: unknown) {
@@ -342,6 +563,44 @@ async function ensureCategory(userId: string, categoryId: unknown) {
   const result = await requireSupabase().from('categories').select('id').eq('id', id).eq('user_id', userId).maybeSingle()
   if (result.error || !result.data) apiError(400, '所选类别不存在')
   return id
+}
+
+function validPlannedFor(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
+  const plannedFor = String(value)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedFor)) apiError(400, '计划日期无效')
+  return plannedFor
+}
+
+async function patchCloudItem(userId: string, itemId: string, body: Record<string, unknown>) {
+  const client = requireSupabase()
+  const rows = await loadItemRows(userId, itemId)
+  if (!rows.length) apiError(404, '条目不存在')
+  const raw = rows[0]
+  const changes: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  if (Object.prototype.hasOwnProperty.call(body, 'title')) changes.title = requiredTitle(body.title, raw.title)
+  if (Object.prototype.hasOwnProperty.call(body, 'categoryId')) {
+    changes.category_id = await ensureCategory(userId, body.categoryId)
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'isStarred')) {
+    if (typeof body.isStarred !== 'boolean') apiError(400, '星标状态无效')
+    changes.is_starred = body.isStarred
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'plannedFor')) {
+    changes.planned_for = validPlannedFor(body.plannedFor)
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+    if (body.status !== 'pending' && body.status !== 'completed') apiError(400, '条目状态无效')
+    changes.status = body.status
+    changes.completed_at = body.status === 'completed'
+      ? (raw.status === 'completed' && raw.completed_at ? raw.completed_at : new Date().toISOString())
+      : null
+    if (body.status === 'completed') changes.planned_for = null
+  }
+  const result = await client.from('items').update(changes).eq('id', itemId).eq('user_id', userId)
+    .select('id').maybeSingle()
+  if (result.error || !result.data) apiError(404, '条目不存在')
+  return getItem(userId, itemId)
 }
 
 function filesFrom(form: FormData) {
@@ -384,10 +643,21 @@ async function insertItem(input: {
     status: 'pending',
     category_id: input.categoryId,
     created_at: now,
-    updated_at: now
+    updated_at: now,
+    is_starred: false,
+    planned_for: null
   }).select('id').single()
   if (result.error) {
-    if (result.error.code === '23505') apiError(409, '这个网页已经保存过了')
+    if (result.error.code === '23505' && input.normalizedUrl) {
+      const existing = await requireSupabase().from('items').select('id')
+        .eq('user_id', input.userId)
+        .eq('kind', 'link')
+        .eq('normalized_url', input.normalizedUrl)
+        .maybeSingle()
+      apiError(409, '这个网页已经保存过了', {
+        existingId: existing.data?.id || undefined
+      })
+    }
     apiError(400, messageFrom(result.error, '条目保存失败'))
   }
   return id
@@ -627,6 +897,51 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
     return getItem(user.id, itemId)
   }
 
+  if (path === '/api/items/bulk' && method === 'POST') {
+    const body = parseJsonBody(options)
+    const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String))].slice(0, 500) : []
+    if (!ids.length) apiError(400, '请选择至少一个条目')
+    const rows = (await loadItemRows(user.id)).filter((row) => ids.includes(row.id))
+    if (rows.length !== ids.length) apiError(404, '部分条目不存在')
+    const succeededIds: string[] = []
+    const failed: Array<{ id: string; error: string }> = []
+    if (body.delete === true) {
+      for (const id of ids) {
+        try {
+          await deleteItem(user.id, id)
+          succeededIds.push(id)
+        } catch (error) {
+          failed.push({ id, error: messageFrom(error, '删除失败') })
+        }
+      }
+      return { updated: 0, deleted: succeededIds.length, succeededIds, failed }
+    }
+    const changes = body.changes && typeof body.changes === 'object'
+      ? body.changes as Record<string, unknown>
+      : {}
+    for (const id of ids) {
+      try {
+        await patchCloudItem(user.id, id, changes)
+        succeededIds.push(id)
+      } catch (error) {
+        failed.push({ id, error: messageFrom(error, '修改失败') })
+      }
+    }
+    return { updated: succeededIds.length, deleted: 0, succeededIds, failed }
+  }
+
+  const coverMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/cover$/i)
+  if (coverMatch && method === 'POST') {
+    const itemRows = await loadItemRows(user.id, coverMatch[1])
+    if (!itemRows.length || itemRows[0].kind !== 'link') apiError(404, '网页条目不存在')
+    const body = parseJsonBody(options)
+    const coverUrl = String(body.coverUrl || '').trim()
+    if (!coverUrl) apiError(400, '封面地址无效')
+    const existing = (itemRows[0].assets || []).filter((asset) => asset.role === 'web_cover')
+    if (!existing.length) await maybeUploadCover(user.id, coverMatch[1], coverUrl)
+    return getItem(user.id, coverMatch[1])
+  }
+
   const assetOrderMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/assets\/order$/i)
   if (assetOrderMatch && method === 'PUT') {
     const itemId = assetOrderMatch[1]
@@ -681,6 +996,7 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
     await deleteItem(user.id, itemId)
     return { ok: true }
   }
+  if (method === 'PATCH') return patchCloudItem(user.id, itemId, parseJsonBody(options))
   if (method === 'PUT') {
     const rows = await loadItemRows(user.id, itemId)
     if (!rows.length) apiError(404, '条目不存在')
@@ -706,7 +1022,11 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
       status,
       category_id: await ensureCategory(user.id, body.categoryId),
       updated_at: new Date().toISOString(),
-      completed_at: completedAt
+      completed_at: completedAt,
+      is_starred: Object.prototype.hasOwnProperty.call(body, 'isStarred') ? Boolean(body.isStarred) : raw.is_starred,
+      planned_for: status === 'completed'
+        ? null
+        : (Object.prototype.hasOwnProperty.call(body, 'plannedFor') ? validPlannedFor(body.plannedFor) : raw.planned_for)
     }).eq('id', itemId).eq('user_id', user.id).select('id').maybeSingle()
     if (updated.error || !updated.data) apiError(404, '条目不存在')
     return getItem(user.id, itemId)
@@ -746,6 +1066,10 @@ export async function cloudApi<T>(path: string, options: RequestInit = {}): Prom
     result = await handleAuth(url.pathname, method, options)
   } else if (url.pathname.startsWith('/api/categories')) {
     result = await handleCategories(url.pathname, method, options)
+  } else if (url.pathname === '/api/preferences') {
+    result = await handlePreferences(method, options)
+  } else if (url.pathname.startsWith('/api/backup/')) {
+    result = await handleBackup(url.pathname, method, options)
   } else if (url.pathname.startsWith('/api/items')) {
     result = await handleItems(url, method, options)
   } else if (url.pathname.startsWith('/api/assets/')) {

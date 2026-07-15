@@ -13,16 +13,20 @@ export function Modal({ title, children, onClose, wide = false }: ModalProps) {
   return (
     <AnimalModal
       open
-      title={title}
+      title={(
+        <div className="app-modal-title-content">
+          <span>{title}</span>
+          <Button type="text" size="small" className="app-modal-close" onClick={onClose} aria-label="关闭">
+            <AppIcon name="close" size={22} />
+          </Button>
+        </div>
+      )}
       width={wide ? 'min(880px, calc(100vw - 32px))' : 'min(580px, calc(100vw - 32px))'}
       footer={null}
       typewriter={false}
       onClose={onClose}
       className={wide ? 'app-modal app-modal-wide' : 'app-modal'}
     >
-      <Button type="text" size="small" className="app-modal-close" onClick={onClose} aria-label="关闭">
-        <AppIcon name="close" size={22} />
-      </Button>
       <div className="modal-body">{children}</div>
     </AnimalModal>
   )

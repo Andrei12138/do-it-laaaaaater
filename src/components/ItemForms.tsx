@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiRequestError, api, errorMessage, jsonRequest } from '../api'
+import { discardDraft, loadDraft, saveDraft } from '../draft-store'
 import type { Category, ImageAsset, LibraryItem } from '../types'
 import { CategoryField, ImageInput } from './FormFields'
 import { ErrorNotice } from './Modal'
@@ -43,7 +44,10 @@ export function LinkForm({
   const [error, setError] = useState('')
   const [fetching, setFetching] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [draftReady, setDraftReady] = useState(false)
+  const [duplicateId, setDuplicateId] = useState('')
   const lastFetched = useRef('')
+  const draftKey = 'new-link'
 
   async function readMetadata(target = url) {
     const trimmed = target.trim()
@@ -70,10 +74,48 @@ export function LinkForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    let active = true
+    if (initial?.url) {
+      setDraftReady(true)
+      return () => { active = false }
+    }
+    void loadDraft(draftKey).then((draft) => {
+      if (!active || !draft) return
+      setUrl(String(draft.data.url || ''))
+      setTitle(String(draft.data.title || ''))
+      setCategoryId(String(draft.data.categoryId || ''))
+      setCoverUrl(String(draft.data.coverUrl || ''))
+      setFiles(draft.files || [])
+    }).finally(() => {
+      if (active) setDraftReady(true)
+    })
+    return () => { active = false }
+  }, [initial?.url])
+
+  useEffect(() => {
+    if (!draftReady || (!url.trim() && !title.trim() && !files.length)) return
+    const timer = window.setTimeout(() => {
+      void saveDraft({
+        key: draftKey,
+        type: 'link',
+        data: { url, title, categoryId, coverUrl },
+        files
+      })
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [categoryId, coverUrl, draftReady, files, title, url])
+
+  function discardAndClose() {
+    void discardDraft(draftKey)
+    onClose()
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault()
     setSaving(true)
     setError('')
+    setDuplicateId('')
     const form = new FormData()
     form.set('url', url)
     form.set('title', title)
@@ -82,13 +124,14 @@ export function LinkForm({
     files.forEach((file) => form.append('images', file))
     try {
       const item = await api<LibraryItem>('/api/items/link', { method: 'POST', body: form })
+      await discardDraft(draftKey)
       onSaved(item)
     } catch (requestError) {
       if (requestError instanceof ApiRequestError && requestError.status === 409) {
         const details = requestError.details as { existingId?: string } | undefined
         if (details?.existingId) {
           setError(requestError.message)
-          onDuplicate(details.existingId)
+          setDuplicateId(details.existingId)
           return
         }
       }
@@ -101,6 +144,15 @@ export function LinkForm({
   return (
     <form className="stack" onSubmit={submit}>
       <ErrorNotice message={error} />
+      {duplicateId && (
+        <div className="duplicate-notice" role="status">
+          <strong>已经保存过了</strong>
+          <span>原条目没有被修改，录入时间也保持不变。</span>
+          <button type="button" className="button button-small" onClick={() => onDuplicate(duplicateId)}>
+            查看已有条目
+          </button>
+        </div>
+      )}
       <label className="field">
         <span>网页地址</span>
         <div className="inline-field">
@@ -145,7 +197,7 @@ export function LinkForm({
         <ImageInput files={files} onChange={setFiles} onError={setError} />
       </div>
       <div className="form-actions">
-        <button type="button" className="button" onClick={onClose}>取消</button>
+        <button type="button" className="button" onClick={discardAndClose}>取消</button>
         <button className="button button-primary" disabled={saving}>
           {saving ? '保存中…' : '保存网页'}
         </button>
@@ -169,13 +221,46 @@ export function TextItemForm({
   const [categoryId, setCategoryId] = useState(defaultCategory(categories))
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [draftReady, setDraftReady] = useState(false)
+  const draftKey = 'new-text'
+
+  useEffect(() => {
+    let active = true
+    if (initialText) {
+      setDraftReady(true)
+      return () => { active = false }
+    }
+    void loadDraft(draftKey).then((draft) => {
+      if (!active || !draft) return
+      setTitle(String(draft.data.title || ''))
+      setCategoryId(String(draft.data.categoryId || ''))
+    }).finally(() => {
+      if (active) setDraftReady(true)
+    })
+    return () => { active = false }
+  }, [initialText])
+
+  useEffect(() => {
+    if (!draftReady || !title.trim()) return
+    const timer = window.setTimeout(() => {
+      void saveDraft({ key: draftKey, type: 'text', data: { title, categoryId }, files: [] })
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [categoryId, draftReady, title])
+
+  function discardAndClose() {
+    void discardDraft(draftKey)
+    onClose()
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     setSaving(true)
     setError('')
     try {
-      onSaved(await jsonRequest<LibraryItem>('/api/items/text', 'POST', { title, categoryId }))
+      const saved = await jsonRequest<LibraryItem>('/api/items/text', 'POST', { title, categoryId })
+      await discardDraft(draftKey)
+      onSaved(saved)
     } catch (requestError) {
       setError(errorMessage(requestError))
     } finally {
@@ -203,7 +288,7 @@ export function TextItemForm({
         onCreateCategory={onCreateCategory}
       />
       <div className="form-actions">
-        <button type="button" className="button" onClick={onClose}>取消</button>
+        <button type="button" className="button" onClick={discardAndClose}>取消</button>
         <button className="button button-primary" disabled={saving}>
           {saving ? '保存中…' : '保存文本'}
         </button>
@@ -237,6 +322,38 @@ export function ImageGroupForm({
   const [files, setFiles] = useState<File[]>(initialFiles)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [draftReady, setDraftReady] = useState(false)
+  const draftKey = 'new-images'
+
+  useEffect(() => {
+    let active = true
+    if (initialFiles.length) {
+      setDraftReady(true)
+      return () => { active = false }
+    }
+    void loadDraft(draftKey).then((draft) => {
+      if (!active || !draft) return
+      setTitle(String(draft.data.title || newImageGroupTitle()))
+      setCategoryId(String(draft.data.categoryId || ''))
+      setFiles(draft.files || [])
+    }).finally(() => {
+      if (active) setDraftReady(true)
+    })
+    return () => { active = false }
+  }, [initialFiles.length])
+
+  useEffect(() => {
+    if (!draftReady || !files.length) return
+    const timer = window.setTimeout(() => {
+      void saveDraft({ key: draftKey, type: 'images', data: { title, categoryId }, files })
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [categoryId, draftReady, files, title])
+
+  function discardAndClose() {
+    void discardDraft(draftKey)
+    onClose()
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -251,7 +368,9 @@ export function ImageGroupForm({
     form.set('categoryId', categoryId)
     files.forEach((file) => form.append('images', file))
     try {
-      onSaved(await api<LibraryItem>('/api/items/image-group', { method: 'POST', body: form }))
+      const saved = await api<LibraryItem>('/api/items/image-group', { method: 'POST', body: form })
+      await discardDraft(draftKey)
+      onSaved(saved)
     } catch (requestError) {
       setError(errorMessage(requestError))
     } finally {
@@ -274,7 +393,7 @@ export function ImageGroupForm({
       />
       <ImageInput files={files} onChange={setFiles} onError={setError} compact />
       <div className="form-actions">
-        <button type="button" className="button" onClick={onClose}>取消</button>
+        <button type="button" className="button" onClick={discardAndClose}>取消</button>
         <button className="button button-primary" disabled={saving}>
           {saving ? '保存中…' : '保存图片组'}
         </button>
@@ -306,8 +425,59 @@ export function EditItemForm({
   const [files, setFiles] = useState<File[]>([])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [draftReady, setDraftReady] = useState(false)
+  const [isStarred, setIsStarred] = useState(initialItem.isStarred)
+  const [plannedFor, setPlannedFor] = useState(initialItem.plannedFor || '')
+  const draftKey = 'edit-' + initialItem.id
   const assets = manualAssets(item)
   const webCover = item.assets.find((asset) => asset.role === 'web_cover')
+
+  useEffect(() => {
+    let active = true
+    void loadDraft(draftKey).then((draft) => {
+      if (!active || !draft) return
+      setTitle(String(draft.data.title || initialItem.title))
+      setUrl(String(draft.data.url || initialItem.url || ''))
+      setCategoryId(String(draft.data.categoryId || ''))
+      if (draft.data.status === 'pending' || draft.data.status === 'completed') setStatus(draft.data.status)
+      setIsStarred(Boolean(draft.data.isStarred))
+      setPlannedFor(String(draft.data.plannedFor || ''))
+      setFiles(draft.files || [])
+    }).finally(() => {
+      if (active) setDraftReady(true)
+    })
+    return () => { active = false }
+  }, [draftKey, initialItem.title, initialItem.url])
+
+  useEffect(() => {
+    if (!draftReady) return
+    const hasChanges = title !== initialItem.title ||
+      url !== (initialItem.url || '') ||
+      categoryId !== (initialItem.category?.id || '') ||
+      status !== initialItem.status ||
+      isStarred !== initialItem.isStarred ||
+      plannedFor !== (initialItem.plannedFor || '') ||
+      files.length > 0
+    if (!hasChanges) {
+      void discardDraft(draftKey)
+      return
+    }
+    const timer = window.setTimeout(() => {
+      void saveDraft({
+        key: draftKey,
+        type: 'edit',
+        itemId: item.id,
+        data: { title, url, categoryId, status, isStarred, plannedFor },
+        files
+      })
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [categoryId, draftKey, draftReady, files, initialItem, isStarred, item.id, plannedFor, status, title, url])
+
+  function discardAndClose() {
+    void discardDraft(draftKey)
+    onClose()
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -318,7 +488,9 @@ export function EditItemForm({
         title,
         url,
         categoryId,
-        status
+        status,
+        isStarred,
+        plannedFor: status === 'completed' ? null : (plannedFor || null)
       })
       if (files.length) {
         const form = new FormData()
@@ -329,6 +501,7 @@ export function EditItemForm({
         })
       }
       setItem(updated)
+      await discardDraft(draftKey)
       onSaved(updated)
     } catch (requestError) {
       setError(errorMessage(requestError))
@@ -394,6 +567,24 @@ export function EditItemForm({
         onCategoryChange={setCategoryId}
         onCreateCategory={onCreateCategory}
       />
+      <div className="form-grid item-priority-fields">
+        <label className="field checkbox-field">
+          <span>长期优先</span>
+          <span className="inline-check">
+            <input type="checkbox" checked={isStarred} onChange={(event) => setIsStarred(event.target.checked)} />
+            星标条目
+          </span>
+        </label>
+        <label className="field">
+          <span>计划处理日期</span>
+          <input
+            type="date"
+            disabled={status === 'completed'}
+            value={status === 'completed' ? '' : plannedFor}
+            onChange={(event) => setPlannedFor(event.target.value)}
+          />
+        </label>
+      </div>
       {webCover && (
         <div className="saved-cover">
           <span>网页封面</span>
@@ -441,7 +632,7 @@ export function EditItemForm({
         />
       </div>}
       <div className="form-actions">
-        <button type="button" className="button" onClick={onClose}>取消</button>
+        <button type="button" className="button" onClick={discardAndClose}>取消</button>
         <button className="button button-primary" disabled={saving}>
           {saving ? '保存中…' : '保存修改'}
         </button>

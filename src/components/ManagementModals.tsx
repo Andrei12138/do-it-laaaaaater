@@ -1,8 +1,20 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Button, Card, Select } from 'animal-island-ui'
 import { api, errorMessage, jsonRequest } from '../api'
-import type { Category, ImageAsset } from '../types'
+import { useTheme } from '../theme'
+import type { AppPreferences, Category, ImageAsset } from '../types'
 import { AppIcon } from './AppIcon'
+import { BackupManager } from './BackupManager'
 import { ErrorNotice, Modal } from './Modal'
+
+function AccountPanel({ className, label, children }: { className: string; label: string; children: ReactNode }) {
+  const { theme } = useTheme()
+  const classes = `account-section ${className}`
+  if (theme === 'animal-island') {
+    return <Card className={classes} pattern="default" role="region" aria-label={label}>{children}</Card>
+  }
+  return <section className={classes} aria-label={label}>{children}</section>
+}
 
 export function CategoriesManager({
   categories,
@@ -110,17 +122,30 @@ export function CategoriesManager({
 
 export function AccountManager({
   email,
+  categories,
+  onChanged,
   onClose
 }: {
   email: string
+  categories: Category[]
+  onChanged: () => Promise<void>
   onClose: () => void
 }) {
+  const { theme } = useTheme()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
+  const [quickCategoryId, setQuickCategoryId] = useState('')
+  const [preferenceBusy, setPreferenceBusy] = useState(false)
+
+  useEffect(() => {
+    void api<AppPreferences>('/api/preferences').then((preferences) => {
+      setQuickCategoryId(preferences.quickSaveCategoryId || '')
+    }).catch((requestError) => setError(errorMessage(requestError)))
+  }, [])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -144,79 +169,182 @@ export function AccountManager({
     }
   }
 
+  async function savePreference() {
+    setPreferenceBusy(true)
+    setError('')
+    setSuccess('')
+    try {
+      const preferences = await jsonRequest<AppPreferences>('/api/preferences', 'PATCH', {
+        quickSaveCategoryId: quickCategoryId || null
+      })
+      setQuickCategoryId(preferences.quickSaveCategoryId || '')
+      setSuccess('快速保存的默认类别已同步')
+    } catch (requestError) {
+      setError(errorMessage(requestError))
+    } finally {
+      setPreferenceBusy(false)
+    }
+  }
+
   return (
-    <Modal title="账号设置" onClose={onClose}>
-      <form className="stack" onSubmit={submit}>
+    <Modal title="账号设置" onClose={onClose} wide>
+      <div className="account-settings stack">
         <p className="muted">当前账号：{email}</p>
         <ErrorNotice message={error} />
         {success && <div className="notice notice-success" role="status">{success}</div>}
-        <label className="field">
-          <span>当前密码</span>
-          <input type="password" autoComplete="current-password" required value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
-        </label>
-        <label className="field">
-          <span>新密码</span>
-          <input type="password" autoComplete="new-password" minLength={10} required value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
-        </label>
-        <label className="field">
-          <span>再次输入新密码</span>
-          <input type="password" autoComplete="new-password" minLength={10} required value={confirm} onChange={(event) => setConfirm(event.target.value)} />
-        </label>
-        <div className="form-actions">
-          <button type="button" className="button" onClick={onClose}>关闭</button>
-          <button className="button button-primary" disabled={busy}>{busy ? '更新中…' : '修改密码'}</button>
-        </div>
-      </form>
+        <AccountPanel className="quick-save-settings" label="快速保存设置">
+          <div className="account-section-heading">
+            <AppIcon name="bookmark" size={24} />
+            <div>
+              <h3>快速保存默认类别</h3>
+              <p>快速书签会自动使用这个类别，并在公司与家里的设备之间同步。</p>
+            </div>
+          </div>
+          <div className="inline-field">
+            {theme === 'animal-island' ? (
+              <Select
+                aria-label="快速保存默认类别"
+                value={quickCategoryId}
+                options={[
+                  { key: '', label: '未分类' },
+                  ...categories.map((category) => ({ key: category.id, label: category.name }))
+                ]}
+                onChange={setQuickCategoryId}
+              />
+            ) : (
+              <select aria-label="快速保存默认类别" value={quickCategoryId} onChange={(event) => setQuickCategoryId(event.target.value)}>
+                <option value="">未分类</option>
+                {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+              </select>
+            )}
+            <Button type="primary" size="small" loading={preferenceBusy} disabled={preferenceBusy} onClick={() => void savePreference()}>
+              {preferenceBusy ? '保存中…' : '保存默认类别'}
+            </Button>
+          </div>
+        </AccountPanel>
+
+        <AccountPanel className="iphone-install" label="安装到 iPhone 主屏幕">
+          <div className="account-section-heading">
+            <AppIcon name="install" size={24} />
+            <div>
+              <h3>安装到 iPhone 15 Pro Max 主屏幕</h3>
+              <p>用 Safari 打开正式网址，点底部“分享”按钮，选择“添加到主屏幕”，再点“添加”。之后会像独立应用一样全屏打开。</p>
+            </div>
+          </div>
+          <div className="notice notice-warning">首次从主屏幕打开时，可能需要重新登录一次。本轮暂不加入 iOS 系统分享菜单。</div>
+        </AccountPanel>
+
+        <BackupManager onRestored={onChanged} />
+
+        <form className="account-section password-form stack" onSubmit={submit}>
+          <div className="account-section-heading">
+            <AppIcon name="account" size={24} />
+            <div><h3>修改密码</h3><p>新密码至少 10 个字符。</p></div>
+          </div>
+          <div className="form-grid">
+            <label className="field">
+              <span>当前密码</span>
+              <input type="password" autoComplete="current-password" required value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>新密码</span>
+              <input type="password" autoComplete="new-password" minLength={10} required value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+            </label>
+          </div>
+          <label className="field">
+            <span>再次输入新密码</span>
+            <input type="password" autoComplete="new-password" minLength={10} required value={confirm} onChange={(event) => setConfirm(event.target.value)} />
+          </label>
+          <div className="form-actions">
+            <button className="button button-primary" disabled={busy}>{busy ? '更新中…' : '修改密码'}</button>
+          </div>
+        </form>
+        <div className="form-actions"><button type="button" className="button" onClick={onClose}>关闭</button></div>
+      </div>
     </Modal>
   )
 }
 
 export function BookmarkletHelp({ onClose }: { onClose: () => void }) {
-  const [copied, setCopied] = useState(false)
-  const bookmarkRef = useRef<HTMLAnchorElement>(null)
+  const [copied, setCopied] = useState<'quick' | 'detail' | ''>('')
+  const quickBookmarkRef = useRef<HTMLAnchorElement>(null)
+  const detailBookmarkRef = useRef<HTMLAnchorElement>(null)
   const origin = window.location.protocol === 'http:'
     ? window.location.origin
     : 'https://do-it-laaaaaater.vercel.app'
-  const code =
+  const detailCode =
     'javascript:(()=>{const u=' +
     JSON.stringify(origin + '/?add=link&url=') +
     "+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title);const w=window.open(u,'_blank');if(w){try{w.opener=null}catch(e){}}else{alert('浏览器阻止了新标签页，请允许弹出窗口后重试。')}})()"
+  const quickCode =
+    'javascript:(()=>{const u=' +
+    JSON.stringify(origin + '/?capture=quick&url=') +
+    "+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title);const x=Math.max(0,(screen.width-480)/2),y=Math.max(0,(screen.height-620)/2);const w=window.open(u,'doitlaterQuick','popup=yes,width=480,height=620,left='+x+',top='+y+',resizable=yes,scrollbars=yes');if(w){try{w.opener=null;w.focus()}catch(e){}}else{alert('浏览器阻止了快速保存窗口，请允许弹出窗口后重试。')}})()"
 
   useEffect(() => {
-    bookmarkRef.current?.setAttribute('href', code)
-  }, [code])
+    quickBookmarkRef.current?.setAttribute('href', quickCode)
+    detailBookmarkRef.current?.setAttribute('href', detailCode)
+  }, [detailCode, quickCode])
 
-  async function copy() {
+  async function copy(kind: 'quick' | 'detail') {
     try {
-      await navigator.clipboard.writeText(code)
-      setCopied(true)
+      await navigator.clipboard.writeText(kind === 'quick' ? quickCode : detailCode)
+      setCopied(kind)
     } catch {
-      setCopied(false)
+      setCopied('')
     }
   }
 
   return (
     <Modal title="浏览器书签按钮" onClose={onClose}>
       <div className="stack">
-        <p>把下面的按钮拖到浏览器书签栏。以后浏览普通网页时点它，会在新标签页打开添加页面并带入网址和标题，原网页保持不动。</p>
+        <p>把需要的按钮拖到浏览器书签栏。两种方式都会保留原网页的地址和阅读位置。</p>
         <div className="notice notice-warning bookmarklet-upgrade">
           如果你已经安装过旧版“稍后保存”，请先删除旧书签，再重新拖入下面的新版本。
         </div>
-        <div className="bookmarklet-box">
-          <a
-            ref={bookmarkRef}
-            className="button button-primary"
-            draggable
-            onClick={(event) => event.preventDefault()}
-          >
-            <AppIcon name="bookmark" size={19} />
-            稍后保存（新标签）
-          </a>
+        <div className="bookmarklet-options">
+          <section className="bookmarklet-option">
+            <div>
+              <strong>快速保存</strong>
+              <p>打开小窗口，按网页标题和账号默认类别自动保存，完成后自动关闭。</p>
+            </div>
+            <div className="bookmarklet-box">
+              <a
+                ref={quickBookmarkRef}
+                className="button button-primary"
+                draggable
+                onClick={(event) => event.preventDefault()}
+              >
+                <AppIcon name="bookmark" size={19} />
+                快速保存
+              </a>
+              <button type="button" className="button button-small" onClick={() => void copy('quick')}>
+                {copied === 'quick' ? '已复制' : '复制代码'}
+              </button>
+            </div>
+          </section>
+          <section className="bookmarklet-option">
+            <div>
+              <strong>保存并分类</strong>
+              <p>在新标签页打开完整添加窗口，可调整标题、类别和截图。</p>
+            </div>
+            <div className="bookmarklet-box">
+              <a
+                ref={detailBookmarkRef}
+                className="button"
+                draggable
+                onClick={(event) => event.preventDefault()}
+              >
+                <AppIcon name="categories" size={19} />
+                保存并分类
+              </a>
+              <button type="button" className="button button-small" onClick={() => void copy('detail')}>
+                {copied === 'detail' ? '已复制' : '复制代码'}
+              </button>
+            </div>
+          </section>
         </div>
-        <p className="muted">它不能在浏览器的新标签页、设置页等内部页面运行。如果没有打开新标签页，请允许此网页弹出窗口；拖动无效时可复制代码，新建书签，并确认书签地址以 javascript: 开头。</p>
-        <button type="button" className="button" onClick={() => void copy()}>
-          {copied ? '已复制' : '复制书签代码'}
-        </button>
+        <p className="muted">书签不能在浏览器的新标签页、设置页等内部页面运行。若窗口没有出现，请允许弹出窗口；拖动无效时可复制代码，新建书签，并确认书签地址以 javascript: 开头。</p>
       </div>
     </Modal>
   )

@@ -56,7 +56,9 @@ export function initializeDatabase(db: DatabaseSync) {
     '  category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,',
     '  created_at INTEGER NOT NULL,',
     '  updated_at INTEGER NOT NULL,',
-    '  completed_at INTEGER',
+    '  completed_at INTEGER,',
+    '  is_starred INTEGER NOT NULL DEFAULT 0,',
+    '  planned_for TEXT',
     ');',
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_items_unique_url',
     "  ON items(user_id, normalized_url) WHERE kind = 'link' AND normalized_url IS NOT NULL;",
@@ -112,10 +114,12 @@ export function initializeDatabase(db: DatabaseSync) {
         '  category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,',
         '  created_at INTEGER NOT NULL,',
         '  updated_at INTEGER NOT NULL,',
-        '  completed_at INTEGER',
+        '  completed_at INTEGER,',
+        '  is_starred INTEGER NOT NULL DEFAULT 0,',
+        '  planned_for TEXT',
         ');',
-        'INSERT INTO items_next (id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at)',
-        '  SELECT id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at FROM items;',
+        'INSERT INTO items_next (id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,is_starred,planned_for)',
+        '  SELECT id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,0,NULL FROM items;',
         'DROP TABLE items;',
         'ALTER TABLE items_next RENAME TO items;',
         'CREATE UNIQUE INDEX idx_items_unique_url',
@@ -137,6 +141,28 @@ export function initializeDatabase(db: DatabaseSync) {
     const violations = db.prepare('PRAGMA foreign_key_check').all()
     if (violations.length) throw new Error('数据库升级后发现关联数据异常')
   }
+
+  const itemColumns = new Set(
+    (db.prepare('PRAGMA table_info(items)').all() as Array<{ name: string }>).map((column) => column.name)
+  )
+  if (!itemColumns.has('is_starred')) {
+    db.exec('ALTER TABLE items ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0;')
+  }
+  if (!itemColumns.has('planned_for')) {
+    db.exec('ALTER TABLE items ADD COLUMN planned_for TEXT;')
+  }
+  db.exec([
+    'CREATE INDEX IF NOT EXISTS idx_items_user_priority',
+    '  ON items(user_id, planned_for, is_starred, created_at DESC);',
+    'CREATE TABLE IF NOT EXISTS user_preferences (',
+    '  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,',
+    '  quick_save_category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,',
+    '  updated_at INTEGER NOT NULL',
+    ');',
+    'INSERT OR IGNORE INTO user_preferences (user_id,quick_save_category_id,updated_at)',
+    "  SELECT u.id,(SELECT c.id FROM categories c WHERE c.user_id=u.id AND LOWER(c.name)=LOWER('其他') LIMIT 1),strftime('%s','now')*1000",
+    '  FROM users u;'
+  ].join('\n'))
 }
 
 export function createContext(dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data')): AppContext {

@@ -41,6 +41,27 @@ import {
 const SESSION_COOKIE = 'dil_session'
 const SESSION_DURATION = 30 * 24 * 60 * 60 * 1000
 const RowSchema = z.object({}).passthrough()
+const BackupAssetSchema = z.object({
+  role: z.enum(['web_cover', 'attachment', 'gallery']),
+  originalName: z.string().min(1).max(255),
+  mimeType: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+  size: z.number().int().min(1).max(MAX_IMAGE_BYTES),
+  sortOrder: z.number().int().min(0).max(MAX_IMAGES_PER_ITEM),
+  path: z.string().min(1).max(500).nullable()
+}).passthrough()
+const BackupItemSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(['link', 'text', 'image_group']),
+  title: z.string().min(1).max(300),
+  url: z.string().max(4096).nullable(),
+  status: z.enum(['pending', 'completed']),
+  createdAt: z.number().int().min(0),
+  updatedAt: z.number().int().min(0),
+  completedAt: z.number().int().min(0).nullable(),
+  isStarred: z.boolean(),
+  plannedFor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  assets: z.array(BackupAssetSchema).max(MAX_IMAGES_PER_ITEM + 1)
+}).passthrough()
 type Row = Record<string, unknown>
 type UserRequest = Request & { userId?: string; userEmail?: string }
 
@@ -199,6 +220,77 @@ function insertItem(context: AppContext, input: {
   )
 }
 
+function validPlannedFor(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
+  const plannedFor = String(value)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(plannedFor)) throw new ApiError(400, '计划日期无效')
+  return plannedFor
+}
+
+function hasOwn(value: object, key: string) {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function getPreferences(context: AppContext, userId: string) {
+  const row = context.db.prepare(
+    'SELECT quick_save_category_id FROM user_preferences WHERE user_id=?'
+  ).get(userId) as Row | undefined
+  return { quickSaveCategoryId: row?.quick_save_category_id ? String(row.quick_save_category_id) : null }
+}
+
+function parseBackupItem(value: unknown) {
+  try {
+    return BackupItemSchema.parse(JSON.parse(String(value || '')))
+  } catch {
+    throw new ApiError(400, '备份条目格式无效')
+  }
+}
+
+function patchItem(context: AppContext, userId: string, itemId: string, body: Record<string, unknown>) {
+  const raw = findRawItem(context, userId, itemId)
+  if (!raw) throw new ApiError(404, '条目不存在')
+  const fields: string[] = []
+  const values: Array<string | number | null> = []
+  let nextStatus = String(raw.status)
+
+  if (hasOwn(body, 'title')) {
+    fields.push('title=?')
+    values.push(requiredTitle(body.title, String(raw.title)))
+  }
+  if (hasOwn(body, 'categoryId')) {
+    fields.push('category_id=?')
+    values.push(ensureCategory(context, userId, optionalCategory(body.categoryId)))
+  }
+  if (hasOwn(body, 'isStarred')) {
+    if (typeof body.isStarred !== 'boolean') throw new ApiError(400, '星标状态无效')
+    fields.push('is_starred=?')
+    values.push(body.isStarred ? 1 : 0)
+  }
+  if (hasOwn(body, 'plannedFor')) {
+    fields.push('planned_for=?')
+    values.push(validPlannedFor(body.plannedFor))
+  }
+  if (hasOwn(body, 'status')) {
+    if (body.status !== 'pending' && body.status !== 'completed') throw new ApiError(400, '条目状态无效')
+    nextStatus = body.status
+    fields.push('status=?', 'completed_at=?')
+    values.push(
+      nextStatus,
+      nextStatus === 'completed'
+        ? (String(raw.status) === 'completed' && raw.completed_at ? Number(raw.completed_at) : Date.now())
+        : null
+    )
+    if (nextStatus === 'completed') {
+      fields.push('planned_for=NULL')
+    }
+  }
+  if (!fields.length) return getItem(context, userId, itemId)
+  fields.push('updated_at=?')
+  values.push(Date.now(), itemId, userId)
+  context.db.prepare(`UPDATE items SET ${fields.join(',')} WHERE id=? AND user_id=?`).run(...values)
+  return getItem(context, userId, itemId)
+}
+
 const loginAttempts = new Map<string, { count: number; resetAt: number }>()
 
 function loginKey(req: Request, email: string) {
@@ -291,11 +383,17 @@ export function createApp(context = createContext()) {
         passwordHash,
         now
       )
+      let defaultCategoryId: string | null = null
       DEFAULT_CATEGORIES.forEach((category, index) => {
+        const categoryId = randomUUID()
         context.db.prepare(
           'INSERT INTO categories (id,user_id,name,color,sort_order,created_at) VALUES (?,?,?,?,?,?)'
-        ).run(randomUUID(), userId, category.name, category.color, index, now)
+        ).run(categoryId, userId, category.name, category.color, index, now)
+        if (category.name === '其他') defaultCategoryId = categoryId
       })
+      context.db.prepare(
+        'INSERT INTO user_preferences (user_id,quick_save_category_id,updated_at) VALUES (?,?,?)'
+      ).run(userId, defaultCategoryId, now)
     })
     setSession(context, res, userId)
     res.status(201).json({ email })
@@ -355,6 +453,127 @@ export function createApp(context = createContext()) {
     res.json(rows)
   })
 
+  app.get('/api/preferences', authRequired(context), (req: UserRequest, res) => {
+    res.json(getPreferences(context, req.userId as string))
+  })
+
+  app.patch('/api/preferences', authRequired(context), (req: UserRequest, res) => {
+    const userId = req.userId as string
+    const categoryId = ensureCategory(context, userId, optionalCategory(req.body.quickSaveCategoryId))
+    context.db.prepare(
+      'INSERT INTO user_preferences (user_id,quick_save_category_id,updated_at) VALUES (?,?,?) ' +
+      'ON CONFLICT(user_id) DO UPDATE SET quick_save_category_id=excluded.quick_save_category_id,updated_at=excluded.updated_at'
+    ).run(userId, categoryId, Date.now())
+    res.json(getPreferences(context, userId))
+  })
+
+  app.post('/api/backup/clear', authRequired(context), async (req: UserRequest, res) => {
+    if (req.body.confirmed !== true) throw new ApiError(400, '完整覆盖需要明确确认')
+    const userId = req.userId as string
+    const assets = context.db.prepare(
+      'SELECT file_name AS fileName,thumb_name AS thumbName FROM assets WHERE user_id=?'
+    ).all(userId) as Array<{ fileName: string; thumbName: string }>
+    runTransaction(context.db, () => {
+      context.db.prepare('DELETE FROM items WHERE user_id=?').run(userId)
+      context.db.prepare('DELETE FROM categories WHERE user_id=?').run(userId)
+      context.db.prepare('UPDATE user_preferences SET quick_save_category_id=NULL,updated_at=? WHERE user_id=?')
+        .run(Date.now(), userId)
+      removeUnusedTags(context, userId)
+    })
+    await removePreparedAssets(context, assets)
+    res.json({ cleared: true })
+  })
+
+  app.post(
+    '/api/backup/item',
+    authRequired(context),
+    upload.array('images', MAX_IMAGES_PER_ITEM + 1),
+    async (req: UserRequest, res) => {
+      const userId = req.userId as string
+      const item = parseBackupItem(req.body.item)
+      if (item.createdAt > Date.now() + 24 * 60 * 60 * 1000 || item.updatedAt > Date.now() + 24 * 60 * 60 * 1000) {
+        throw new ApiError(400, '备份条目时间无效')
+      }
+      if (findRawItem(context, userId, item.id)) {
+        res.json({ status: 'skipped', reason: '备份 ID 已存在' })
+        return
+      }
+      let normalizedUrl: string | null = null
+      if (item.kind === 'link') {
+        try {
+          normalizedUrl = normalizeUrl(String(item.url || ''))
+        } catch {
+          throw new ApiError(400, '备份中的网页地址无效')
+        }
+        const duplicate = context.db.prepare(
+          "SELECT id FROM items WHERE user_id=? AND kind='link' AND normalized_url=?"
+        ).get(userId, normalizedUrl) as Row | undefined
+        if (duplicate) {
+          res.json({ status: 'skipped', reason: '网址已存在', existingId: String(duplicate.id) })
+          return
+        }
+      }
+      const categoryId = ensureCategory(context, userId, optionalCategory(req.body.categoryId))
+      const files = (req.files || []) as Express.Multer.File[]
+      const fileAssets = item.assets.filter((asset) => asset.path)
+      const webCoverCount = item.assets.filter((asset) => asset.role === 'web_cover').length
+      const manualCount = item.assets.filter((asset) => asset.role !== 'web_cover').length
+      if (webCoverCount > 1 || manualCount > MAX_IMAGES_PER_ITEM) throw new ApiError(400, '备份图片数量超出限制')
+      if (item.kind === 'image_group' && item.assets.some((asset) => asset.role !== 'gallery')) throw new ApiError(400, '图片组清单角色无效')
+      if (item.kind === 'text' && item.assets.length) throw new ApiError(400, '文本条目不能包含图片')
+      if (item.kind === 'link' && item.assets.some((asset) => asset.role === 'gallery')) throw new ApiError(400, '网页图片清单角色无效')
+      if (files.length !== fileAssets.length) throw new ApiError(400, '备份图片数量与清单不一致')
+      if (item.kind === 'image_group' && !files.length) {
+        res.json({ status: 'skipped', reason: '备份未包含图片组原图' })
+        return
+      }
+      const prepared: PreparedAsset[] = []
+      try {
+        for (let index = 0; index < files.length; index += 1) {
+          const asset = fileAssets[index]
+          const next = await prepareImage(context, {
+            buffer: files[index].buffer,
+            originalName: asset.originalName,
+            itemId: item.id,
+            userId,
+            role: asset.role,
+            sortOrder: asset.sortOrder
+          })
+          if (next.mimeType !== asset.mimeType) {
+            await removePreparedAsset(context, next)
+            throw new ApiError(400, '图片类型与备份清单不一致')
+          }
+          prepared.push(next)
+        }
+        runTransaction(context.db, () => {
+          context.db.prepare(
+            'INSERT INTO items (id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,is_starred,planned_for) ' +
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
+          ).run(
+            item.id,
+            userId,
+            item.kind,
+            requiredTitle(item.title),
+            normalizedUrl,
+            normalizedUrl,
+            item.status,
+            categoryId,
+            item.createdAt,
+            item.updatedAt,
+            item.status === 'completed' ? (item.completedAt || item.updatedAt) : null,
+            item.isStarred ? 1 : 0,
+            item.status === 'completed' ? null : validPlannedFor(item.plannedFor)
+          )
+          prepared.forEach((asset) => insertPreparedAsset(context, asset))
+        })
+      } catch (error) {
+        await removePreparedAssets(context, prepared)
+        throw error
+      }
+      res.status(201).json({ status: 'added' })
+    }
+  )
+
   app.post('/api/categories', authRequired(context), (req: UserRequest, res) => {
     const name = requiredTitle(req.body.name).slice(0, 40)
     const color = categoryColor(req.body.color || '#64748b')
@@ -411,8 +630,43 @@ export function createApp(context = createContext()) {
       category: queryValue(req.query.category),
       tag: queryValue(req.query.tag),
       date: queryValue(req.query.date),
-      q: queryValue(req.query.q)
+      q: queryValue(req.query.q),
+      priority: queryValue(req.query.priority),
+      sort: queryValue(req.query.sort)
     }))
+  })
+
+  app.post('/api/items/bulk', authRequired(context), async (req: UserRequest, res) => {
+    const userId = req.userId as string
+    const ids: string[] = Array.isArray(req.body.ids)
+      ? [...new Set<string>((req.body.ids as unknown[]).map((value) => String(value)))].slice(0, 500)
+      : []
+    if (!ids.length) throw new ApiError(400, '请选择至少一个条目')
+    const owned = ids.filter((id) => findRawItem(context, userId, id))
+    if (owned.length !== ids.length) throw new ApiError(404, '部分条目不存在')
+    if (req.body.delete === true) {
+      const placeholders = owned.map(() => '?').join(',')
+      const assets = context.db.prepare(
+        `SELECT file_name AS fileName,thumb_name AS thumbName FROM assets WHERE user_id=? AND item_id IN (${placeholders})`
+      ).all(userId, ...owned) as Array<{ fileName: string; thumbName: string }>
+      runTransaction(context.db, () => {
+        context.db.prepare(`DELETE FROM items WHERE user_id=? AND id IN (${placeholders})`).run(userId, ...owned)
+        removeUnusedTags(context, userId)
+      })
+      await removePreparedAssets(context, assets.map((asset) => ({
+        fileName: asset.fileName,
+        thumbName: asset.thumbName
+      })))
+      res.json({ updated: 0, deleted: owned.length, succeededIds: owned, failed: [] })
+      return
+    }
+    const changes = req.body.changes && typeof req.body.changes === 'object'
+      ? req.body.changes as Record<string, unknown>
+      : {}
+    runTransaction(context.db, () => {
+      owned.forEach((id) => patchItem(context, userId, id, changes))
+    })
+    res.json({ updated: owned.length, deleted: 0, succeededIds: owned, failed: [] })
   })
 
   app.get('/api/items/:id', authRequired(context), (req: UserRequest, res) => {
@@ -566,9 +820,12 @@ export function createApp(context = createContext()) {
     const completedAt: number | null = status === 'completed'
       ? (String(raw.status) === 'completed' && raw.completed_at ? Number(raw.completed_at) : Date.now())
       : null
+    if (hasOwn(req.body, 'isStarred') && typeof req.body.isStarred !== 'boolean') {
+      throw new ApiError(400, '星标状态无效')
+    }
     runTransaction(context.db, () => {
       context.db.prepare(
-        'UPDATE items SET title=?,url=?,normalized_url=?,status=?,category_id=?,updated_at=?,completed_at=? WHERE id=? AND user_id=?'
+        'UPDATE items SET title=?,url=?,normalized_url=?,status=?,category_id=?,updated_at=?,completed_at=?,is_starred=?,planned_for=? WHERE id=? AND user_id=?'
       ).run(
         title,
         url,
@@ -577,11 +834,58 @@ export function createApp(context = createContext()) {
         categoryId,
         Date.now(),
         completedAt,
+        hasOwn(req.body, 'isStarred') ? (req.body.isStarred ? 1 : 0) : Number(raw.is_starred || 0),
+        status === 'completed'
+          ? null
+          : (hasOwn(req.body, 'plannedFor')
+              ? validPlannedFor(req.body.plannedFor)
+              : (raw.planned_for ? String(raw.planned_for) : null)),
         routeId(req),
         userId
       )
       syncItemTags(context, userId, routeId(req), parseTags(req.body.tags))
     })
+    res.json(getItem(context, userId, routeId(req)))
+  })
+
+  app.patch('/api/items/:id', authRequired(context), (req: UserRequest, res) => {
+    res.json(patchItem(context, req.userId as string, routeId(req), req.body as Record<string, unknown>))
+  })
+
+  app.post('/api/items/:id/cover', authRequired(context), async (req: UserRequest, res) => {
+    const userId = req.userId as string
+    const raw = findRawItem(context, userId, routeId(req))
+    if (!raw || String(raw.kind) !== 'link') throw new ApiError(404, '网页条目不存在')
+    const coverUrl = String(req.body.coverUrl || '').trim()
+    if (!coverUrl) throw new ApiError(400, '封面地址无效')
+    let prepared: PreparedAsset
+    try {
+      prepared = await prepareImage(context, {
+        buffer: await fetchImage(coverUrl),
+        originalName: 'web-cover',
+        itemId: routeId(req),
+        userId,
+        role: 'web_cover',
+        sortOrder: 0,
+        maxBytes: 10 * 1024 * 1024
+      })
+    } catch {
+      throw new ApiError(422, '网页封面无法读取')
+    }
+    const previous = context.db.prepare(
+      "SELECT file_name AS fileName,thumb_name AS thumbName FROM assets WHERE item_id=? AND user_id=? AND role='web_cover'"
+    ).all(routeId(req), userId) as Array<{ fileName: string; thumbName: string }>
+    try {
+      runTransaction(context.db, () => {
+        context.db.prepare("DELETE FROM assets WHERE item_id=? AND user_id=? AND role='web_cover'").run(routeId(req), userId)
+        insertPreparedAsset(context, prepared)
+        context.db.prepare('UPDATE items SET updated_at=? WHERE id=? AND user_id=?').run(Date.now(), routeId(req), userId)
+      })
+    } catch (error) {
+      await removePreparedAsset(context, prepared)
+      throw error
+    }
+    await removePreparedAssets(context, previous)
     res.json(getItem(context, userId, routeId(req)))
   })
 

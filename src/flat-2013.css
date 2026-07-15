@@ -791,7 +791,7 @@ html[data-theme='flat-2013'] .app-modal > div {
 }
 
 html[data-theme='flat-2013'] .app-modal [id$='-title'] {
-  padding: 0 48px;
+  padding: 0;
   color: var(--dark) !important;
   font-size: 30px;
   font-weight: 200 !important;
@@ -799,8 +799,8 @@ html[data-theme='flat-2013'] .app-modal [id$='-title'] {
 }
 
 html[data-theme='flat-2013'] .app-modal-close {
-  top: 26px;
-  right: 30px;
+  top: 50% !important;
+  right: 0 !important;
   color: var(--dark) !important;
   background: transparent !important;
   border: 0 !important;
@@ -1046,9 +1046,11 @@ html[data-theme='flat-2013'] .app-footer a {
   }
 
   html[data-theme='flat-2013'] .app-modal [id$='-title'] {
-    padding-inline: 40px;
+    padding-inline: 0;
     font-size: 26px;
   }
+
+  html[data-theme='flat-2013'] .app-modal-title-content { padding-inline: 40px; }
 
   html[data-theme='flat-2013'] .app-modal-close {
     top: 19px;
@@ -1070,4 +1072,213 @@ html[data-theme='flat-2013'] input[class*='animal-input-']:focus {
   background: transparent !important;
   border: 0 !important;
   box-shadow: none !important;
+}
+
+/* Workflow upgrade surfaces keep the original 2013 tile language. */
+html[data-theme='flat-2013'] .sync-indicator {
+  color: #dfe6e9;
+  font-weight: 300;
+}
+
+html[data-theme='flat-2013'] .sync-saving { color: var(--turq); }
+html[data-theme='flat-2013'] .sync-error,
+html[data-theme='flat-2013'] .sync-offline { color: #ff8b82; }
+
+html[data-theme='flat-2013'] .bulk-toolbar,
+html[data-theme='flat-2013'] .bookmarklet-option,
+html[data-theme='flat-2013'] .account-section,
+html[data-theme='flat-2013'] .backup-panel,
+html[data-theme='flat-2013'] .backup-summary,
+html[data-theme='flat-2013'] .restore-report,
+html[data-theme='flat-2013'] .backup-progress,
+html[data-theme='flat-2013'] .quick-capture-card,
+html[data-theme='flat-2013'] .quick-capture-summary,
+html[data-theme='flat-2013'] .focus-card,
+html[data-theme='flat-2013'] .focus-counter,
+html[data-theme='flat-2013'] .focus-cover span,
+html[data-theme='flat-2013'] .pwa-update,
+html[data-theme='flat-2013'] .item-selection,
+html[data-theme='flat-2013'] .card-retry,
+html[data-theme='flat-2013'] .duplicate-notice {
+  background-image: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='flat-2013'] .bulk-toolbar {
+  color: var(--dark);
+  background: #fff;
+  border: 1px solid var(--silver);
+  border-top: 6px solid var(--purple);
+}
+
+html[data-theme='flat-2013'] .bulk-divider { background: var(--silver); }
+
+html[data-theme='flat-2013'] .bulk-category select,
+html[data-theme='flat-2013'] .card-category-field select {
+  border-width: 1px;
+  border-radius: 0;
+  font-weight: 300;
+}
+
+html[data-theme='flat-2013'] .item-card-shell.is-selected .item-card {
+  border-color: var(--turq) !important;
+  border-top-color: var(--turq) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='flat-2013'] .item-selection {
+  background: #fff;
+  border: 1px solid var(--turq);
+}
+
+html[data-theme='flat-2013'] .item-selection input,
+html[data-theme='flat-2013'] .inline-check input,
+html[data-theme='flat-2013'] .restore-modes input {
+  accent-color: var(--turq);
+}
+
+html[data-theme='flat-2013'] .item-actions button.is-active {
+  color: var(--dark) !important;
+  background: var(--yellow) !important;
+  border-color: var(--yellow) !important;
+}
+
+html[data-theme='flat-2013'] .card-retry {
+  color: #a93226;
+  background: #fadbd8;
+  border: 1px solid var(--red);
+}
+
+html[data-theme='flat-2013'] .duplicate-notice {
+  color: var(--dark);
+  background: #fff4bf;
+  border: 1px solid var(--yellow);
+  border-left: 6px solid var(--yellow);
+}
+
+html[data-theme='flat-2013'] .bookmarklet-option,
+html[data-theme='flat-2013'] .account-section,
+html[data-theme='flat-2013'] .backup-panel {
+  background: #fff;
+  border: 1px solid var(--silver);
+}
+
+html[data-theme='flat-2013'] .account-section-heading > svg,
+html[data-theme='flat-2013'] .account-section-heading > span {
+  color: var(--turq);
+}
+
+html[data-theme='flat-2013'] .backup-summary,
+html[data-theme='flat-2013'] .restore-report {
+  color: var(--gray);
+  background: var(--bg);
+  border: 1px solid var(--silver);
+}
+
+html[data-theme='flat-2013'] .restore-modes label {
+  border: 1px solid var(--silver);
+  border-radius: 0;
+}
+
+html[data-theme='flat-2013'] .restore-modes label:has(input:checked) {
+  background: #d9f4ee;
+  border-color: var(--turq);
+}
+
+html[data-theme='flat-2013'] .backup-progress {
+  background: #fff;
+  border: 1px solid var(--silver);
+  border-left: 6px solid var(--blue);
+}
+
+html[data-theme='flat-2013'] .quick-capture-shell {
+  background: var(--bg);
+  background-image: none;
+}
+
+html[data-theme='flat-2013'] .quick-capture-card {
+  color: var(--dark) !important;
+  background: #fff !important;
+  border: 1px solid var(--silver) !important;
+  border-top: 8px solid var(--turq) !important;
+}
+
+html[data-theme='flat-2013'] .quick-capture-card h1 {
+  color: var(--dark);
+  font-weight: 200;
+}
+
+html[data-theme='flat-2013'] .quick-capture-mark {
+  color: #fff;
+  background: var(--turq);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+html[data-theme='flat-2013'] .quick-capture-mark-error { background: var(--red); }
+html[data-theme='flat-2013'] .quick-capture-mark-duplicate { color: var(--dark); background: var(--yellow); }
+html[data-theme='flat-2013'] .quick-capture-mark-done { background: var(--green); }
+
+html[data-theme='flat-2013'] .quick-capture-progress {
+  height: 12px;
+  background: var(--silver);
+  border: 0;
+  border-radius: 0;
+}
+
+html[data-theme='flat-2013'] .quick-capture-progress i {
+  background: var(--turq);
+  transition: none;
+}
+
+html[data-theme='flat-2013'] .quick-capture-summary {
+  background: var(--bg);
+  border-left: 6px solid var(--blue);
+}
+
+html[data-theme='flat-2013'] .focus-mode {
+  color: var(--dark);
+  background: var(--bg);
+  background-image: none;
+}
+
+html[data-theme='flat-2013'] .focus-header h1 {
+  color: var(--dark);
+  font-weight: 200;
+}
+
+html[data-theme='flat-2013'] .focus-counter {
+  color: #fff;
+  background: var(--purple);
+  border: 0;
+  font-weight: 300;
+}
+
+html[data-theme='flat-2013'] .focus-card {
+  color: var(--dark) !important;
+  background: #fff !important;
+  border: 1px solid var(--silver) !important;
+  border-top: 8px solid var(--blue) !important;
+  transform: none !important;
+}
+
+html[data-theme='flat-2013'] .focus-cover { background: #dfe6e9; }
+html[data-theme='flat-2013'] .focus-cover span { color: #fff; background: var(--dark); font-weight: 300; }
+html[data-theme='flat-2013'] .focus-content h2 { color: var(--dark); font-weight: 200; }
+html[data-theme='flat-2013'] .focus-shortcuts { color: var(--gray); font-weight: 300; }
+
+html[data-theme='flat-2013'] .pwa-update {
+  color: var(--dark);
+  background: #fff;
+  border: 1px solid var(--silver);
+  border-left: 7px solid var(--turq);
+}
+
+@media (max-width: 1200px) {
+  html[data-theme='flat-2013'] .sync-indicator {
+    position: static;
+    align-self: flex-end;
+  }
 }

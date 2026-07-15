@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -280,6 +281,113 @@ describe('本地应用接口', () => {
     expect(blocked.status).toBe(422)
     expect(blocked.body.error).toContain('内网')
   })
+
+  it('默认类别、星标、今日计划、智能排序和批量操作保持一致', async () => {
+    await setup()
+    const categories = (await agent.get('/api/categories')).body as Array<{ id: string; name: string }>
+    const other = categories.find((category) => category.name === '其他') as { id: string }
+    expect((await agent.get('/api/preferences')).body.quickSaveCategoryId).toBe(other.id)
+
+    const overdue = (await agent.post('/api/items/text').send({ title: '逾期', categoryId: other.id })).body
+    const todayItem = (await agent.post('/api/items/text').send({ title: '今天', categoryId: other.id })).body
+    const starred = (await agent.post('/api/items/text').send({ title: '星标', categoryId: other.id })).body
+    const ordinary = (await agent.post('/api/items/text').send({ title: '普通', categoryId: other.id })).body
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date())
+
+    expect((await agent.patch('/api/items/' + overdue.id).send({ plannedFor: '2020-01-01' })).status).toBe(200)
+    expect((await agent.patch('/api/items/' + todayItem.id).send({ plannedFor: today })).status).toBe(200)
+    expect((await agent.patch('/api/items/' + starred.id).send({ isStarred: true })).status).toBe(200)
+    const ordered = await agent.get('/api/items').query({ status: 'pending', sort: 'smart' })
+    expect(ordered.body.map((item: { id: string }) => item.id)).toEqual([
+      overdue.id,
+      todayItem.id,
+      starred.id,
+      ordinary.id
+    ])
+    expect((await agent.get('/api/items').query({ priority: 'planned' })).body).toHaveLength(2)
+    expect((await agent.get('/api/items').query({ priority: 'starred' })).body[0].id).toBe(starred.id)
+
+    const bulk = await agent.post('/api/items/bulk').send({
+      ids: [starred.id, ordinary.id],
+      changes: { isStarred: true, plannedFor: today }
+    })
+    expect(bulk.status).toBe(200)
+    expect(bulk.body.succeededIds).toEqual([starred.id, ordinary.id])
+    expect(bulk.body.failed).toEqual([])
+
+    const completed = await agent.patch('/api/items/' + todayItem.id).send({ status: 'completed' })
+    expect(completed.body.status).toBe('completed')
+    expect(completed.body.plannedFor).toBeNull()
+    expect(completed.body.completedAt).toBeTypeOf('number')
+
+    expect((await agent.delete('/api/categories/' + other.id)).status).toBe(200)
+    expect((await agent.get('/api/preferences')).body.quickSaveCategoryId).toBeNull()
+  })
+
+  it('重复网址不会修改原条目，备份条目可安全合并并完整清理', async () => {
+    await setup()
+    const original = await agent.post('/api/items/link')
+      .field('url', 'https://example.com/no-touch')
+      .field('title', '原条目')
+    expect(original.status).toBe(201)
+    const before = context.db.prepare('SELECT created_at,updated_at,title FROM items WHERE id=?').get(original.body.id) as {
+      created_at: number
+      updated_at: number
+      title: string
+    }
+    const duplicate = await agent.post('/api/items/link')
+      .field('url', 'https://EXAMPLE.com/no-touch#fragment')
+      .field('title', '不应覆盖')
+    expect(duplicate.status).toBe(409)
+    expect(context.db.prepare('SELECT created_at,updated_at,title FROM items WHERE id=?').get(original.body.id)).toEqual(before)
+
+    const categories = (await agent.get('/api/categories')).body as Array<{ id: string; name: string }>
+    const categoryId = categories.find((category) => category.name === '技术')?.id as string
+    const backupId = randomUUID()
+    const backupItem = {
+      id: backupId,
+      kind: 'image_group',
+      title: '从备份恢复的图片组',
+      url: null,
+      status: 'pending',
+      createdAt: Date.now() - 1000,
+      updatedAt: Date.now() - 500,
+      completedAt: null,
+      isStarred: true,
+      plannedFor: '2026-07-15',
+      assets: [{
+        role: 'gallery',
+        originalName: 'backup.png',
+        mimeType: 'image/png',
+        size: PNG.length,
+        sortOrder: 0,
+        path: 'images/item/backup.png'
+      }]
+    }
+    const restored = await agent.post('/api/backup/item')
+      .field('item', JSON.stringify(backupItem))
+      .field('categoryId', categoryId)
+      .attach('images', PNG, { filename: 'backup.png', contentType: 'image/png' })
+    expect(restored.status).toBe(201)
+    expect(restored.body.status).toBe('added')
+    const repeated = await agent.post('/api/backup/item')
+      .field('item', JSON.stringify(backupItem))
+      .field('categoryId', categoryId)
+      .attach('images', PNG, { filename: 'backup.png', contentType: 'image/png' })
+    expect(repeated.body.status).toBe('skipped')
+    const restoredItem = (await agent.get('/api/items/' + backupId)).body
+    expect(restoredItem.isStarred).toBe(true)
+    expect(restoredItem.assets).toHaveLength(1)
+
+    const cleared = await agent.post('/api/backup/clear').send({ confirmed: true })
+    expect(cleared.status).toBe(200)
+    expect((await agent.get('/api/items')).body).toHaveLength(0)
+    expect((await agent.get('/api/categories')).body).toHaveLength(0)
+    expect(readdirSync(context.originalsDir)).toHaveLength(0)
+    expect((await agent.get('/api/auth/status')).body.authenticated).toBe(true)
+  })
 })
 
 describe('数据库升级', () => {
@@ -308,12 +416,16 @@ describe('数据库升级', () => {
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='items'"
       ).get() as { sql: string }
       expect(schema.sql).toContain("'text'")
+      expect(schema.sql).toContain('is_starred')
+      expect(schema.sql).toContain('planned_for')
       expect((migrated.db.prepare('SELECT title FROM items WHERE id=?').get('item-1') as { title: string }).title)
         .toBe('原有网页')
       expect(() => migrated.db.prepare(
         "INSERT INTO items (id,user_id,kind,title,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)"
       ).run('item-2', 'user-1', 'text', '新文本', 'pending', 2, 2)).not.toThrow()
       expect(migrated.db.prepare('PRAGMA foreign_key_check').all()).toHaveLength(0)
+      expect(migrated.db.prepare('SELECT quick_save_category_id FROM user_preferences WHERE user_id=?').get('user-1'))
+        .toEqual({ quick_save_category_id: null })
     } finally {
       migrated.db.close()
       rmSync(directory, { recursive: true, force: true })

@@ -9,10 +9,10 @@ import {
 import {
   Button,
   Card,
+  Checkbox,
   Divider,
   Footer,
   Input,
-  Notification,
   Select,
   Tabs,
   Tag,
@@ -20,15 +20,20 @@ import {
 } from 'animal-island-ui'
 import islandBag from 'animal-island-ui/items/item-022.png'
 import { api, errorMessage, jsonRequest } from '../api'
+import { chinaToday, plannedState, smartPriority } from '../china-date'
+import { discardDraft, readActiveDraft, type ActiveDraft } from '../draft-store'
 import { itemAgeLabel } from '../item-age'
+import { useSyncStatus } from '../sync-status'
 import { getThemeDefinition, useTheme } from '../theme'
 import type {
   Category,
+  BulkItemChanges,
   ImageAsset,
   ItemFilters,
   LibraryItem
 } from '../types'
 import { validateImageFiles } from './FormFields'
+import { FocusMode } from './FocusMode'
 import { AppIcon, type AppIconName } from './AppIcon'
 import { EditItemForm, ImageGroupForm, LinkForm, TextItemForm } from './ItemForms'
 import {
@@ -39,6 +44,7 @@ import {
 } from './ManagementModals'
 import { EmptyState, Modal } from './Modal'
 import { ThemeControl } from './ThemeControl'
+import { showThemeNotification } from './ThemeNotification'
 
 type Overlay =
   | { type: 'link'; initial?: { url?: string; title?: string } }
@@ -56,7 +62,23 @@ const defaultFilters: ItemFilters = {
   kind: 'all',
   category: '',
   date: '',
-  q: ''
+  q: '',
+  priority: 'all',
+  sort: 'smart'
+}
+
+const SORT_STORAGE_KEY = 'do-it-laaaaaater.item-sort.v1'
+
+function initialFilters(): ItemFilters {
+  try {
+    const saved = localStorage.getItem(SORT_STORAGE_KEY)
+    if (saved === 'smart' || saved === 'newest' || saved === 'oldest' || saved === 'recently_completed') {
+      return { ...defaultFilters, sort: saved }
+    }
+  } catch {
+    // Smart sorting remains the safe default when browser storage is disabled.
+  }
+  return { ...defaultFilters }
 }
 
 function dayKey(timestamp: number) {
@@ -163,36 +185,41 @@ function itemManualAssets(item: LibraryItem) {
 }
 
 function notifySuccess(message: string) {
-  try {
-    Notification.success({ message, duration: 3, position: 'bottom' })
-  } catch {
-    // Visual feedback must never interrupt a completed save.
-  }
+  showThemeNotification('success', message)
 }
 
 function notifyError(message: string) {
-  try {
-    Notification.error({ message, duration: 4.5, position: 'bottom' })
-  } catch {
-    // Keep the underlying interaction usable if the visual portal cannot mount.
-  }
+  showThemeNotification('error', message)
 }
 
 function ItemCard({
   item,
+  categories,
+  selectionMode,
+  selected,
+  busy,
+  retry,
   onEdit,
-  onToggle,
+  onPatch,
+  onSelect,
   onDelete,
   onPreview,
   now
 }: {
   item: LibraryItem
+  categories: Category[]
+  selectionMode: boolean
+  selected: boolean
+  busy: boolean
+  retry?: { changes: BulkItemChanges; label: string }
   onEdit: () => void
-  onToggle: () => void
-  onDelete: () => void
+  onPatch: (changes: BulkItemChanges, label: string) => Promise<boolean>
+  onSelect: (selected: boolean) => void
+  onDelete: () => Promise<boolean>
   onPreview: (assets: ImageAsset[], index: number) => void
   now: number
 }) {
+  const { theme } = useTheme()
   const webCover = item.assets.find((asset) => asset.role === 'web_cover')
   const manual = itemManualAssets(item)
   const cover = item.kind === 'link'
@@ -207,9 +234,27 @@ function ItemCard({
       : []
   const kindLabel = item.kind === 'link' ? '网页' : item.kind === 'text' ? '文本' : '图片'
   const kindIcon: AppIconName = item.kind === 'link' ? 'link' : item.kind === 'text' ? 'text' : 'image'
+  const plan = plannedState(item.plannedFor)
 
   return (
-    <article className="item-card-shell">
+    <article className={`item-card-shell${selected ? ' is-selected' : ''}`}>
+      {selectionMode && (
+        <div className="item-selection" aria-label={'选择' + item.title}>
+          {theme === 'animal-island' ? (
+            <Checkbox
+              size="large"
+              options={[{ label: '选择', value: item.id }]}
+              value={selected ? [item.id] : []}
+              onChange={(values) => onSelect(values.includes(item.id))}
+            />
+          ) : (
+            <label>
+              <input type="checkbox" checked={selected} onChange={(event) => onSelect(event.target.checked)} />
+              <span>选择</span>
+            </label>
+          )}
+        </div>
+      )}
       <Card className={cover ? 'item-card has-cover' : 'item-card'} pattern="default">
         {cover && (
           <button
@@ -237,6 +282,13 @@ function ItemCard({
               <AppIcon name={kindIcon} size={18} />
               <span className="kind-tag-label">{kindLabel}</span>
             </Tag>
+            {item.isStarred && (
+              <Tag size="small" color="app-yellow" className="priority-tag">
+                <AppIcon name="star" size={15} />星标
+              </Tag>
+            )}
+            {plan === 'overdue' && <Tag size="small" color="app-red" className="priority-tag">逾期</Tag>}
+            {plan === 'today' && <Tag size="small" color="app-teal" className="priority-tag">今天</Tag>}
             <span className={`item-age item-age-${item.status}`}>{itemAgeLabel(item, now)}</span>
             <time>{timeLabel(item.createdAt)}</time>
           </div>
@@ -255,17 +307,31 @@ function ItemCard({
           </h3>
           {item.url && <p className="item-host" title={item.url}>{hostLabel(item.url)}</p>}
           <div className="item-meta">
-            {item.category && (
-              <Tag
-                size="small"
-                variant="outlined"
-                className="category-chip"
-                style={{ borderColor: item.category.color }}
-              >
-                <i style={{ backgroundColor: item.category.color }} />
-                {item.category.name}
-              </Tag>
-            )}
+            <label className="card-category-field">
+              <span className="visually-hidden">修改类别</span>
+              {theme === 'animal-island' ? (
+                <Select
+                  aria-label={'修改“' + item.title + '”的类别'}
+                  value={item.category?.id || ''}
+                  disabled={busy}
+                  options={[
+                    { key: '', label: '未分类' },
+                    ...categories.map((category) => ({ key: category.id, label: category.name }))
+                  ]}
+                  onChange={(value) => void onPatch({ categoryId: value || null }, '类别已更新')}
+                />
+              ) : (
+                <select
+                  aria-label={'修改“' + item.title + '”的类别'}
+                  value={item.category?.id || ''}
+                  disabled={busy}
+                  onChange={(event) => void onPatch({ categoryId: event.target.value || null }, '类别已更新')}
+                >
+                  <option value="">未分类</option>
+                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                </select>
+              )}
+            </label>
             {item.kind === 'link' && manual.length > 0 && (
               <button type="button" className="text-button" onClick={() => onPreview(manual, 0)}>
                 {manual.length} 张截图
@@ -276,14 +342,47 @@ function ItemCard({
             <Button
               size="small"
               type="primary"
+              disabled={busy}
               icon={<AppIcon name={item.status === 'pending' ? 'complete' : 'restore'} size={17} />}
-              onClick={onToggle}
+              onClick={() => void onPatch(
+                { status: item.status === 'pending' ? 'completed' : 'pending' },
+                item.status === 'pending' ? '已标记完成' : '已恢复待处理'
+              )}
             >
               {item.status === 'pending' ? '标记完成' : '恢复待处理'}
             </Button>
-            <Button size="small" icon={<AppIcon name="edit" size={17} />} onClick={onEdit}>编辑</Button>
-            <Button size="small" danger icon={<AppIcon name="delete" size={17} />} onClick={onDelete}>删除</Button>
+            <Button
+              size="small"
+              disabled={busy}
+              className={item.isStarred ? 'is-active' : ''}
+              icon={<AppIcon name="star" size={17} />}
+              onClick={() => void onPatch({ isStarred: !item.isStarred }, item.isStarred ? '已取消星标' : '已加星标')}
+            >
+              {item.isStarred ? '取消星标' : '星标'}
+            </Button>
+            <Button
+              size="small"
+              disabled={busy || item.status === 'completed'}
+              className={item.plannedFor ? 'is-active' : ''}
+              icon={<AppIcon name="today" size={17} />}
+              onClick={() => void onPatch(
+                { plannedFor: item.plannedFor ? null : chinaToday() },
+                item.plannedFor ? '已移出今日清单' : '已加入今日清单'
+              )}
+            >
+              {plan === 'overdue' ? '移出逾期' : item.plannedFor ? '移出今日' : '今天处理'}
+            </Button>
+            <Button size="small" disabled={busy} icon={<AppIcon name="edit" size={17} />} onClick={onEdit}>编辑</Button>
+            <Button size="small" disabled={busy} danger icon={<AppIcon name="delete" size={17} />} onClick={() => void onDelete()}>删除</Button>
           </div>
+          {retry && (
+            <div className="card-retry" role="alert">
+              <span>刚才的修改没有保存。</span>
+              <button type="button" className="small-button" disabled={busy} onClick={() => void onPatch(retry.changes, retry.label)}>
+                <AppIcon name="retry" size={16} />重试
+              </button>
+            </div>
+          )}
         </div>
       </Card>
     </article>
@@ -301,11 +400,20 @@ export function Dashboard({
   const themeDefinition = getThemeDefinition(theme)
   const [categories, setCategories] = useState<Category[]>([])
   const [items, setItems] = useState<LibraryItem[]>([])
-  const [filters, setFilters] = useState<ItemFilters>(defaultFilters)
+  const [filters, setFilters] = useState<ItemFilters>(initialFilters)
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [now, setNow] = useState(Date.now)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [bulkCategoryId, setBulkCategoryId] = useState('')
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [busyItems, setBusyItems] = useState<Set<string>>(() => new Set())
+  const [retryItems, setRetryItems] = useState<Record<string, { changes: BulkItemChanges; label: string }>>({})
+  const [focusMode, setFocusMode] = useState(false)
+  const [activeDraft, setActiveDraft] = useState<ActiveDraft | null>(() => readActiveDraft())
+  const syncStatus = useSyncStatus()
   const requestNumber = useRef(0)
 
   const refreshReferences = useCallback(async () => {
@@ -328,6 +436,8 @@ export function Dashboard({
     if (activeFilters.category) params.set('category', activeFilters.category)
     if (activeFilters.date) params.set('date', activeFilters.date)
     if (activeFilters.q.trim()) params.set('q', activeFilters.q.trim())
+    if (activeFilters.priority !== 'all') params.set('priority', activeFilters.priority)
+    params.set('sort', activeFilters.sort)
     setLoading(true)
     try {
       const result = await api<LibraryItem[]>('/api/items?' + params.toString())
@@ -364,6 +474,18 @@ export function Dashboard({
   }, [filters, refreshItems])
 
   useEffect(() => {
+    try {
+      localStorage.setItem(SORT_STORAGE_KEY, filters.sort)
+    } catch {
+      // Sorting still works for the current tab.
+    }
+  }, [filters.sort])
+
+  useEffect(() => {
+    setSelectedIds((current) => new Set([...current].filter((id) => items.some((item) => item.id === id))))
+  }, [items])
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get('add') === 'link' && params.get('url')) {
       setOverlay({
@@ -374,6 +496,14 @@ export function Dashboard({
         }
       })
       window.history.replaceState({}, '', window.location.pathname)
+      return
+    }
+    const openId = params.get('open')
+    if (openId) {
+      void api<LibraryItem>('/api/items/' + encodeURIComponent(openId)).then((item) => {
+        setOverlay({ type: 'edit', item })
+        window.history.replaceState({}, '', window.location.pathname)
+      }).catch((requestError) => notifyError(errorMessage(requestError)))
     }
   }, [])
 
@@ -432,13 +562,33 @@ export function Dashboard({
   }, [overlay])
 
   const groups = useMemo(() => {
+    if (filters.sort === 'smart') {
+      const today = chinaToday()
+      const definitions = [
+        { key: 'overdue', label: '逾期的今天处理', rank: 0 },
+        { key: 'today', label: '今天处理', rank: 1 },
+        { key: 'starred', label: '星标优先', rank: 2 },
+        { key: 'later', label: '其余内容', rank: 3 }
+      ]
+      return definitions.map((definition) => ({
+        key: definition.key,
+        label: definition.label,
+        date: '',
+        items: items.filter((item) => smartPriority(item, today) === definition.rank)
+      })).filter((group) => group.items.length)
+    }
     const result = new Map<string, LibraryItem[]>()
     items.forEach((item) => {
       const key = dayKey(item.createdAt)
       result.set(key, [...(result.get(key) || []), item])
     })
-    return Array.from(result.entries())
-  }, [items])
+    return Array.from(result.entries()).map(([key, groupItems]) => ({
+      key,
+      label: dayLabel(key),
+      date: key,
+      items: groupItems
+    }))
+  }, [filters.sort, items])
 
   async function reloadAll() {
     await Promise.all([refreshReferences(), refreshItems(filters)])
@@ -446,39 +596,158 @@ export function Dashboard({
 
   async function itemSaved() {
     setOverlay(null)
+    setActiveDraft(null)
     await reloadAll()
     notifySuccess('已保存')
   }
 
-  async function toggleItem(item: LibraryItem) {
+  function optimisticItem(item: LibraryItem, changes: BulkItemChanges): LibraryItem {
+    const nextStatus = changes.status || item.status
+    const categoryChanged = Object.prototype.hasOwnProperty.call(changes, 'categoryId')
+    const nextCategory = categoryChanged
+      ? categories.find((category) => category.id === changes.categoryId) || null
+      : item.category
+    return {
+      ...item,
+      status: nextStatus,
+      category: nextCategory,
+      isStarred: changes.isStarred ?? item.isStarred,
+      plannedFor: nextStatus === 'completed'
+        ? null
+        : (Object.prototype.hasOwnProperty.call(changes, 'plannedFor') ? changes.plannedFor || null : item.plannedFor),
+      completedAt: nextStatus === 'completed'
+        ? (item.status === 'completed' ? item.completedAt : Date.now())
+        : null,
+      updatedAt: Date.now()
+    }
+  }
+
+  async function patchItem(item: LibraryItem, changes: BulkItemChanges, label: string) {
+    if (busyItems.has(item.id)) return false
+    const previous = item
+    setBusyItems((current) => new Set(current).add(item.id))
+    setRetryItems((current) => {
+      const next = { ...current }
+      delete next[item.id]
+      return next
+    })
+    setItems((current) => current.map((entry) => entry.id === item.id ? optimisticItem(entry, changes) : entry))
     try {
-      await jsonRequest('/api/items/' + item.id, 'PUT', {
-        title: item.title,
-        url: item.url,
-        categoryId: item.category?.id || '',
-        status: item.status === 'pending' ? 'completed' : 'pending'
-      })
-      await reloadAll()
+      const updated = await jsonRequest<LibraryItem>('/api/items/' + item.id, 'PATCH', changes)
+      setItems((current) => current.map((entry) => entry.id === item.id ? updated : entry))
+      await refreshItems(filters)
+      notifySuccess(label)
+      return true
     } catch (requestError) {
+      setItems((current) => current.map((entry) => entry.id === item.id ? previous : entry))
+      setRetryItems((current) => ({ ...current, [item.id]: { changes, label } }))
       notifyError(errorMessage(requestError))
+      return false
+    } finally {
+      setBusyItems((current) => {
+        const next = new Set(current)
+        next.delete(item.id)
+        return next
+      })
     }
   }
 
   async function deleteItem(item: LibraryItem) {
     const detail = item.assets.length ? '相关图片也会一起删除。' : ''
-    if (!window.confirm('确定删除“' + item.title + '”吗？' + detail)) return
+    if (!window.confirm('确定删除“' + item.title + '”吗？' + detail)) return false
     try {
       await api('/api/items/' + item.id, { method: 'DELETE' })
       await reloadAll()
       notifySuccess('已删除')
+      return true
     } catch (requestError) {
       notifyError(errorMessage(requestError))
+      return false
     }
+  }
+
+  function toggleSelection(itemId: string, selected: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (selected) next.add(itemId)
+      else next.delete(itemId)
+      return next
+    })
+  }
+
+  async function runBulk(changes: BulkItemChanges, label: string) {
+    const ids = [...selectedIds]
+    if (!ids.length || bulkBusy) return
+    setBulkBusy(true)
+    try {
+      const result = await jsonRequest<{
+        updated: number
+        deleted: number
+        succeededIds?: string[]
+        failed?: Array<{ id: string; error: string }>
+      }>('/api/items/bulk', 'POST', { ids, changes })
+      const failedIds = new Set((result.failed || []).map((entry) => entry.id))
+      setSelectedIds(failedIds)
+      await reloadAll()
+      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条没有处理成功，已保留选择，可再次重试。')
+      else notifySuccess(label + '（' + result.updated + ' 条）')
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  async function runBulkDelete() {
+    const ids = [...selectedIds]
+    if (!ids.length || bulkBusy) return
+    if (!window.confirm('确定删除选中的 ' + ids.length + ' 条内容吗？相关图片也会一起删除。此操作不能撤销。')) return
+    setBulkBusy(true)
+    try {
+      const result = await jsonRequest<{
+        updated: number
+        deleted: number
+        succeededIds?: string[]
+        failed?: Array<{ id: string; error: string }>
+      }>('/api/items/bulk', 'POST', { ids, delete: true })
+      const failedIds = new Set((result.failed || []).map((entry) => entry.id))
+      setSelectedIds(failedIds)
+      await reloadAll()
+      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条未能删除，已保留选择。')
+      else notifySuccess('已删除 ' + result.deleted + ' 条')
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  async function restoreActiveDraft() {
+    if (!activeDraft) return
+    if (activeDraft.type === 'link') setOverlay({ type: 'link' })
+    if (activeDraft.type === 'text') setOverlay({ type: 'text', initialText: '' })
+    if (activeDraft.type === 'images') setOverlay({ type: 'images', files: [] })
+    if (activeDraft.type === 'edit' && activeDraft.itemId) {
+      try {
+        const item = await api<LibraryItem>('/api/items/' + activeDraft.itemId)
+        setOverlay({ type: 'edit', item })
+      } catch (requestError) {
+        notifyError(errorMessage(requestError))
+      }
+    }
+  }
+
+  async function discardActiveDraft() {
+    if (!activeDraft) return
+    await discardDraft(activeDraft.key)
+    setActiveDraft(null)
   }
 
   async function openDuplicate(id: string) {
     try {
       const item = await api<LibraryItem>('/api/items/' + id)
+      await discardDraft('new-link')
+      setActiveDraft(null)
       setOverlay({ type: 'edit', item })
     } catch (requestError) {
       notifyError(errorMessage(requestError))
@@ -556,6 +825,13 @@ export function Dashboard({
             退出
           </Button>
         </nav>
+        <div className={`sync-indicator sync-${syncStatus.phase}`} role="status" aria-live="polite">
+          <AppIcon
+            name={syncStatus.phase === 'error' || syncStatus.phase === 'offline' ? 'warning' : 'sync'}
+            size={17}
+          />
+          <span>{syncStatus.message || '数据已就绪'}</span>
+        </div>
       </header>
 
       <main className="main-content">
@@ -610,6 +886,21 @@ export function Dashboard({
           </div>
           <div className="filter-select">
             <Select
+              aria-label="优先筛选"
+              value={filters.priority}
+              options={[
+                { key: 'all', label: '全部优先级' },
+                { key: 'planned', label: '今日 / 逾期' },
+                { key: 'starred', label: '星标' }
+              ]}
+              onChange={(value) => setFilters((current) => ({
+                ...current,
+                priority: value as ItemFilters['priority']
+              }))}
+            />
+          </div>
+          <div className="filter-select">
+            <Select
               aria-label="类别"
               value={filters.category}
               options={[
@@ -629,14 +920,97 @@ export function Dashboard({
               onChange={(event) => setFilters((current) => ({ ...current, date: event.target.value }))}
             />
           </label>
-          <Button size="small" type="dashed" onClick={() => setFilters(defaultFilters)}>清除筛选</Button>
+          <div className="filter-select sort-select">
+            <Select
+              aria-label="排序方式"
+              value={filters.sort}
+              options={[
+                { key: 'smart', label: '智能优先' },
+                { key: 'newest', label: '最近保存' },
+                { key: 'oldest', label: '最久未看' },
+                { key: 'recently_completed', label: '最近完成' }
+              ]}
+              onChange={(value) => setFilters((current) => ({
+                ...current,
+                sort: value as ItemFilters['sort']
+              }))}
+            />
+          </div>
+          <Button size="small" type="dashed" onClick={() => setFilters({ ...defaultFilters })}>清除筛选</Button>
         </Card>
 
+        {activeDraft && (
+          <div className="draft-recovery notice notice-warning" role="status">
+            <div>
+              <strong>发现一份未完成草稿</strong>
+              <span>上次输入的文字和图片仍保存在这个浏览器中。</span>
+            </div>
+            <Button size="small" type="primary" onClick={() => void restoreActiveDraft()}>恢复草稿</Button>
+            <Button size="small" onClick={() => void discardActiveDraft()}>丢弃</Button>
+          </div>
+        )}
         {error && <div className="notice notice-error" role="alert">{error}</div>}
         <div className="result-summary">
-          <span>{loading ? '正在加载…' : '共 ' + items.length + ' 条'}</span>
+          <div className="result-count">
+            <span>{loading ? '正在加载…' : '共 ' + items.length + ' 条'}</span>
+            <Button
+              size="small"
+              type={focusMode ? 'primary' : 'default'}
+              icon={<AppIcon name="focus" size={18} />}
+              disabled={!items.length}
+              onClick={() => setFocusMode(true)}
+            >
+              开始处理
+            </Button>
+            <Button
+              size="small"
+              icon={<AppIcon name="select" size={18} />}
+              onClick={() => {
+                setSelectionMode((value) => !value)
+                if (selectionMode) setSelectedIds(new Set())
+              }}
+            >
+              {selectionMode ? '退出选择' : '选择条目'}
+            </Button>
+          </div>
           <span className="muted">在空白处按 Ctrl+V，可直接添加图片、文字或网页链接</span>
         </div>
+
+        {selectionMode && (
+          <div className="bulk-toolbar" role="toolbar" aria-label="批量操作">
+            <strong>已选 {selectedIds.size} 条</strong>
+            <Button size="small" disabled={!items.length || bulkBusy} onClick={() => setSelectedIds(new Set(items.map((item) => item.id)))}>全选当前结果</Button>
+            <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => setSelectedIds(new Set())}>取消全选</Button>
+            <span className="bulk-divider" />
+            <Button size="small" type="primary" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ status: 'completed' }, '已批量完成')}>完成</Button>
+            <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ status: 'pending' }, '已批量恢复')}>恢复</Button>
+            <Button size="small" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="star" size={16} />} onClick={() => void runBulk({ isStarred: true }, '已批量加星标')}>加星标</Button>
+            <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ isStarred: false }, '已批量取消星标')}>取消星标</Button>
+            <Button size="small" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="today" size={16} />} onClick={() => void runBulk({ plannedFor: chinaToday() }, '已加入今日清单')}>加入今日</Button>
+            <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ plannedFor: null }, '已移出今日清单')}>移出今日</Button>
+            <label className="bulk-category">
+              <span className="visually-hidden">批量修改类别</span>
+              {theme === 'animal-island' ? (
+                <Select
+                  aria-label="批量修改类别"
+                  value={bulkCategoryId}
+                  options={[
+                    { key: '', label: '未分类' },
+                    ...categories.map((category) => ({ key: category.id, label: category.name }))
+                  ]}
+                  onChange={setBulkCategoryId}
+                />
+              ) : (
+                <select aria-label="批量修改类别" value={bulkCategoryId} onChange={(event) => setBulkCategoryId(event.target.value)}>
+                  <option value="">未分类</option>
+                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                </select>
+              )}
+              <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ categoryId: bulkCategoryId || null }, '类别已批量更新')}>应用类别</Button>
+            </label>
+            <Button size="small" danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="delete" size={16} />} onClick={() => void runBulkDelete()}>删除</Button>
+          </div>
+        )}
 
         {!loading && !items.length && (
           <EmptyState>
@@ -651,23 +1025,29 @@ export function Dashboard({
         )}
 
         <div className="date-groups">
-          {groups.map(([key, groupItems]) => (
-            <section key={key} className="date-group">
+          {groups.map((group) => (
+            <section key={group.key} className={`date-group${filters.sort === 'smart' ? ' priority-group' : ''}`}>
               <div className="date-heading">
                 <Title size="small" color="app-teal">
-                  <span role="heading" aria-level={2}>{dayLabel(key)}</span>
+                  <span role="heading" aria-level={2}>{group.label}</span>
                 </Title>
-                <time dateTime={key}>{key}</time>
+                {group.date && <time dateTime={group.date}>{group.date}</time>}
               </div>
               <Divider type="line-teal" className="date-divider" />
               <div className="item-list">
-                {groupItems.map((item) => (
+                {group.items.map((item) => (
                   <ItemCard
                     key={item.id}
                     item={item}
+                    categories={categories}
+                    selectionMode={selectionMode}
+                    selected={selectedIds.has(item.id)}
+                    busy={busyItems.has(item.id)}
+                    retry={retryItems[item.id]}
                     onEdit={() => setOverlay({ type: 'edit', item })}
-                    onToggle={() => void toggleItem(item)}
-                    onDelete={() => void deleteItem(item)}
+                    onPatch={(changes, label) => patchItem(item, changes, label)}
+                    onSelect={(selected) => toggleSelection(item.id, selected)}
+                    onDelete={() => deleteItem(item)}
                     onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
                     now={now}
                   />
@@ -690,14 +1070,6 @@ export function Dashboard({
               {' '}· CC BY-NC 4.0
             </p>
           </>
-        ) : theme === 'grid-paper' ? (
-          <p className="grid-paper-credit">
-            — Grid Paper by{' '}
-            <a href={themeDefinition.creditUrl} target="_blank" rel="noreferrer">
-              NovusGFX
-            </a>
-            {' '}· MIT · end of page —
-          </p>
         ) : (
           <p className="flat-credit">
             Flat Design 2013 by{' '}
@@ -715,7 +1087,10 @@ export function Dashboard({
             categories={categories}
             onCreateCategory={createCategory}
             initial={overlay.initial}
-            onClose={() => setOverlay(null)}
+            onClose={() => {
+              setActiveDraft(null)
+              setOverlay(null)
+            }}
             onSaved={() => void itemSaved()}
             onDuplicate={(id) => void openDuplicate(id)}
           />
@@ -727,7 +1102,10 @@ export function Dashboard({
             categories={categories}
             onCreateCategory={createCategory}
             initialText={overlay.initialText}
-            onClose={() => setOverlay(null)}
+            onClose={() => {
+              setActiveDraft(null)
+              setOverlay(null)
+            }}
             onSaved={() => void itemSaved()}
           />
         </Modal>
@@ -738,7 +1116,10 @@ export function Dashboard({
             categories={categories}
             onCreateCategory={createCategory}
             initialFiles={overlay.files}
-            onClose={() => setOverlay(null)}
+            onClose={() => {
+              setActiveDraft(null)
+              setOverlay(null)
+            }}
             onSaved={() => void itemSaved()}
           />
         </Modal>
@@ -749,7 +1130,10 @@ export function Dashboard({
             item={overlay.item}
             categories={categories}
             onCreateCategory={createCategory}
-            onClose={closeEditor}
+            onClose={() => {
+              setActiveDraft(null)
+              closeEditor()
+            }}
             onSaved={() => void itemSaved()}
             onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
           />
@@ -763,7 +1147,12 @@ export function Dashboard({
         />
       )}
       {overlay?.type === 'account' && (
-        <AccountManager email={userEmail} onClose={() => setOverlay(null)} />
+        <AccountManager
+          email={userEmail}
+          categories={categories}
+          onChanged={reloadAll}
+          onClose={() => setOverlay(null)}
+        />
       )}
       {overlay?.type === 'bookmarklet' && <BookmarkletHelp onClose={() => setOverlay(null)} />}
       {overlay?.type === 'lightbox' && (
@@ -771,6 +1160,18 @@ export function Dashboard({
           assets={overlay.assets}
           initialIndex={overlay.index}
           onClose={() => setOverlay(null)}
+        />
+      )}
+      {focusMode && (
+        <FocusMode
+          items={items}
+          categories={categories}
+          now={now}
+          onClose={() => setFocusMode(false)}
+          onPatch={patchItem}
+          onEdit={(item) => setOverlay({ type: 'edit', item })}
+          onDelete={deleteItem}
+          onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
         />
       )}
     </div>

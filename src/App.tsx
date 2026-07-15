@@ -4,6 +4,7 @@ import islandBag from 'animal-island-ui/items/item-022.png'
 import { api, errorMessage, isCloudMode, jsonRequest } from './api'
 import { subscribeCloudAuth } from './cloud/supabase'
 import { Dashboard } from './components/Dashboard'
+import { QuickCapture } from './components/QuickCapture'
 import { ThemeControl } from './components/ThemeControl'
 import { getThemeDefinition, useTheme } from './theme'
 import type { AuthStatus } from './types'
@@ -250,6 +251,7 @@ export default function App() {
   )
   if (status.setupRequired) return <AuthScreen mode="setup" onComplete={refreshStatus} />
   if (!status.authenticated) return <AuthScreen mode="login" onComplete={refreshStatus} />
+  if (new URLSearchParams(window.location.search).get('capture') === 'quick') return <QuickCapture />
   return (
     <Dashboard
       userEmail={status.user?.email || ''}

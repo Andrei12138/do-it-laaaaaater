@@ -33,7 +33,9 @@ create table if not exists public.items (
   category_id uuid references public.categories(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  completed_at timestamptz
+  completed_at timestamptz,
+  is_starred boolean not null default false,
+  planned_for date
 );
 
 create unique index if not exists items_id_user_unique
@@ -45,6 +47,15 @@ create unique index if not exists items_user_url_unique
 
 create index if not exists items_user_status_date
   on public.items (user_id, status, created_at desc);
+
+create index if not exists items_user_priority
+  on public.items (user_id, planned_for, is_starred, created_at desc);
+
+create table if not exists public.user_preferences (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  quick_save_category_id uuid references public.categories(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
 
 create table if not exists public.assets (
   id uuid primary key default gen_random_uuid(),
@@ -70,6 +81,7 @@ alter table public.app_owner enable row level security;
 alter table public.categories enable row level security;
 alter table public.items enable row level security;
 alter table public.assets enable row level security;
+alter table public.user_preferences enable row level security;
 
 drop policy if exists "owner can read app owner" on public.app_owner;
 create policy "owner can read app owner"
@@ -91,6 +103,12 @@ create policy "owner manages items"
 drop policy if exists "owner manages assets" on public.assets;
 create policy "owner manages assets"
   on public.assets for all
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
+drop policy if exists "owner manages preferences" on public.user_preferences;
+create policy "owner manages preferences"
+  on public.user_preferences for all
   using ((select auth.uid()) = user_id)
   with check ((select auth.uid()) = user_id);
 
@@ -125,6 +143,12 @@ begin
     (new.id, '灵感', '#d97706', 3),
     (new.id, '生活', '#16a34a', 4),
     (new.id, '其他', '#64748b', 5);
+
+  insert into public.user_preferences (user_id, quick_save_category_id)
+  select new.id, id
+  from public.categories
+  where user_id = new.id and lower(name) = lower('其他')
+  limit 1;
 
   return new;
 exception

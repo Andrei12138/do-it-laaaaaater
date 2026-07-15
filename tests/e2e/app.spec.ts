@@ -1,9 +1,11 @@
 import { expect, test, type Page } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import { strFromU8, unzipSync } from 'fflate'
 import sharp from 'sharp'
 
 async function selectAnimalOption(page: Page, name: string, option: string) {
-  await page.getByRole('combobox', { name }).click()
-  await page.getByRole('option', { name: option, exact: true }).click()
+  await page.getByRole('combobox', { name, exact: true }).click()
+  await page.locator('[class*="animal-dropdown-"]:visible').getByRole('option', { name: option, exact: true }).click()
 }
 
 test('从首次建号到直接粘贴网页、文字和图片的完整流程', async ({ page, context }) => {
@@ -17,11 +19,8 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(page.getByRole('button', { name: '设计风格' })).toBeVisible()
   await page.getByRole('button', { name: '设计风格' }).click()
   const setupThemeDialog = page.getByRole('dialog', { name: '选择设计风格' })
-  await expect(setupThemeDialog.getByRole('radio')).toHaveCount(3)
+  await expect(setupThemeDialog.getByRole('radio')).toHaveCount(2)
   await page.screenshot({ path: 'test-results/flat-theme-picker.png', fullPage: true })
-  await setupThemeDialog.getByRole('radio', { name: /Grid Paper/ }).click()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'grid-paper')
-  await page.screenshot({ path: 'test-results/grid-paper-theme-picker.png', fullPage: true })
   await setupThemeDialog.getByRole('radio', { name: /Animal Island UI/ }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'animal-island')
   await page.screenshot({ path: 'test-results/animal-theme-picker.png', fullPage: true })
@@ -44,6 +43,18 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(page.locator('.app-header')).toBeVisible()
   await expect(page.locator('.app-header')).toHaveCSS('background-image', 'none')
   await expect(page.locator('.toolbar')).toHaveCSS('box-shadow', 'none')
+
+  await page.locator('.app-header').getByRole('button', { name: '账号' }).click()
+  const flatAccountDialog = page.getByRole('dialog', { name: '账号设置' })
+  const flatQuickCategory = flatAccountDialog.getByLabel('快速保存默认类别')
+  await expect(flatQuickCategory).toBeVisible()
+  expect(await flatQuickCategory.evaluate((element) => element.tagName)).toBe('SELECT')
+  await flatQuickCategory.selectOption({ label: '生活' })
+  await flatAccountDialog.getByRole('button', { name: '保存默认类别' }).click()
+  await expect(flatAccountDialog.getByText('快速保存的默认类别已同步')).toBeVisible()
+  await expect(flatAccountDialog.locator('.backup-panel').first()).toHaveCSS('border-radius', '0px')
+  await expect(flatAccountDialog.getByText('安装到 iPhone 15 Pro Max 主屏幕')).toBeVisible()
+  await flatAccountDialog.getByRole('button', { name: '关闭' }).first().click()
 
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.evaluate(() => navigator.clipboard.writeText('https://example.com/read-later'))
@@ -181,11 +192,69 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await duplicateDialog.getByLabel('网页地址').fill('https://example.com/read-later#duplicate')
   await duplicateDialog.getByLabel('标题').fill('重复网页')
   await duplicateDialog.getByRole('button', { name: '保存网页' }).click()
+  await expect(duplicateDialog.getByText('原条目没有被修改，录入时间也保持不变。')).toBeVisible()
+  await duplicateDialog.getByRole('button', { name: '查看已有条目' }).click()
   await expect(page.getByRole('dialog', { name: '编辑条目' })).toBeVisible()
   await page.getByRole('dialog', { name: '编辑条目' }).getByRole('button', { name: '关闭' }).click()
 
   linkCard = page.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
+  await linkCard.getByRole('button', { name: '星标', exact: true }).click()
+  await expect(linkCard.getByRole('button', { name: '取消星标', exact: true })).toBeVisible()
+  await linkCard.getByRole('button', { name: '今天处理', exact: true }).click()
+  await expect(linkCard.getByRole('button', { name: '移出今日', exact: true })).toBeVisible()
+  await selectAnimalOption(page, '优先筛选', '今日 / 逾期')
+  await expect(page.locator('.item-card')).toHaveCount(1)
+  await expect(page.locator('.item-card')).toContainText('公司里待阅读的示例文章（已编辑）')
+  await page.getByRole('button', { name: '清除筛选' }).click()
+
+  await selectAnimalOption(page, '排序方式', '最久未看')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('do-it-laaaaaater.item-sort.v1'))).toBe('oldest')
+  await page.reload()
+  await expect(page.getByText('发现一份未完成草稿')).toHaveCount(0)
+  await expect(page.getByRole('combobox', { name: '排序方式' })).toContainText('最久未看')
+  await selectAnimalOption(page, '排序方式', '智能优先')
+
+  await page.getByRole('button', { name: '开始处理' }).click()
+  const focusDialog = page.getByRole('dialog', { name: '晚间处理模式' })
+  await expect(focusDialog.getByRole('heading', { name: '公司里待阅读的示例文章（已编辑）' })).toBeVisible()
+  await page.keyboard.press('ArrowRight')
+  await expect(focusDialog.getByRole('heading', { name: /图片组/ })).toBeVisible()
+  await page.keyboard.press('ArrowRight')
+  await expect(focusDialog.getByRole('heading', { name: '回家后整理这段纯文字' })).toBeVisible()
+  await page.keyboard.press('s')
+  await expect(focusDialog.getByRole('button', { name: '取消星标' })).toBeEnabled()
+  await page.keyboard.press('s')
+  await expect(focusDialog.getByRole('button', { name: '加星标' })).toBeEnabled()
+  await page.waitForTimeout(250)
+  await page.keyboard.press('t')
+  await expect(focusDialog.getByRole('button', { name: '移出今日' })).toBeVisible()
+  await page.waitForTimeout(250)
+  await page.keyboard.press('Space')
+  await expect(focusDialog.getByRole('heading', { name: /图片组/ })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(focusDialog).toHaveCount(0)
+
+  await page.getByRole('tab', { name: '已完成', exact: true }).click()
+  const completedTextCard = page.locator('.item-card').filter({ hasText: '回家后整理这段纯文字' })
+  await expect(completedTextCard).toBeVisible()
+  await completedTextCard.getByRole('button', { name: '恢复待处理' }).click()
+  await page.getByRole('tab', { name: '待处理', exact: true }).click()
+
+  await page.getByRole('button', { name: '选择条目' }).click()
+  const bulkToolbar = page.getByRole('toolbar', { name: '批量操作' })
+  await bulkToolbar.getByRole('button', { name: '全选当前结果' }).click()
+  await expect(bulkToolbar).toContainText('已选 3 条')
+  await bulkToolbar.getByRole('button', { name: '加星标' }).click()
+  await expect(page.locator('.flat-notification')).toContainText('已批量加星标（3 条）')
+  await bulkToolbar.getByRole('button', { name: '全选当前结果' }).click()
+  await bulkToolbar.getByRole('button', { name: '取消星标' }).click()
+  await expect(page.locator('.flat-notification')).toContainText('已批量取消星标（3 条）')
+  await page.getByRole('button', { name: '退出选择' }).click()
+
+  linkCard = page.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
   await linkCard.getByRole('button', { name: '标记完成' }).click()
+  await expect(page.locator('.flat-notification')).toContainText('已标记完成')
+  await expect(page.locator('.flat-notification')).toHaveCSS('border-radius', '0px')
   await expect(page.getByRole('heading', { name: '公司里待阅读的示例文章（已编辑）' })).toHaveCount(0)
   await page.getByRole('tab', { name: '已完成', exact: true }).click()
   await expect(page.getByRole('heading', { name: '公司里待阅读的示例文章（已编辑）' })).toBeVisible()
@@ -201,7 +270,13 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
 
   await page.locator('.app-header').getByRole('button', { name: '书签按钮' }).click()
   const bookmarkDialog = page.getByRole('dialog', { name: '浏览器书签按钮' })
-  const bookmarkLink = bookmarkDialog.getByRole('link', { name: '稍后保存（新标签）' })
+  const quickBookmarkLink = bookmarkDialog.getByRole('link', { name: '快速保存' })
+  await expect(quickBookmarkLink).toHaveAttribute('href', /^javascript:/)
+  const quickBookmarkCode = await quickBookmarkLink.getAttribute('href') as string
+  expect(quickBookmarkCode).toContain('?capture=quick')
+  expect(quickBookmarkCode).toContain("window.open(u,'doitlaterQuick'")
+  expect(quickBookmarkCode).not.toContain('location.href=u')
+  const bookmarkLink = bookmarkDialog.getByRole('link', { name: '保存并分类' })
   await expect(bookmarkLink).toHaveAttribute('href', /^javascript:/)
   const bookmarkCode = await bookmarkLink.getAttribute('href') as string
   expect(bookmarkCode).toContain("window.open(u,'_blank')")
@@ -243,10 +318,36 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   }, bookmarkCode)
   expect(blockedMessage).toContain('浏览器阻止了新标签页')
   await expect(sourcePage).toHaveURL(sourceUrl)
+
+  const [quickCapturePage] = await Promise.all([
+    context.waitForEvent('page'),
+    sourcePage.evaluate((script) => window.eval(script.replace(/^javascript:/, '')), quickBookmarkCode)
+  ])
+  await expect(quickCapturePage.locator('.quick-capture-message')).toContainText(/已经保存|保存完成/)
+  await expect(sourcePage).toHaveURL(sourceUrl)
+  await quickCapturePage.waitForEvent('close', { timeout: 8_000 })
+
+  const [duplicateQuickPage] = await Promise.all([
+    context.waitForEvent('page'),
+    sourcePage.evaluate((script) => window.eval(script.replace(/^javascript:/, '')), quickBookmarkCode)
+  ])
+  await expect(duplicateQuickPage.locator('.quick-capture-message')).toContainText('已经保存过了')
+  await expect(duplicateQuickPage.locator('.quick-capture-summary')).toContainText('书签来源网页')
+  await Promise.all([
+    duplicateQuickPage.waitForEvent('close'),
+    duplicateQuickPage.getByRole('button', { name: '关闭窗口' }).click()
+  ])
   await sourcePage.close()
 
+  await page.reload()
+  await expect(page.getByText('发现一份未完成草稿')).toBeVisible()
+  await page.getByRole('button', { name: '丢弃' }).click()
+  const quickSavedCard = page.locator('.item-card').filter({ hasText: '书签来源网页' })
+  await expect(quickSavedCard).toBeVisible()
+  await expect(quickSavedCard).toContainText('生活')
+
   await page.getByRole('tab', { name: '全部', exact: true }).click()
-  await expect(page.locator('.item-card')).toHaveCount(3)
+  await expect(page.locator('.item-card')).toHaveCount(4)
   await expect(page.locator('.toast')).toHaveCount(0)
   await page.setViewportSize({ width: 1920, height: 1080 })
   const mainContentBox = await page.locator('.main-content').boundingBox()
@@ -261,8 +362,106 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(page.locator('.app-header')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.screenshot({ path: 'test-results/mobile-home.png', fullPage: true })
+  await page.setViewportSize({ width: 430, height: 932 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({ path: 'test-results/iphone-15-pro-max-home.png', fullPage: true })
 
   await page.setViewportSize({ width: 1440, height: 900 })
+
+  const manifestResponse = await page.request.get('/manifest.webmanifest')
+  expect(manifestResponse.ok()).toBe(true)
+  expect(await manifestResponse.json()).toMatchObject({ display: 'standalone', start_url: '/' })
+  const serviceWorkerResponse = await page.request.get('/sw.js')
+  expect(serviceWorkerResponse.ok()).toBe(true)
+  const serviceWorkerSource = await serviceWorkerResponse.text()
+  expect(serviceWorkerSource).toContain("url.pathname.startsWith('/api/')")
+  expect(serviceWorkerSource).not.toContain('supabase.co')
+  const iconResponse = await page.request.get('/icons/app-icon-512.png')
+  const iconBytes = Buffer.from(await iconResponse.body())
+  const iconMetadata = await sharp(iconBytes).metadata()
+  const iconStats = await sharp(iconBytes).stats()
+  expect(iconMetadata).toMatchObject({ width: 512, height: 512 })
+  expect(iconStats.channels[3]?.min ?? 255).toBe(255)
+
+  await page.evaluate(() => {
+    Object.defineProperty(window, 'showSaveFilePicker', { configurable: true, value: undefined })
+  })
+  await page.locator('.app-header').getByRole('button', { name: '账号' }).click()
+  const backupDialog = page.getByRole('dialog', { name: '账号设置' })
+  const exportButton = backupDialog.getByRole('button', { name: '导出 ZIP 备份' })
+  const [fullDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    exportButton.click()
+  ])
+  const fullBackupPath = await fullDownload.path()
+  expect(fullBackupPath).toBeTruthy()
+  const fullBackupBytes = await readFile(fullBackupPath as string)
+  const fullArchive = unzipSync(new Uint8Array(fullBackupBytes))
+  const fullManifest = JSON.parse(strFromU8(fullArchive['manifest.json'])) as { includeOriginals: boolean; items: unknown[] }
+  expect(fullManifest.includeOriginals).toBe(true)
+  expect(fullManifest.items).toHaveLength(4)
+  expect(Object.keys(fullArchive).some((name) => name.startsWith('images/'))).toBe(true)
+
+  const includeOriginalsCheckbox = backupDialog.getByRole('checkbox', { name: '包含全部原图（推荐）' })
+  await includeOriginalsCheckbox.uncheck()
+  const [compactDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    exportButton.click()
+  ])
+  const compactBackupPath = await compactDownload.path()
+  const compactArchive = unzipSync(new Uint8Array(await readFile(compactBackupPath as string)))
+  const compactManifest = JSON.parse(strFromU8(compactArchive['manifest.json'])) as { includeOriginals: boolean }
+  expect(compactManifest.includeOriginals).toBe(false)
+  expect(Object.keys(compactArchive)).toEqual(['manifest.json'])
+  await includeOriginalsCheckbox.check()
+
+  await backupDialog.locator('input[type="file"]').setInputFiles({
+    name: fullDownload.suggestedFilename(),
+    mimeType: 'application/zip',
+    buffer: fullBackupBytes
+  })
+  await expect(backupDialog.getByText('备份检查通过，可以选择恢复方式。')).toBeVisible()
+  await expect(backupDialog.locator('.backup-summary')).toContainText('4 条内容')
+  await backupDialog.getByRole('button', { name: '开始安全合并' }).click()
+  await expect(backupDialog.locator('.restore-report')).toContainText('新增 0 · 跳过 4 · 失败 0')
+
+  await backupDialog.getByRole('radio', { name: /完整覆盖/ }).click()
+  page.once('dialog', (dialog) => dialog.accept())
+  const [safetyDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    backupDialog.getByRole('button', { name: '生成安全备份并完整覆盖' }).click()
+  ])
+  expect(await safetyDownload.path()).toBeTruthy()
+  await expect(backupDialog.getByText(/恢复处理完成：新增 4 条，跳过 0 条/)).toBeVisible({ timeout: 15_000 })
+  await backupDialog.getByRole('button', { name: '关闭' }).first().click()
+  await expect(page.locator('.item-card')).toHaveCount(4)
+
+  await page.locator('.app-header').getByRole('button', { name: '添加网页' }).click()
+  const draftDialog = page.getByRole('dialog', { name: '添加网页' })
+  await draftDialog.getByLabel('网页地址').fill('https://draft.example/unfinished')
+  await draftDialog.getByLabel('标题').fill('刷新后恢复的草稿')
+  await page.waitForTimeout(700)
+  await page.reload()
+  await expect(page.getByText('发现一份未完成草稿')).toBeVisible()
+  await page.getByRole('button', { name: '恢复草稿' }).click()
+  const restoredDraftDialog = page.getByRole('dialog', { name: '添加网页' })
+  await expect(restoredDraftDialog.getByLabel('网页地址')).toHaveValue('https://draft.example/unfinished')
+  await expect(restoredDraftDialog.getByLabel('标题')).toHaveValue('刷新后恢复的草稿')
+  await restoredDraftDialog.getByRole('button', { name: '取消' }).click()
+  await expect(page.getByText('发现一份未完成草稿')).toHaveCount(0)
+
+  const offlineCard = page.locator('.item-card').filter({ hasText: '书签来源网页' })
+  await context.setOffline(true)
+  await offlineCard.getByRole('button', { name: '星标', exact: true }).click()
+  await expect(offlineCard.getByRole('button', { name: '重试' })).toBeVisible()
+  await expect(offlineCard.getByRole('button', { name: '星标', exact: true })).toBeVisible()
+  await expect(page.locator('.sync-indicator')).toContainText('当前离线')
+  await context.setOffline(false)
+  await offlineCard.getByRole('button', { name: '重试' }).click()
+  await expect(offlineCard.getByRole('button', { name: '取消星标', exact: true })).toBeVisible()
+  await offlineCard.getByRole('button', { name: '取消星标', exact: true }).click()
+  await expect(offlineCard.getByRole('button', { name: '星标', exact: true })).toBeVisible()
+
   const syncedPage = await context.newPage()
   await syncedPage.goto('/')
   await expect(syncedPage.locator('html')).toHaveAttribute('data-theme', 'flat-2013')
@@ -273,6 +472,20 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(syncedPage.locator('html')).toHaveAttribute('data-theme', 'animal-island')
   await page.screenshot({ path: 'test-results/animal-home-with-picker.png', fullPage: true })
   await themeDialog.getByRole('button', { name: '关闭' }).click()
+
+  await page.locator('.app-header').getByRole('button', { name: '账号' }).click()
+  const animalAccountDialog = page.getByRole('dialog', { name: '账号设置' })
+  const animalQuickCategory = animalAccountDialog.getByRole('combobox', { name: '快速保存默认类别' })
+  await expect(animalQuickCategory).toBeVisible()
+  expect(await animalQuickCategory.evaluate((element) => element.tagName)).toBe('DIV')
+  await expect(animalAccountDialog.getByRole('radio')).toHaveCount(2)
+  await expect(animalAccountDialog.locator('.backup-panel').first()).not.toHaveCSS('background-image', 'none')
+  await page.screenshot({ path: 'test-results/animal-account-workflow.png', fullPage: true })
+  await animalAccountDialog.getByRole('button', { name: '关闭' }).first().click()
+
+  const animalTextCard = page.locator('.item-card').filter({ hasText: '回家后整理这段纯文字' })
+  await animalTextCard.getByRole('button', { name: '星标', exact: true }).click()
+  await expect(page.locator('.animal-notification-host')).toContainText('已加星标')
   await page.locator('.app-header').getByRole('button', { name: '添加网页' }).click()
   const animalDialog = page.getByRole('dialog', { name: '添加网页' })
   await expect(animalDialog.locator(':scope > div')).not.toHaveCSS('clip-path', 'none')
@@ -280,33 +493,8 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await page.screenshot({ path: 'test-results/animal-add-link-modal.png', fullPage: true })
   await animalDialog.getByRole('button', { name: '关闭' }).click()
   await page.locator('.app-header').getByRole('button', { name: '设计风格' }).click()
-  await page.getByRole('dialog', { name: '选择设计风格' }).getByRole('radio', { name: /Grid Paper/ }).click()
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'grid-paper')
-  await expect(syncedPage.locator('html')).toHaveAttribute('data-theme', 'grid-paper')
-  await page.screenshot({ path: 'test-results/grid-paper-home-with-picker.png', fullPage: true })
-  await page.getByRole('dialog', { name: '选择设计风格' }).getByRole('button', { name: '关闭' }).click()
-  const gridHeaderButtons = page.locator('.app-header .header-actions > button')
-  const gridHeaderButtonLayout = await gridHeaderButtons.evaluateAll((buttons) => buttons.map((button) => ({
-    top: Math.round(button.getBoundingClientRect().top),
-    fits: button.scrollWidth <= button.clientWidth
-  })))
-  expect(new Set(gridHeaderButtonLayout.map((button) => button.top)).size).toBe(1)
-  expect(gridHeaderButtonLayout.every((button) => button.fits)).toBe(true)
-  await page.locator('.app-header').getByRole('button', { name: '添加网页' }).click()
-  const gridPaperDialog = page.getByRole('dialog', { name: '添加网页' })
-  await expect(gridPaperDialog).toHaveCSS('box-shadow', 'none')
-  await expect(gridPaperDialog.locator(':scope > div')).toHaveCSS('clip-path', 'none')
-  await expect(gridPaperDialog.locator(':scope > div')).toHaveCSS('background-image', /linear-gradient/)
-  await expect(gridPaperDialog.getByRole('button', { name: '新增类别' })).toBeVisible()
-  await page.waitForTimeout(400)
-  await page.screenshot({ path: 'test-results/grid-paper-add-link-modal.png', fullPage: true })
-  await gridPaperDialog.getByRole('button', { name: '关闭' }).click()
-  await page.setViewportSize({ width: 390, height: 844 })
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await page.screenshot({ path: 'test-results/grid-paper-mobile-home.png', fullPage: true })
-  await page.setViewportSize({ width: 1440, height: 900 })
-  await page.locator('.app-header').getByRole('button', { name: '设计风格' }).click()
   await page.getByRole('dialog', { name: '选择设计风格' }).getByRole('radio', { name: /Flat Design 2013/ }).click()
+  await expect(syncedPage.locator('html')).toHaveAttribute('data-theme', 'flat-2013')
   await page.getByRole('dialog', { name: '选择设计风格' }).getByRole('button', { name: '关闭' }).click()
   await syncedPage.close()
 

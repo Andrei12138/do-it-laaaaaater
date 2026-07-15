@@ -8,7 +8,7 @@ import {
   type ReactNode
 } from 'react'
 
-export type ThemeId = 'flat-2013' | 'animal-island' | 'grid-paper'
+export type ThemeId = 'flat-2013' | 'animal-island'
 
 export interface ThemeDefinition {
   id: ThemeId
@@ -56,20 +56,6 @@ export const THEMES: readonly ThemeDefinition[] = [
     authRecoveryDescription: '为你的稍后处理小岛换一把新钥匙',
     dashboardKicker: 'PRIVATE ISLAND LIST',
     dashboardDescription: '把白天发现的好东西带回自己的小岛'
-  },
-  {
-    id: 'grid-paper',
-    name: 'Grid Paper',
-    shortDescription: '方格纸、手写笔记与红色批注',
-    credit: 'NovusGFX · Retro Design System',
-    license: 'MIT',
-    creditUrl: 'https://github.com/novusgfx/retro-design-system',
-    themeColor: '#fafaf0',
-    authKicker: 'READING NOTEBOOK',
-    authLoginDescription: '翻开笔记，继续整理稍后内容',
-    authRecoveryDescription: '在笔记本上记下新的登录密码',
-    dashboardKicker: 'READING NOTEBOOK / PAGE 52',
-    dashboardDescription: '把想法、网页和图片记进自己的方格本'
   }
 ] as const
 

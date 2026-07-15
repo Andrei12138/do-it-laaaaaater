@@ -45,7 +45,9 @@ export function serializeItem(context: AppContext, userId: string, row: Row) {
     })),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
-    completedAt: numberOrNull(row.completed_at)
+    completedAt: numberOrNull(row.completed_at),
+    isStarred: Boolean(Number(row.is_starred || 0)),
+    plannedFor: row.planned_for ? String(row.planned_for) : null
   }
 }
 
@@ -61,6 +63,8 @@ export interface ItemFilters {
   tag?: string
   date?: string
   q?: string
+  priority?: string
+  sort?: string
 }
 
 export function listItems(context: AppContext, userId: string, filters: ItemFilters) {
@@ -91,6 +95,15 @@ export function listItems(context: AppContext, userId: string, filters: ItemFilt
     conditions.push("strftime('%Y-%m-%d', i.created_at / 1000, 'unixepoch', '+8 hours') = ?")
     params.push(filters.date)
   }
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date())
+  if (filters.priority === 'planned') {
+    conditions.push('i.planned_for IS NOT NULL AND i.planned_for <= ?')
+    params.push(today)
+  } else if (filters.priority === 'starred') {
+    conditions.push('i.is_starred = 1')
+  }
   const query = (filters.q || '').trim().toLowerCase()
   if (query) {
     const needle = '%' + query.replace(/[\\%_]/g, '\\$&') + '%'
@@ -106,7 +119,22 @@ export function listItems(context: AppContext, userId: string, filters: ItemFilt
     params.push(needle, needle, needle, needle, needle)
   }
 
-  const sql = 'SELECT i.* FROM items i WHERE ' + conditions.join(' AND ') + ' ORDER BY i.created_at DESC, i.id DESC'
+  let order = 'i.created_at DESC, i.id DESC'
+  if (filters.sort === 'oldest') order = 'i.created_at ASC, i.id ASC'
+  if (filters.sort === 'recently_completed') order = 'COALESCE(i.completed_at,0) DESC, i.created_at DESC, i.id DESC'
+  if (!filters.sort || filters.sort === 'smart') {
+    order = [
+      'CASE',
+      'WHEN i.planned_for IS NOT NULL AND i.planned_for < ? THEN 0',
+      'WHEN i.planned_for = ? THEN 1',
+      'WHEN i.is_starred = 1 THEN 2',
+      'ELSE 3 END ASC,',
+      'CASE WHEN i.planned_for IS NOT NULL AND i.planned_for <= ? THEN i.created_at END ASC,',
+      'i.created_at DESC, i.id DESC'
+    ].join(' ')
+    params.push(today, today, today)
+  }
+  const sql = 'SELECT i.* FROM items i WHERE ' + conditions.join(' AND ') + ' ORDER BY ' + order
   const rows = context.db.prepare(sql).all(...params) as Row[]
   return rows.map((row) => serializeItem(context, userId, row))
 }

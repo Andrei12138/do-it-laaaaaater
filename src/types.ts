@@ -1,5 +1,7 @@
 export type ItemStatus = 'pending' | 'completed'
 export type ItemKind = 'link' | 'text' | 'image_group'
+export type ItemSort = 'smart' | 'newest' | 'oldest' | 'recently_completed'
+export type PriorityFilter = 'all' | 'planned' | 'starred'
 
 export interface AuthStatus {
   setupRequired: boolean
@@ -38,6 +40,8 @@ export interface LibraryItem {
   createdAt: number
   updatedAt: number
   completedAt: number | null
+  isStarred: boolean
+  plannedFor: string | null
 }
 
 export interface ItemFilters {
@@ -46,4 +50,25 @@ export interface ItemFilters {
   category: string
   date: string
   q: string
+  priority: PriorityFilter
+  sort: ItemSort
+}
+
+export interface AppPreferences {
+  quickSaveCategoryId: string | null
+}
+
+export type SyncPhase = 'idle' | 'saving' | 'saved' | 'offline' | 'error'
+
+export interface SyncSnapshot {
+  phase: SyncPhase
+  lastSavedAt: number | null
+  message: string
+}
+
+export interface BulkItemChanges {
+  status?: ItemStatus
+  categoryId?: string | null
+  isStarred?: boolean
+  plannedFor?: string | null
 }

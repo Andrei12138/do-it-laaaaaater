@@ -20,6 +20,21 @@ export type AppIconName =
   | 'next'
   | 'link'
   | 'text'
+  | 'star'
+  | 'today'
+  | 'focus'
+  | 'select'
+  | 'bulk'
+  | 'backup'
+  | 'install'
+  | 'retry'
+  | 'sync'
+  | 'warning'
+  | 'open'
+  | 'skip'
+  | 'sort'
+  | 'download'
+  | 'upload'
 
 const animalIcons: Partial<Record<AppIconName, ComponentProps<typeof Icon>['name']>> = {
   add: 'icon-diy',
@@ -30,7 +45,14 @@ const animalIcons: Partial<Record<AppIconName, ComponentProps<typeof Icon>['name
   account: 'icon-miles',
   logout: 'icon-helicopter',
   link: 'icon-map',
-  text: 'icon-chat'
+  text: 'icon-chat',
+  focus: 'icon-critterpedia',
+  select: 'icon-design',
+  bulk: 'icon-shopping',
+  backup: 'icon-map',
+  install: 'icon-miles',
+  sync: 'icon-miles',
+  open: 'icon-map'
 }
 
 function FlatPaths({ name }: { name: AppIconName }) {
@@ -51,7 +73,22 @@ function FlatPaths({ name }: { name: AppIconName }) {
     previous: <path d="m15 4-8 8 8 8" />,
     next: <path d="m9 4 8 8-8 8" />,
     link: <><path d="m9.5 14.5-2 2a3.5 3.5 0 1 1-5-5l4-4a3.5 3.5 0 0 1 5 0" /><path d="m14.5 9.5 2-2a3.5 3.5 0 1 1 5 5l-4 4a3.5 3.5 0 0 1-5 0" /><path d="m8 16 8-8" /></>,
-    text: <><path d="M5 4h14M12 4v16M8 20h8" /></>
+    text: <><path d="M5 4h14M12 4v16M8 20h8" /></>,
+    star: <path d="m12 2.8 2.8 5.7 6.3.9-4.6 4.4 1.1 6.3-5.6-3-5.6 3 1.1-6.3-4.6-4.4 6.3-.9z" />,
+    today: <><rect x="3" y="5" width="18" height="16" /><path d="M7 3v4M17 3v4M3 10h18M8 14h3v3H8z" /></>,
+    focus: <><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5" /><circle cx="12" cy="12" r="3" /></>,
+    select: <><rect x="3" y="3" width="18" height="18" /><path d="m7 12 3 3 7-7" /></>,
+    bulk: <><rect x="6" y="6" width="15" height="15" /><path d="M3 17V3h14M10 11h7M10 15h7" /></>,
+    backup: <><path d="M4 8h16v13H4zM7 3h10l3 5H4z" /><path d="M9 13h6M12 10v6" /></>,
+    install: <><rect x="5" y="2" width="14" height="20" rx="1" /><path d="M9 5h6M12 8v8M9 13l3 3 3-3M10 19h4" /></>,
+    retry: <><path d="M5 8V3M5 8h5" /><path d="M5.5 7.5A8 8 0 1 1 4 15" /></>,
+    sync: <><path d="M4 8h12l-3-3M20 16H8l3 3" /><path d="m16 8-3 3M8 16l3-3" /></>,
+    warning: <><path d="M12 3 2.5 21h19z" /><path d="M12 9v5M12 17.5v.5" /></>,
+    open: <><path d="M13 4h7v7M20 4l-9 9" /><path d="M18 14v6H4V6h6" /></>,
+    skip: <><path d="m5 4 9 8-9 8zM18 4v16" /></>,
+    sort: <><path d="M8 4v16M4 8l4-4 4 4M16 20V4M12 16l4 4 4-4" /></>,
+    download: <><path d="M12 3v12M7 10l5 5 5-5M4 20h16" /></>,
+    upload: <><path d="M12 21V9M7 14l5-5 5 5M4 4h16" /></>
   }
   return paths[name]
 }
@@ -70,18 +107,18 @@ export function AppIcon({
   if (theme === 'animal-island' && animalName) {
     return <Icon name={animalName} size={size} className={className} />
   }
-  const gridPaper = theme === 'grid-paper'
+  const organic = theme === 'animal-island'
   return (
     <svg
-      className={['app-icon', gridPaper ? 'app-icon-grid-paper' : '', className].filter(Boolean).join(' ')}
+      className={['app-icon', organic ? 'app-icon-animal-custom' : '', className].filter(Boolean).join(' ')}
       width={size}
       height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={gridPaper ? 1.9 : 1.8}
-      strokeLinecap={gridPaper ? 'round' : 'square'}
-      strokeLinejoin={gridPaper ? 'round' : 'miter'}
+      strokeWidth={organic ? 2 : 1.8}
+      strokeLinecap={organic ? 'round' : 'square'}
+      strokeLinejoin={organic ? 'round' : 'miter'}
       aria-hidden="true"
       focusable="false"
     >
