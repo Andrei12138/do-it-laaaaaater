@@ -1,0 +1,53 @@
+{
+  "name": "do-it-laaaaaater",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,web \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "cross-env NODE_ENV=development PORT=4318 tsx watch server/index.ts",
+    "dev:web": "vite --host 127.0.0.1",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "build": "tsc -p tsconfig.app.json --noEmit && vite build && tsc -p tsconfig.server.json",
+    "start": "cross-env NODE_ENV=production node dist-server/server/index.js",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "account:reset": "tsx server/reset-password.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.5",
+    "animal-island-ui": "1.2.2",
+    "cheerio": "^1.1.2",
+    "classnames": "2.5.1",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.1.0",
+    "file-type": "^21.0.0",
+    "multer": "^2.0.2",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sharp": "^0.34.3",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/cookie-parser": "^1.4.9",
+    "@types/express": "^5.0.3",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@types/supertest": "^6.0.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.0.0",
+    "supertest": "^7.1.4",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
+  },
+  "engines": {
+    "node": ">=22.13 <25"
+  }
+}

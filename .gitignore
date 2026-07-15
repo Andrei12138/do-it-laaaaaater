@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-server/
+data/
+test-results/
+playwright-report/
+coverage/
+.env
+.env.*
+!.env.example
+.vercel/
+.supabase/.temp/
+*.log
