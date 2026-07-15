@@ -8,6 +8,13 @@
 | --- | --- |
 | ![Flat Design 2013 首页](docs/screenshots/flat-desktop.png) | ![Animal Island UI 添加窗口](docs/screenshots/animal-island.png) |
 
+## 当前版本（2026-07-16）
+
+- 移动端已经改为“清单、筛选、添加、选择、更多”五项固定底部导航，两套主题分别使用对应的底部面板。
+- 已同步的清单、文本和图片会保存在当前浏览器；断网刷新后仍可查看，离线修改会排队并在联网后自动同步。
+- 账号设置提供离线状态、失败重试、缓存管理和自适应的“安装到主屏幕”入口。
+- 本次移动端与离线能力升级不需要新的 Supabase 数据库迁移，更新前端代码并重新部署即可。
+
 ## 主要功能
 
 ### 快速收集
@@ -72,7 +79,7 @@
 
 ## 快速开始
 
-需要 Node.js `22.13` 或更高版本。
+需要 Node.js `22.13` 至 `24.x`。
 
 ```bash
 git clone https://github.com/Andrei12138/do-it-laaaaaater.git
@@ -109,7 +116,20 @@ VITE_SUPABASE_ANON_KEY=你的 Publishable key
 请勿把 Supabase 数据库密码或 `service_role` key 放进前端环境变量。
 
 - 全新 Supabase 项目：运行 [`supabase/schema.sql`](supabase/schema.sql)。
-- 已经部署过旧版本：发布本次升级前，先运行 [`supabase/migrations/20260715_workflow_ux_upgrade.sql`](supabase/migrations/20260715_workflow_ux_upgrade.sql)。这是一份增量升级，只增加星标、今日计划和默认类别偏好，不会清空已有账号、条目、类别或图片。
+- 从 2026-07-15 之前的版本升级：确认已经运行一次 [`supabase/migrations/20260715_workflow_ux_upgrade.sql`](supabase/migrations/20260715_workflow_ux_upgrade.sql)。这份增量升级只增加星标、今日计划和默认类别偏好，不会清空已有账号、条目、类别或图片。
+- 已经完成上述升级：当前移动端导航与离线队列版本不需要再执行 SQL。
+
+### 日常更新流程
+
+本地修改完成后运行 `npm run check`，再提交并推送到 `main`。已连接本仓库的 Vercel 项目会自动构建并更新正式站点：
+
+```bash
+git add <本次修改的文件>
+git commit -m "说明本次更新"
+git push origin main
+```
+
+日常界面和前端逻辑更新不需要登录 Supabase 操作。只有 `supabase/schema.sql` 或 `supabase/migrations/` 出现新的数据库结构变更时，才需要执行对应 SQL；环境变量也只需在首次部署或密钥变更时更新。
 
 ## 安装到主屏幕
 
