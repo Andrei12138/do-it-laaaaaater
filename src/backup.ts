@@ -3,7 +3,8 @@ import { api, jsonRequest } from './api'
 import type { AppPreferences, Category, ImageAsset, LibraryItem } from './types'
 
 export const BACKUP_FORMAT = 'do-it-laaaaaater-backup'
-export const BACKUP_VERSION = 1
+export const BACKUP_VERSION = 2
+export type BackupManifestVersion = 1 | typeof BACKUP_VERSION
 
 export interface BackupAsset {
   id: string
@@ -29,12 +30,13 @@ export interface BackupItem {
   completedAt: number | null
   isStarred: boolean
   plannedFor: string | null
+  trashedAt: number | null
   assets: BackupAsset[]
 }
 
 export interface BackupManifest {
   format: typeof BACKUP_FORMAT
-  version: typeof BACKUP_VERSION
+  version: BackupManifestVersion
   exportedAt: string
   timeZone: 'Asia/Shanghai'
   includeOriginals: boolean
@@ -98,7 +100,7 @@ function assertNotCancelled(signal?: AbortSignal) {
 async function loadManifest(includeOriginals: boolean) {
   const [categories, items, preferences] = await Promise.all([
     api<Category[]>('/api/categories'),
-    api<LibraryItem[]>('/api/items?status=all&sort=newest'),
+    api<LibraryItem[]>('/api/items?status=all&sort=newest&trash=all'),
     api<AppPreferences>('/api/preferences')
   ])
   const quickCategory = categories.find((category) => category.id === preferences.quickSaveCategoryId)
@@ -122,6 +124,7 @@ async function loadManifest(includeOriginals: boolean) {
       completedAt: item.completedAt,
       isStarred: item.isStarred,
       plannedFor: item.plannedFor,
+      trashedAt: item.trashedAt,
       assets: item.assets.map((asset) => ({
         id: asset.id,
         role: asset.role,
@@ -297,7 +300,10 @@ function finiteTimestamp(value: unknown, field: string) {
 
 function validateManifest(raw: unknown): BackupManifest {
   const root = objectValue(raw)
-  if (root.format !== BACKUP_FORMAT || root.version !== BACKUP_VERSION) throw new Error('这不是受支持的 Do It Laaaaaater 备份版本')
+  const sourceVersion = Number(root.version)
+  if (root.format !== BACKUP_FORMAT || (sourceVersion !== 1 && sourceVersion !== BACKUP_VERSION)) {
+    throw new Error('这不是受支持的 Do It Laaaaaater 备份版本')
+  }
   if (!Array.isArray(root.categories) || root.categories.length > 10_000) throw new Error('类别清单无效')
   if (!Array.isArray(root.items) || root.items.length > 100_000) throw new Error('条目清单无效')
   const categories = root.categories.map((value, index) => {
@@ -329,6 +335,9 @@ function validateManifest(raw: unknown): BackupManifest {
     if (categoryName && !categoryNames.has(categoryName.toLocaleLowerCase('zh-CN'))) throw new Error('条目引用了不存在的类别：' + categoryName)
     const plannedFor = entry.plannedFor ? String(entry.plannedFor) : null
     if (plannedFor && !/^\d{4}-\d{2}-\d{2}$/.test(plannedFor)) throw new Error('条目计划日期无效：' + title)
+    const trashedAt = sourceVersion >= 2 && entry.trashedAt !== null && entry.trashedAt !== undefined
+      ? finiteTimestamp(entry.trashedAt, title)
+      : null
     if (!Array.isArray(entry.assets)) throw new Error('条目图片清单无效：' + title)
     if (entry.assets.length > MAX_IMAGES_PER_GROUP + 1) throw new Error('条目图片数量超出限制：' + title)
     const assets = entry.assets.map((assetValue): BackupAsset => {
@@ -370,6 +379,7 @@ function validateManifest(raw: unknown): BackupManifest {
       completedAt: entry.completedAt === null || entry.completedAt === undefined ? null : finiteTimestamp(entry.completedAt, title),
       isStarred: Boolean(entry.isStarred),
       plannedFor,
+      trashedAt,
       assets
     }
   })

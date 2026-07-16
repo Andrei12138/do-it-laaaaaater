@@ -58,7 +58,8 @@ export function initializeDatabase(db: DatabaseSync) {
     '  updated_at INTEGER NOT NULL,',
     '  completed_at INTEGER,',
     '  is_starred INTEGER NOT NULL DEFAULT 0,',
-    '  planned_for TEXT',
+    '  planned_for TEXT,',
+    '  trashed_at INTEGER',
     ');',
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_items_unique_url',
     "  ON items(user_id, normalized_url) WHERE kind = 'link' AND normalized_url IS NOT NULL;",
@@ -116,10 +117,11 @@ export function initializeDatabase(db: DatabaseSync) {
         '  updated_at INTEGER NOT NULL,',
         '  completed_at INTEGER,',
         '  is_starred INTEGER NOT NULL DEFAULT 0,',
-        '  planned_for TEXT',
+        '  planned_for TEXT,',
+        '  trashed_at INTEGER',
         ');',
-        'INSERT INTO items_next (id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,is_starred,planned_for)',
-        '  SELECT id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,0,NULL FROM items;',
+        'INSERT INTO items_next (id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,is_starred,planned_for,trashed_at)',
+        '  SELECT id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,0,NULL,NULL FROM items;',
         'DROP TABLE items;',
         'ALTER TABLE items_next RENAME TO items;',
         'CREATE UNIQUE INDEX idx_items_unique_url',
@@ -151,9 +153,14 @@ export function initializeDatabase(db: DatabaseSync) {
   if (!itemColumns.has('planned_for')) {
     db.exec('ALTER TABLE items ADD COLUMN planned_for TEXT;')
   }
+  if (!itemColumns.has('trashed_at')) {
+    db.exec('ALTER TABLE items ADD COLUMN trashed_at INTEGER;')
+  }
   db.exec([
     'CREATE INDEX IF NOT EXISTS idx_items_user_priority',
     '  ON items(user_id, planned_for, is_starred, created_at DESC);',
+    'CREATE INDEX IF NOT EXISTS idx_items_user_trash',
+    '  ON items(user_id, trashed_at, created_at DESC);',
     'CREATE TABLE IF NOT EXISTS user_preferences (',
     '  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,',
     '  quick_save_category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,',

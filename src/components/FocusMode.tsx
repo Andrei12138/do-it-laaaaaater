@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button, Card, Select, Tag, Title } from 'animal-island-ui'
-import { chinaToday, plannedState, smartPriority } from '../china-date'
+import { chinaToday, plannedDateLabel, plannedState, smartPriority } from '../china-date'
 import { itemAgeLabel } from '../item-age'
 import { useTheme } from '../theme'
 import type { BulkItemChanges, Category, ImageAsset, LibraryItem } from '../types'
@@ -109,7 +109,7 @@ export function FocusMode({
         void patch({ isStarred: !item.isStarred }, item.isStarred ? '已取消星标' : '已加星标')
       } else if (event.key.toLowerCase() === 't' && item.status === 'pending') {
         event.preventDefault()
-        void patch({ plannedFor: item.plannedFor ? null : chinaToday() }, item.plannedFor ? '已移出今日清单' : '已加入今日清单')
+        void patch({ plannedFor: item.plannedFor ? null : chinaToday() }, item.plannedFor ? '已清除处理计划' : '已加入今日清单')
       }
     }
     document.addEventListener('keydown', onKeyDown)
@@ -219,9 +219,9 @@ export function FocusMode({
               <Button
                 disabled={busy || item.status === 'completed'}
                 icon={<AppIcon name="today" size={19} />}
-                onClick={() => void patch({ plannedFor: item.plannedFor ? null : chinaToday() }, item.plannedFor ? '已移出今日清单' : '已加入今日清单')}
+                onClick={() => void patch({ plannedFor: item.plannedFor ? null : chinaToday() }, item.plannedFor ? '已清除处理计划' : '已加入今日清单')}
               >
-                {item.plannedFor ? '移出今日' : '今天处理'}
+                {item.plannedFor ? '清除计划 · ' + plannedDateLabel(item.plannedFor) : '今天处理'}
               </Button>
               <Button disabled={busy} icon={<AppIcon name="edit" size={19} />} onClick={() => onEdit(item)}>编辑</Button>
               <Button disabled={busy} danger icon={<AppIcon name="delete" size={19} />} onClick={async () => {

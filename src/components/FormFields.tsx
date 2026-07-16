@@ -105,7 +105,19 @@ export function CategoryField({
   )
 }
 
-function FilePreview({ file, onRemove }: { file: File; onRemove: () => void }) {
+function FilePreview({
+  file,
+  index,
+  total,
+  onRemove,
+  onMove
+}: {
+  file: File
+  index: number
+  total: number
+  onRemove: () => void
+  onMove: (direction: -1 | 1) => void
+}) {
   const [url, setUrl] = useState('')
   useEffect(() => {
     const objectUrl = URL.createObjectURL(file)
@@ -116,9 +128,14 @@ function FilePreview({ file, onRemove }: { file: File; onRemove: () => void }) {
     <li className="pending-image">
       {url && <img src={url} alt="" />}
       <span title={file.name}>{file.name}</span>
+      <span className="pending-image-order">第 {index + 1} 张</span>
+      <div className="pending-image-actions">
+        <button type="button" className="small-button" disabled={index === 0} onClick={() => onMove(-1)}>前移</button>
+        <button type="button" className="small-button" disabled={index === total - 1} onClick={() => onMove(1)}>后移</button>
       <button type="button" className="small-button" onClick={onRemove}>
         <AppIcon name="delete" size={16} />移除
       </button>
+      </div>
     </li>
   )
 }
@@ -149,15 +166,18 @@ export function ImageInput({
   onChange,
   onError,
   existingCount = 0,
-  compact = false
+  compact = false,
+  collapsible = false
 }: {
   files: File[]
   onChange: (files: File[]) => void
   onError: (message: string) => void
   existingCount?: number
   compact?: boolean
+  collapsible?: boolean
 }) {
   const inputId = useId()
+  const [expanded, setExpanded] = useState(!collapsible || files.length > 0)
 
   function add(input: File[]) {
     const result = validateImageFiles(input, existingCount + files.length)
@@ -180,6 +200,14 @@ export function ImageInput({
 
   return (
     <div className={compact ? 'image-input compact' : 'image-input'}>
+      {collapsible && (
+        <button type="button" className="image-input-summary" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+          <AppIcon name="image" size={18} />
+          <span>{files.length ? `已选择 ${files.length} 张截图` : '添加相关截图（可选）'}</span>
+          <span aria-hidden="true">{expanded ? '−' : '+'}</span>
+        </button>
+      )}
+      {expanded && (
       <div
         className={compact ? 'image-dropzone compact' : 'image-dropzone'}
         tabIndex={0}
@@ -202,12 +230,24 @@ export function ImageInput({
           }}
         />
       </div>
+      )}
       {files.length > 0 && (
         <ul className="pending-images">
           {files.map((file, index) => (
             <FilePreview
               key={file.name + ':' + file.size + ':' + index}
               file={file}
+              index={index}
+              total={files.length}
+              onMove={(direction) => {
+                const nextIndex = index + direction
+                if (nextIndex < 0 || nextIndex >= files.length) return
+                const next = [...files]
+                const current = next[index]
+                next[index] = next[nextIndex]
+                next[nextIndex] = current
+                onChange(next)
+              }}
               onRemove={() => onChange(files.filter((_, fileIndex) => fileIndex !== index))}
             />
           ))}

@@ -36,6 +36,7 @@ export function QuickCapture() {
   const [message, setMessage] = useState('正在读取默认类别…')
   const [warning, setWarning] = useState('')
   const [item, setItem] = useState<LibraryItem | null>(null)
+  const [duplicateTrashed, setDuplicateTrashed] = useState(false)
 
   useEffect(() => {
     if (started.current) return
@@ -103,7 +104,8 @@ export function QuickCapture() {
       } catch (requestError) {
         if (cancelled) return
         if (requestError instanceof ApiRequestError && requestError.status === 409) {
-          const existingId = String((requestError.details as { existingId?: string } | undefined)?.existingId || '')
+          const details = requestError.details as { existingId?: string; trashed?: boolean } | undefined
+          const existingId = String(details?.existingId || '')
           let existing: LibraryItem | null = null
           if (existingId) {
             try {
@@ -113,8 +115,11 @@ export function QuickCapture() {
             }
           }
           setItem(existing)
+          setDuplicateTrashed(Boolean(details?.trashed || existing?.trashedAt))
           setPhase('duplicate')
-          setMessage('这个网页已经保存过了，原条目和录入时间都没有改变。')
+          setMessage(details?.trashed
+            ? '这个网页已经在回收站中。原条目没有改变，可前往恢复。'
+            : '这个网页已经保存过了，原条目和录入时间都没有改变。')
           return
         }
         setPhase('error')
@@ -162,7 +167,7 @@ export function QuickCapture() {
         )}
         <div className="quick-capture-actions">
           {phase === 'duplicate' && item && (
-            <Button type="primary" onClick={viewExisting}>查看已有条目</Button>
+            <Button type="primary" onClick={viewExisting}>{duplicateTrashed ? '前往回收站' : '查看已有条目'}</Button>
           )}
           {(phase === 'done' || phase === 'error' || phase === 'duplicate') && (
             <Button onClick={() => window.close()}>关闭窗口</Button>

@@ -82,6 +82,12 @@ export interface OfflineRuntimeState {
   cacheUpdatedAt: number | null
   storageBytes: number
   warning: string
+  cachePhase: 'idle' | 'running' | 'paused' | 'error'
+  cacheCompleted: number
+  cacheTotal: number
+  cacheFailed: number
+  storageUsage: number
+  storageQuota: number
 }
 
 type RemoteSender = <T>(path: string, options?: RequestInit) => Promise<T>
@@ -91,6 +97,11 @@ let databasePromise: Promise<IDBDatabase> | null = null
 let sender: RemoteSender | null = null
 let flushing = false
 let initialized = false
+let cacheWorkerRunning = false
+let cachePaused = false
+let cacheQueue: CacheTask[] = []
+let failedCacheTasks: CacheTask[] = []
+const queuedCacheKeys = new Set<string>()
 const blobUrls = new Map<string, string>()
 const listeners = new Set<() => void>()
 let runtimeState: OfflineRuntimeState = {
@@ -101,7 +112,20 @@ let runtimeState: OfflineRuntimeState = {
   lastSyncedAt: null,
   cacheUpdatedAt: null,
   storageBytes: 0,
-  warning: ''
+  warning: '',
+  cachePhase: 'idle',
+  cacheCompleted: 0,
+  cacheTotal: 0,
+  cacheFailed: 0,
+  storageUsage: 0,
+  storageQuota: 0
+}
+
+interface CacheTask {
+  key: string
+  userKey: string
+  asset: ImageAsset
+  variant: 'thumb' | 'original'
 }
 
 function publish(patch: Partial<OfflineRuntimeState>) {
@@ -299,7 +323,11 @@ function cachedAuth() {
 export function configureOfflineUser(email: string) {
   const next = email.trim().toLocaleLowerCase('en-US')
   if (!next || next === activeUserKey) return
+  cacheQueue = []
+  failedCacheTasks = []
+  queuedCacheKeys.clear()
   activeUserKey = next
+  publish({ cachePhase: 'idle', cacheCompleted: 0, cacheTotal: 0, cacheFailed: 0 })
   void refreshRuntimeCounts()
 }
 
@@ -322,16 +350,29 @@ async function allBlobRecords(userKey = activeUserKey) {
 async function refreshRuntimeCounts() {
   if (!activeUserKey) return
   try {
-    const [entries, snapshot, bytes] = await Promise.all([
+    const [entries, snapshot, bytes, estimate] = await Promise.all([
       allQueueEntries(),
       readSnapshot(),
-      offlineStorageBytes()
+      offlineStorageBytes(),
+      navigator.storage?.estimate?.().catch(() => ({})) || Promise.resolve({})
     ])
+    const storageEstimate = estimate as StorageEstimate
+    const usage = Number(storageEstimate.usage || 0)
+    const quota = Number(storageEstimate.quota || 0)
+    const remaining = Math.max(0, quota - usage)
+    const storageWarning = quota && (remaining < 50 * 1024 * 1024 || usage / quota > 0.95)
+      ? '浏览器可用空间不足，图片后台缓存已暂停。清理缓存或设备空间后可继续。'
+      : ''
+    if (storageWarning) cachePaused = true
     publish({
       pendingCount: entries.filter((entry) => entry.state === 'pending').length,
       failedCount: entries.filter((entry) => entry.state === 'failed').length,
       cacheUpdatedAt: snapshot.updatedAt || null,
-      storageBytes: bytes
+      storageBytes: bytes,
+      storageUsage: usage,
+      storageQuota: quota,
+      cachePhase: storageWarning ? 'paused' : runtimeState.cachePhase,
+      warning: storageWarning || runtimeState.warning
     })
   } catch (error) {
     publish({ warning: error instanceof Error ? error.message : '无法读取离线存储' })
@@ -586,7 +627,8 @@ async function applyLocalMutation(snapshot: OfflineSnapshotRecord, mutation: Pic
       updatedAt: createdAt,
       completedAt: null,
       isStarred: false,
-      plannedFor: null
+      plannedFor: null,
+      trashedAt: null
     }
     if (!item.title) throw new ApiRequestError(400, '请填写标题')
     snapshot.items.unshift(item)
@@ -597,7 +639,10 @@ async function applyLocalMutation(snapshot: OfflineSnapshotRecord, mutation: Pic
     const url = kind === 'link' ? normalizedUrl(formString(body, 'url')) : null
     if (url && snapshot.items.some((item) => item.kind === 'link' && item.url === url)) {
       const duplicate = snapshot.items.find((item) => item.kind === 'link' && item.url === url)
-      throw new ApiRequestError(409, '这个网页已经保存过了', { existingId: duplicate?.id })
+      throw new ApiRequestError(409, duplicate?.trashedAt ? '这个网页在回收站中' : '这个网页已经保存过了', {
+        existingId: duplicate?.id,
+        trashed: Boolean(duplicate?.trashedAt)
+      })
     }
     const role = kind === 'link' ? 'attachment' : 'gallery'
     const assets = await localAssets(snapshot.userKey, body, role)
@@ -615,18 +660,33 @@ async function applyLocalMutation(snapshot: OfflineSnapshotRecord, mutation: Pic
       updatedAt: createdAt,
       completedAt: null,
       isStarred: false,
-      plannedFor: null
+      plannedFor: null,
+      trashedAt: null
     }
     snapshot.items.unshift(item)
     return item
   }
   if (path === '/api/items/bulk' && method === 'POST') {
     const ids = Array.isArray(record.ids) ? record.ids.map(String) : []
-    if (record.delete === true) {
-      const removed = snapshot.items.filter((item) => ids.includes(item.id))
-      snapshot.items = snapshot.items.filter((item) => !ids.includes(item.id))
+    if (record.permanentDelete === true) {
+      const removed = snapshot.items.filter((item) => ids.includes(item.id) && item.trashedAt)
+      snapshot.items = snapshot.items.filter((item) => !removed.some((entry) => entry.id === item.id))
       await Promise.all(removed.flatMap((item) => item.assets.map((asset) => removeAssetBlobs(snapshot.userKey, asset.id))))
-      return { updated: 0, deleted: removed.length, succeededIds: ids, failed: [] }
+      return { updated: 0, deleted: removed.length, succeededIds: removed.map((item) => item.id), failed: [] }
+    }
+    if (record.delete === true || record.restore === true) {
+      const trashedAt = record.restore === true ? null : Date.now()
+      snapshot.items = snapshot.items.map((item) => ids.includes(item.id) ? {
+        ...item,
+        trashedAt,
+        updatedAt: Date.now()
+      } : item)
+      return {
+        updated: record.restore === true ? ids.length : 0,
+        deleted: record.delete === true ? ids.length : 0,
+        succeededIds: ids,
+        failed: []
+      }
     }
     const changes = record.changes && typeof record.changes === 'object' ? record.changes as Record<string, unknown> : {}
     snapshot.items = snapshot.items.map((item) => ids.includes(item.id) ? patchLocalItem(snapshot, item, changes) : item)
@@ -664,12 +724,37 @@ async function applyLocalMutation(snapshot: OfflineSnapshotRecord, mutation: Pic
     await removeAssetBlobs(snapshot.userKey, assetDeleteMatch[1])
     return item
   }
+  if (path === '/api/items/trash/empty' && method === 'POST') {
+    const removed = snapshot.items.filter((item) => item.trashedAt)
+    snapshot.items = snapshot.items.filter((item) => !item.trashedAt)
+    await Promise.all(removed.flatMap((item) => item.assets.map((asset) => removeAssetBlobs(snapshot.userKey, asset.id))))
+    return { deleted: removed.length }
+  }
+  const restoreMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/restore$/i)
+  if (restoreMatch && method === 'POST') {
+    const item = snapshot.items.find((entry) => entry.id === restoreMatch[1])
+    if (!item) throw new ApiRequestError(404, '条目不存在')
+    item.trashedAt = null
+    item.updatedAt = Date.now()
+    return item
+  }
+  const permanentMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/permanent$/i)
+  if (permanentMatch && method === 'DELETE') {
+    const item = snapshot.items.find((entry) => entry.id === permanentMatch[1])
+    if (!item) throw new ApiRequestError(404, '条目不存在')
+    if (!item.trashedAt) throw new ApiRequestError(400, '请先把条目移到回收站')
+    snapshot.items = snapshot.items.filter((entry) => entry.id !== permanentMatch[1])
+    await Promise.all(item.assets.map((asset) => removeAssetBlobs(snapshot.userKey, asset.id)))
+    return { ok: true }
+  }
   const itemMatch = path.match(/^\/api\/items\/([0-9a-f-]+)$/i)
   if (itemMatch && method === 'DELETE') {
     const item = snapshot.items.find((entry) => entry.id === itemMatch[1])
-    snapshot.items = snapshot.items.filter((entry) => entry.id !== itemMatch[1])
-    if (item) await Promise.all(item.assets.map((asset) => removeAssetBlobs(snapshot.userKey, asset.id)))
-    return { ok: true }
+    if (item) {
+      item.trashedAt = item.trashedAt || Date.now()
+      item.updatedAt = Date.now()
+    }
+    return { ok: true, item }
   }
   if (itemMatch && (method === 'PUT' || method === 'PATCH')) {
     const index = snapshot.items.findIndex((entry) => entry.id === itemMatch[1])
@@ -688,6 +773,9 @@ function queueLabel(entry: Pick<OfflineMutation, 'path' | 'method'>) {
   if (entry.path === '/api/items/text') return '保存文本'
   if (entry.path === '/api/items/image-group') return '保存图片组'
   if (entry.path === '/api/items/bulk') return '批量修改条目'
+  if (entry.path === '/api/items/trash/empty') return '清空回收站'
+  if (entry.path.endsWith('/restore')) return '恢复条目'
+  if (entry.path.endsWith('/permanent')) return '彻底删除条目'
   if (entry.path.includes('/assets/order')) return '调整图片顺序'
   if (entry.path.endsWith('/assets')) return '添加图片'
   if (entry.path.startsWith('/api/assets/')) return '删除图片'
@@ -703,18 +791,6 @@ function referencesItem(entry: OfflineMutation, itemId: string) {
     if (Array.isArray(entry.body.value.ids) && entry.body.value.ids.map(String).includes(itemId)) return true
   }
   return false
-}
-
-function deletedItemIds(entries: OfflineMutation[]) {
-  const ids = new Set<string>()
-  entries.forEach((entry) => {
-    const direct = entry.path.match(/^\/api\/items\/([0-9a-f-]+)$/i)
-    if (direct && entry.method === 'DELETE') ids.add(direct[1])
-    if (entry.path === '/api/items/bulk' && entry.body.kind === 'json' && entry.body.value.delete === true) {
-      if (Array.isArray(entry.body.value.ids)) entry.body.value.ids.map(String).forEach((id) => ids.add(id))
-    }
-  })
-  return ids
 }
 
 function referencesCategory(entry: OfflineMutation, categoryId: string) {
@@ -784,7 +860,8 @@ export async function readOfflineApi<T>(path: string): Promise<T> {
       date: url.searchParams.get('date') || '',
       q: url.searchParams.get('q') || '',
       priority: (url.searchParams.get('priority') as ItemFilters['priority']) || 'all',
-      sort: (url.searchParams.get('sort') as ItemFilters['sort']) || 'newest'
+      sort: (url.searchParams.get('sort') as ItemFilters['sort']) || 'newest',
+      trash: (url.searchParams.get('trash') as ItemFilters['trash']) || 'active'
     }
     return await hydrateItems(snapshot.userKey, filterLibraryItems(snapshot.items, filters)) as T
   }
@@ -829,21 +906,6 @@ export async function enqueueOfflineApi<T>(path: string, options: RequestInit): 
   }
   const result = await applyLocalMutation(snapshot, mutation)
 
-  const deleteMatch = mutation.path.match(/^\/api\/items\/([0-9a-f-]+)$/i)
-  if (deleteMatch && method === 'DELETE') {
-    const entries = await allQueueEntries()
-    const localCreate = entries.find((entry) => (
-      ['/api/items/link', '/api/items/text', '/api/items/image-group'].includes(entry.path) && bodyId(entry.body) === deleteMatch[1]
-    ))
-    if (localCreate) {
-      await deleteQueueEntries(entries.filter((entry) => referencesItem(entry, deleteMatch[1])).map((entry) => entry.id))
-      await writeSnapshot(snapshot)
-      await refreshRuntimeCounts()
-      publish({ online: false })
-      return result as T
-    }
-  }
-
   await addOrCompactQueue(mutation)
   await writeSnapshot(snapshot)
   await refreshRuntimeCounts()
@@ -872,27 +934,95 @@ async function fetchAndStoreAsset(userKey: string, asset: ImageAsset, variant: '
   await writeBlob(userKey, asset.id, variant, blob)
 }
 
-async function cacheItemAssets(userKey: string, items: LibraryItem[]) {
-  const tasks = items.flatMap((item) => item.assets.flatMap((asset) => [
-    () => fetchAndStoreAsset(userKey, asset, 'thumb'),
-    () => fetchAndStoreAsset(userKey, asset, 'original')
-  ]))
-  let cursor = 0
-  let failures = 0
-  const workers = Array.from({ length: Math.min(4, tasks.length) }, async () => {
-    while (cursor < tasks.length) {
-      const task = tasks[cursor++]
+function cacheTaskKey(userKey: string, asset: ImageAsset, variant: 'thumb' | 'original') {
+  return `${userKey}:${asset.id}:${variant}`
+}
+
+function queueAssetCaching(userKey: string, items: LibraryItem[]) {
+  const startsFresh = !cacheWorkerRunning && !cacheQueue.length && runtimeState.cachePhase === 'idle'
+  if (startsFresh) publish({ cacheCompleted: 0, cacheTotal: 0, cacheFailed: failedCacheTasks.length })
+  const assets = items.flatMap((item) => item.assets)
+  const tasks: CacheTask[] = [
+    ...assets.map((asset) => ({ key: cacheTaskKey(userKey, asset, 'thumb'), userKey, asset, variant: 'thumb' as const })),
+    ...assets.map((asset) => ({ key: cacheTaskKey(userKey, asset, 'original'), userKey, asset, variant: 'original' as const }))
+  ]
+  tasks.forEach((task) => {
+    if (queuedCacheKeys.has(task.key)) return
+    queuedCacheKeys.add(task.key)
+    cacheQueue.push(task)
+  })
+  publish({
+    cacheTotal: runtimeState.cacheCompleted + cacheQueue.length,
+    cachePhase: cachePaused ? 'paused' : (cacheQueue.length ? 'running' : runtimeState.cachePhase)
+  })
+  if (!cachePaused) void runCacheWorker()
+}
+
+async function runCacheWorker() {
+  if (cacheWorkerRunning || cachePaused || !cacheQueue.length) return
+  cacheWorkerRunning = true
+  publish({ cachePhase: 'running' })
+  try {
+    while (cacheQueue.length && !cachePaused) {
+      const task = cacheQueue.shift() as CacheTask
       try {
-        await task()
-      } catch {
-        failures += 1
-        // A failed image is retried during the next successful library refresh.
+        await fetchAndStoreAsset(task.userKey, task.asset, task.variant)
+      } catch (error) {
+        failedCacheTasks.push(task)
+        const message = error instanceof DOMException && error.name === 'QuotaExceededError'
+          ? '浏览器空间不足，图片后台缓存已暂停。'
+          : runtimeState.warning
+        if (error instanceof DOMException && error.name === 'QuotaExceededError') cachePaused = true
+        publish({ warning: message })
+      } finally {
+        queuedCacheKeys.delete(task.key)
+        publish({
+          cacheCompleted: runtimeState.cacheCompleted + 1,
+          cacheFailed: failedCacheTasks.length,
+          cachePhase: cachePaused ? 'paused' : 'running'
+        })
       }
     }
+  } finally {
+    cacheWorkerRunning = false
+    await refreshRuntimeCounts()
+    publish({
+      cachePhase: cachePaused ? 'paused' : failedCacheTasks.length ? 'error' : 'idle',
+      cacheTotal: Math.max(runtimeState.cacheTotal, runtimeState.cacheCompleted)
+    })
+  }
+}
+
+export function pauseOfflineImageCache() {
+  cachePaused = true
+  try { localStorage.setItem('do-it-laaaaaater.cache-paused.v1', '1') } catch { /* ignore */ }
+  publish({ cachePhase: 'paused' })
+}
+
+export function resumeOfflineImageCache() {
+  cachePaused = false
+  try { localStorage.removeItem('do-it-laaaaaater.cache-paused.v1') } catch { /* ignore */ }
+  publish({ cachePhase: cacheQueue.length ? 'running' : failedCacheTasks.length ? 'error' : 'idle', warning: '' })
+  void runCacheWorker()
+}
+
+export function retryOfflineImageCache() {
+  const tasks = failedCacheTasks
+  failedCacheTasks = []
+  tasks.forEach((task) => {
+    if (queuedCacheKeys.has(task.key)) return
+    queuedCacheKeys.add(task.key)
+    cacheQueue.push(task)
   })
-  await Promise.all(workers)
-  await refreshRuntimeCounts()
-  return failures
+  cachePaused = false
+  publish({
+    cacheFailed: 0,
+    cacheCompleted: 0,
+    cacheTotal: cacheQueue.length,
+    cachePhase: cacheQueue.length ? 'running' : 'idle',
+    warning: ''
+  })
+  void runCacheWorker()
 }
 
 export async function rememberSuccessfulApi(path: string, options: RequestInit, result: unknown) {
@@ -935,13 +1065,12 @@ export async function rememberSuccessfulApi(path: string, options: RequestInit, 
     const items = (result as LibraryItem[]).map(canonicalItem)
     const isCompleteList = (!url.searchParams.get('status') || url.searchParams.get('status') === 'all') &&
       !url.searchParams.get('kind') && !url.searchParams.get('category') && !url.searchParams.get('date') &&
-      !url.searchParams.get('q') && !url.searchParams.get('priority')
+      !url.searchParams.get('q') && !url.searchParams.get('priority') && url.searchParams.get('trash') === 'all'
     if (isCompleteList) {
       const queued = await allQueueEntries()
-      const deleted = deletedItemIds(queued)
-      const merged = items.filter((item) => !deleted.has(item.id))
+      const merged = [...items]
       snapshot.items.forEach((localItem) => {
-        if (deleted.has(localItem.id) || !queued.some((entry) => referencesItem(entry, localItem.id))) return
+        if (!queued.some((entry) => referencesItem(entry, localItem.id))) return
         const index = merged.findIndex((item) => item.id === localItem.id)
         if (index >= 0) merged[index] = localItem
         else merged.push(localItem)
@@ -966,13 +1095,11 @@ export async function rememberSuccessfulApi(path: string, options: RequestInit, 
   const itemsToCache = url.pathname === '/api/items' && method === 'GET'
     ? result as LibraryItem[]
     : (result && typeof result === 'object' && 'assets' in result ? [result as LibraryItem] : [])
-  const imageFailures = itemsToCache.length ? await cacheItemAssets(activeUserKey, itemsToCache) : 0
+  if (itemsToCache.length) queueAssetCaching(activeUserKey, itemsToCache)
   publish({
     online: true,
     lastSyncedAt: Date.now(),
-    warning: itemsToCache.length
-      ? (imageFailures ? `有 ${imageFailures} 个图片文件暂未缓存，将在下次同步时重试` : '')
-      : runtimeState.warning
+    warning: runtimeState.warning
   })
 }
 
@@ -1042,6 +1169,8 @@ export function initializeOfflineRuntime(remoteSender: RemoteSender) {
   sender = remoteSender
   if (initialized || typeof window === 'undefined') return
   initialized = true
+  try { cachePaused = localStorage.getItem('do-it-laaaaaater.cache-paused.v1') === '1' } catch { cachePaused = false }
+  if (cachePaused) publish({ cachePhase: 'paused' })
   const auth = cachedAuth()
   if (auth?.user?.email) configureOfflineUser(auth.user.email)
   window.addEventListener('online', () => {
@@ -1104,6 +1233,9 @@ export async function offlineStorageBytes() {
 
 export async function clearOfflineImages() {
   if (!activeUserKey) return
+  cacheQueue = []
+  failedCacheTasks = []
+  queuedCacheKeys.clear()
   const records = await allBlobRecords(activeUserKey)
   const database = await openDatabase()
   const transaction = database.transaction('blobs', 'readwrite')
@@ -1115,6 +1247,7 @@ export async function clearOfflineImages() {
     blobUrls.delete(record.key)
   })
   await transactionDone(transaction)
+  publish({ cachePhase: 'idle', cacheCompleted: 0, cacheTotal: 0, cacheFailed: 0, warning: '' })
   await refreshRuntimeCounts()
 }
 

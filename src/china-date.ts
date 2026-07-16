@@ -13,6 +13,29 @@ export function chinaToday() {
   return chinaDateKey(Date.now())
 }
 
+export function addChinaDays(days: number, value = chinaToday()) {
+  const date = new Date(value + 'T12:00:00+08:00')
+  date.setUTCDate(date.getUTCDate() + days)
+  return chinaDateKey(date)
+}
+
+export function plannedDateLabel(value: string | null, today = chinaToday()) {
+  if (!value) return ''
+  if (value < today) return '逾期 · ' + formatShortDate(value)
+  if (value === today) return '今天'
+  if (value === addChinaDays(1, today)) return '明天'
+  return formatShortDate(value)
+}
+
+export function formatShortDate(value: string) {
+  const date = new Date(value + 'T00:00:00+08:00')
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: CHINA_TIME_ZONE,
+    month: 'numeric',
+    day: 'numeric'
+  }).format(date)
+}
+
 export function plannedState(plannedFor: string | null, today = chinaToday()) {
   if (!plannedFor) return 'none' as const
   if (plannedFor < today) return 'overdue' as const

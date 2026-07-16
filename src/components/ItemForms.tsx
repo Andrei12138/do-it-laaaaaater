@@ -148,7 +148,10 @@ export function LinkForm({
         <div className="duplicate-notice" role="status">
           <strong>已经保存过了</strong>
           <span>原条目没有被修改，录入时间也保持不变。</span>
-          <button type="button" className="button button-small" onClick={() => onDuplicate(duplicateId)}>
+          <button type="button" className="button button-small" onClick={() => {
+            setDraftReady(false)
+            void discardDraft(draftKey).then(() => onDuplicate(duplicateId))
+          }}>
             查看已有条目
           </button>
         </div>
@@ -194,7 +197,7 @@ export function LinkForm({
       />
       <div className="field">
         <span>相关截图（可选）</span>
-        <ImageInput files={files} onChange={setFiles} onError={setError} />
+        <ImageInput files={files} onChange={setFiles} onError={setError} collapsible />
       </div>
       <div className="form-actions">
         <button type="button" className="button" onClick={discardAndClose}>取消</button>

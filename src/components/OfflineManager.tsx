@@ -6,6 +6,9 @@ import {
   flushOfflineQueue,
   forceOfflineMutation,
   getOfflineQueueSummaries,
+  pauseOfflineImageCache,
+  resumeOfflineImageCache,
+  retryOfflineImageCache,
   retryFailedOfflineQueue,
   useOfflineRuntime,
   type OfflineQueueSummary
@@ -112,7 +115,7 @@ export function OfflineStatusContent({ onChanged }: { onChanged?: () => Promise<
       <div className="account-section-heading">
         <AppIcon name={state.online ? 'sync' : 'warning'} size={24} />
         <div>
-          <h3>离线阅读与自动同步</h3>
+          <h3>离线与缓存</h3>
           <p>
             {state.online ? '当前已联网。' : '当前处于离线模式。'}
             {waiting ? `还有 ${waiting} 项本地修改。` : '所有修改均已同步。'}
@@ -124,6 +127,32 @@ export function OfflineStatusContent({ onChanged }: { onChanged?: () => Promise<
         <span><strong>{state.pendingCount}</strong> 等待同步</span>
         <span><strong>{state.failedCount}</strong> 同步失败</span>
         <span><strong>{formatBytes(state.storageBytes)}</strong> 图片缓存</span>
+      </div>
+
+      <div className="offline-cache-progress" role="status" aria-live="polite">
+        <div>
+          <strong>原图后台缓存</strong>
+          <span>
+            {state.cachePhase === 'running' && '正在依次下载，不影响首页使用'}
+            {state.cachePhase === 'paused' && '已暂停'}
+            {state.cachePhase === 'error' && `有 ${state.cacheFailed} 个文件等待重试`}
+            {state.cachePhase === 'idle' && (state.cacheTotal ? '本轮缓存已完成' : '联网刷新清单后自动开始')}
+          </span>
+        </div>
+        {state.cacheTotal > 0 && (
+          <>
+            <progress max={state.cacheTotal} value={Math.min(state.cacheCompleted, state.cacheTotal)} />
+            <span>{Math.min(state.cacheCompleted, state.cacheTotal)} / {state.cacheTotal}</span>
+          </>
+        )}
+        {state.storageQuota > 0 && (
+          <small>浏览器空间：已用 {formatBytes(state.storageUsage)} / 可用总额 {formatBytes(state.storageQuota)}</small>
+        )}
+        <div className="offline-cache-actions">
+          {state.cachePhase === 'running' && <Button size="small" onClick={pauseOfflineImageCache}>暂停缓存</Button>}
+          {state.cachePhase === 'paused' && <Button size="small" type="primary" onClick={resumeOfflineImageCache}>继续缓存</Button>}
+          {state.cacheFailed > 0 && <Button size="small" icon={<AppIcon name="retry" size={17} />} onClick={retryOfflineImageCache}>重试失败图片</Button>}
+        </div>
       </div>
 
       {entries.length > 0 && (
