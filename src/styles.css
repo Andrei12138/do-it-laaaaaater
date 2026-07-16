@@ -2115,32 +2115,55 @@ select {
 }
 
 .item-card-shell.is-selected .item-card {
+  background: var(--ai-primary-bg) !important;
   border-color: var(--ai-primary) !important;
   box-shadow: 0 6px 0 rgba(25, 200, 185, 0.25), var(--ai-shadow-base) !important;
 }
 
-.item-selection {
+.item-card-shell.is-selection-mode {
+  cursor: pointer;
+}
+
+.item-card-shell.is-selection-mode .item-card {
+  cursor: pointer !important;
+}
+
+.item-card-shell.is-selection-mode:hover .item-card,
+.item-card-shell.is-selection-mode .item-card:hover {
+  transform: none !important;
+}
+
+.item-card-shell.is-selection-mode:not(.is-selected):hover .item-card {
+  background: #f1fbf8 !important;
+  border-color: rgba(25, 200, 185, 0.48) !important;
+  box-shadow: 0 6px 0 rgba(25, 200, 185, 0.12), var(--ai-shadow-base) !important;
+}
+
+.item-card-selection-toggle {
   position: absolute;
-  z-index: 5;
-  top: 10px;
-  left: 10px;
-  padding: 4px 8px;
-  background: rgba(248, 248, 240, 0.96);
-  border: 2px solid var(--ai-border-light);
-  border-radius: 999px;
-  box-shadow: var(--ai-shadow-sm);
+  z-index: 10;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  color: transparent;
+  background: transparent;
+  border: 0;
+  border-radius: var(--ai-radius-lg);
+  box-shadow: none;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
-.item-selection label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 800;
+.item-card-selection-toggle:focus {
+  outline: none;
 }
 
-.item-selection [class*='animal-label-'] {
-  font-size: 12px !important;
+.item-card-selection-toggle:focus-visible {
+  outline: 4px solid var(--ai-primary);
+  outline-offset: -6px;
 }
 
 .priority-tag {

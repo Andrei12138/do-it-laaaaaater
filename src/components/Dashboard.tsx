@@ -10,7 +10,6 @@ import {
 import {
   Button,
   Card,
-  Checkbox,
   Divider,
   Drawer,
   Footer,
@@ -339,28 +338,14 @@ function ItemCard({
   const kindLabel = item.kind === 'link' ? '网页' : item.kind === 'text' ? '文本' : '图片'
   const kindIcon: AppIconName = item.kind === 'link' ? 'link' : item.kind === 'text' ? 'text' : 'image'
   const plan = plannedState(item.plannedFor)
-  const selectionControl = (
-    <div className={`item-selection${theme === 'flat-2013' ? ' item-selection-inline' : ''}`} aria-label={'选择' + item.title}>
-      {theme === 'animal-island' ? (
-        <Checkbox
-          size="large"
-          options={[{ label: '选择', value: item.id }]}
-          value={selected ? [item.id] : []}
-          onChange={(values) => onSelect(values.includes(item.id))}
-        />
-      ) : (
-        <label>
-          <input type="checkbox" checked={selected} onChange={(event) => onSelect(event.target.checked)} />
-          <span>选择</span>
-        </label>
-      )}
-    </div>
-  )
 
   return (
-    <article className={`item-card-shell${selected ? ' is-selected' : ''}`}>
-      {selectionMode && theme === 'animal-island' && selectionControl}
-      <Card className={cover ? 'item-card has-cover' : 'item-card'} pattern="default">
+    <article className={`item-card-shell${selectionMode ? ' is-selection-mode' : ''}${selected ? ' is-selected' : ''}`}>
+      <Card
+        className={cover ? 'item-card has-cover' : 'item-card'}
+        pattern="default"
+        inert={selectionMode}
+      >
         {cover && (
           <button
             type="button"
@@ -444,7 +429,6 @@ function ItemCard({
             )}
           </div>
           <div className="item-actions">
-            {selectionMode && theme === 'flat-2013' && selectionControl}
             <Button
               size="small"
               type="primary"
@@ -491,6 +475,17 @@ function ItemCard({
           )}
         </div>
       </Card>
+      {selectionMode && (
+        <button
+          type="button"
+          className="item-card-selection-toggle"
+          aria-label={(selected ? '取消选择“' : '选择“') + item.title + '”'}
+          aria-pressed={selected}
+          onClick={() => onSelect(!selected)}
+        >
+          <span className="visually-hidden">{selected ? '再次点击取消选择' : '点击整张卡片选择'}</span>
+        </button>
+      )}
     </article>
   )
 }

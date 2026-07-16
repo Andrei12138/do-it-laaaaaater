@@ -1097,7 +1097,6 @@ html[data-theme='flat-2013'] .focus-card,
 html[data-theme='flat-2013'] .focus-counter,
 html[data-theme='flat-2013'] .focus-cover span,
 html[data-theme='flat-2013'] .pwa-update,
-html[data-theme='flat-2013'] .item-selection,
 html[data-theme='flat-2013'] .card-retry,
 html[data-theme='flat-2013'] .duplicate-notice {
   background-image: none !important;
@@ -1122,45 +1121,30 @@ html[data-theme='flat-2013'] .card-category-field select {
 }
 
 html[data-theme='flat-2013'] .item-card-shell.is-selected .item-card {
+  background: #d9f4ee !important;
   border-color: var(--turq) !important;
   border-top-color: var(--turq) !important;
   box-shadow: none !important;
 }
 
-html[data-theme='flat-2013'] .item-selection {
-  background: #fff;
-  border: 1px solid var(--turq);
-}
-
-html[data-theme='flat-2013'] .item-selection.item-selection-inline {
-  position: static;
-  z-index: auto;
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  min-height: 34px;
-  padding: 6px 10px;
-  border-radius: 0;
-}
-
-html[data-theme='flat-2013'] .item-selection.item-selection-inline input {
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-}
-
-html[data-theme='flat-2013'] .item-selection input,
 html[data-theme='flat-2013'] .inline-check input,
 html[data-theme='flat-2013'] .restore-modes input {
   accent-color: var(--turq);
 }
 
-@media (max-width: 480px) {
-  html[data-theme='flat-2013'] .item-selection.item-selection-inline {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
+html[data-theme='flat-2013'] .item-card-shell.is-selection-mode:not(.is-selected):hover .item-card {
+  background: #effaf7 !important;
+  border-color: var(--turq) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='flat-2013'] .item-card-selection-toggle {
+  border-radius: 0;
+}
+
+html[data-theme='flat-2013'] .item-card-selection-toggle:focus-visible {
+  outline: 4px solid var(--turq);
+  outline-offset: -5px;
 }
 
 html[data-theme='flat-2013'] .item-actions button.is-active {
