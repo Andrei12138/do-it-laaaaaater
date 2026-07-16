@@ -32,7 +32,7 @@ import {
   useOfflineRuntime
 } from '../offline-store'
 import { useSyncStatus } from '../sync-status'
-import { getThemeDefinition, useTheme } from '../theme'
+import { getThemeDefinition, useTheme, type ThemeId } from '../theme'
 import type {
   Category,
   BulkItemChanges,
@@ -253,6 +253,49 @@ function notifyError(message: string) {
   showThemeNotification('error', message)
 }
 
+interface FilterOption {
+  key: string
+  label: string
+}
+
+function ThemeFilterSelect({
+  theme,
+  ariaLabel,
+  value,
+  options,
+  onChange
+}: {
+  theme: ThemeId
+  ariaLabel: string
+  value: string
+  options: FilterOption[]
+  onChange: (value: string) => void
+}) {
+  if (theme === 'flat-2013') {
+    return (
+      <select
+        className="flat-filter-select"
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option.key || '__all__'} value={option.key}>{option.label}</option>
+        ))}
+      </select>
+    )
+  }
+
+  return (
+    <Select
+      aria-label={ariaLabel}
+      value={value}
+      options={options}
+      onChange={onChange}
+    />
+  )
+}
+
 function ItemCard({
   item,
   categories,
@@ -296,26 +339,27 @@ function ItemCard({
   const kindLabel = item.kind === 'link' ? '网页' : item.kind === 'text' ? '文本' : '图片'
   const kindIcon: AppIconName = item.kind === 'link' ? 'link' : item.kind === 'text' ? 'text' : 'image'
   const plan = plannedState(item.plannedFor)
+  const selectionControl = (
+    <div className={`item-selection${theme === 'flat-2013' ? ' item-selection-inline' : ''}`} aria-label={'选择' + item.title}>
+      {theme === 'animal-island' ? (
+        <Checkbox
+          size="large"
+          options={[{ label: '选择', value: item.id }]}
+          value={selected ? [item.id] : []}
+          onChange={(values) => onSelect(values.includes(item.id))}
+        />
+      ) : (
+        <label>
+          <input type="checkbox" checked={selected} onChange={(event) => onSelect(event.target.checked)} />
+          <span>选择</span>
+        </label>
+      )}
+    </div>
+  )
 
   return (
     <article className={`item-card-shell${selected ? ' is-selected' : ''}`}>
-      {selectionMode && (
-        <div className="item-selection" aria-label={'选择' + item.title}>
-          {theme === 'animal-island' ? (
-            <Checkbox
-              size="large"
-              options={[{ label: '选择', value: item.id }]}
-              value={selected ? [item.id] : []}
-              onChange={(values) => onSelect(values.includes(item.id))}
-            />
-          ) : (
-            <label>
-              <input type="checkbox" checked={selected} onChange={(event) => onSelect(event.target.checked)} />
-              <span>选择</span>
-            </label>
-          )}
-        </div>
-      )}
+      {selectionMode && theme === 'animal-island' && selectionControl}
       <Card className={cover ? 'item-card has-cover' : 'item-card'} pattern="default">
         {cover && (
           <button
@@ -400,6 +444,7 @@ function ItemCard({
             )}
           </div>
           <div className="item-actions">
+            {selectionMode && theme === 'flat-2013' && selectionControl}
             <Button
               size="small"
               type="primary"
@@ -461,8 +506,8 @@ export function Dashboard({
   const themeDefinition = getThemeDefinition(theme)
   const [categories, setCategories] = useState<Category[]>([])
   const [allItems, setAllItems] = useState<LibraryItem[]>([])
-  const [items, setItems] = useState<LibraryItem[]>([])
   const [filters, setFilters] = useState<ItemFilters>(initialFilters)
+  const items = useMemo(() => filterLibraryItems(allItems, filters), [allItems, filters])
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -495,15 +540,13 @@ export function Dashboard({
     return nextCategories.find((category) => category.id === created.id) || created
   }, [refreshReferences])
 
-  const refreshItems = useCallback(async (activeFilters: ItemFilters) => {
+  const refreshItems = useCallback(async () => {
     const currentRequest = ++requestNumber.current
     setLoading(true)
     try {
       const fetchedItems = await api<LibraryItem[]>('/api/items?status=all&sort=newest')
-      const result = filterLibraryItems(fetchedItems, activeFilters)
       if (currentRequest === requestNumber.current) {
         setAllItems(fetchedItems)
-        setItems(result)
         setError('')
       }
     } catch (requestError) {
@@ -528,25 +571,23 @@ export function Dashboard({
   }, [])
 
   useEffect(() => {
-    void refreshItems(filters)
-    // Filters are applied locally after this complete offline snapshot is loaded.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void refreshItems()
   }, [refreshItems])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setItems(filterLibraryItems(allItems, filters))
-    }, filters.q ? 120 : 0)
-    return () => window.clearTimeout(timer)
-  }, [allItems, filters])
-
-  useEffect(() => {
     const synced = () => {
-      void Promise.all([refreshReferences(), refreshItems(filters)])
+      void Promise.all([refreshReferences(), refreshItems()])
     }
     window.addEventListener('offline-sync-complete', synced)
     return () => window.removeEventListener('offline-sync-complete', synced)
-  }, [filters, refreshItems, refreshReferences])
+  }, [refreshItems, refreshReferences])
+
+  useEffect(() => {
+    if (!filters.category || filters.category === 'uncategorized') return
+    if (!categories.some((category) => category.id === filters.category)) {
+      setFilters((current) => ({ ...current, category: '' }))
+    }
+  }, [categories, filters.category])
 
   useEffect(() => {
     try {
@@ -666,7 +707,7 @@ export function Dashboard({
   }, [filters.sort, items])
 
   async function reloadAll() {
-    await Promise.all([refreshReferences(), refreshItems(filters)])
+    await Promise.all([refreshReferences(), refreshItems()])
   }
 
   async function itemSaved() {
@@ -706,15 +747,15 @@ export function Dashboard({
       delete next[item.id]
       return next
     })
-    setItems((current) => current.map((entry) => entry.id === item.id ? optimisticItem(entry, changes) : entry))
+    setAllItems((current) => current.map((entry) => entry.id === item.id ? optimisticItem(entry, changes) : entry))
     try {
       const updated = await jsonRequest<LibraryItem>('/api/items/' + item.id, 'PATCH', changes)
-      setItems((current) => current.map((entry) => entry.id === item.id ? updated : entry))
-      await refreshItems(filters)
+      setAllItems((current) => current.map((entry) => entry.id === item.id ? updated : entry))
+      await refreshItems()
       notifySuccess(label)
       return true
     } catch (requestError) {
-      setItems((current) => current.map((entry) => entry.id === item.id ? previous : entry))
+      setAllItems((current) => current.map((entry) => entry.id === item.id ? previous : entry))
       setRetryItems((current) => ({ ...current, [item.id]: { changes, label } }))
       notifyError(errorMessage(requestError))
       return false
@@ -988,8 +1029,9 @@ export function Dashboard({
             />
           </label>
           <div className="filter-select advanced-filter">
-            <Select
-              aria-label="内容类型"
+            <ThemeFilterSelect
+              theme={theme}
+              ariaLabel="内容类型"
               value={filters.kind}
               options={[
                 { key: 'all', label: '全部类型' },
@@ -1004,8 +1046,9 @@ export function Dashboard({
             />
           </div>
           <div className="filter-select advanced-filter">
-            <Select
-              aria-label="优先筛选"
+            <ThemeFilterSelect
+              theme={theme}
+              ariaLabel="优先筛选"
               value={filters.priority}
               options={[
                 { key: 'all', label: '全部优先级' },
@@ -1019,8 +1062,9 @@ export function Dashboard({
             />
           </div>
           <div className="filter-select advanced-filter">
-            <Select
-              aria-label="类别"
+            <ThemeFilterSelect
+              theme={theme}
+              ariaLabel="类别"
               value={filters.category}
               options={[
                 { key: '', label: '全部类别' },
@@ -1040,8 +1084,9 @@ export function Dashboard({
             />
           </label>
           <div className="filter-select sort-select advanced-filter">
-            <Select
-              aria-label="排序方式"
+            <ThemeFilterSelect
+              theme={theme}
+              ariaLabel="排序方式"
               value={filters.sort}
               options={[
                 { key: 'smart', label: '智能优先' },
@@ -1231,8 +1276,9 @@ export function Dashboard({
         <div className="mobile-filter-sheet stack">
           <label className="field">
             <span>内容类型</span>
-            <Select
-              aria-label="内容类型"
+            <ThemeFilterSelect
+              theme={theme}
+              ariaLabel="内容类型"
               value={filters.kind}
               options={[
                 { key: 'all', label: '全部类型' },
@@ -1245,8 +1291,9 @@ export function Dashboard({
           </label>
           <label className="field">
             <span>优先级</span>
-            <Select
-              aria-label="优先筛选"
+            <ThemeFilterSelect
+              theme={theme}
+              ariaLabel="优先筛选"
               value={filters.priority}
               options={[
                 { key: 'all', label: '全部优先级' },
@@ -1258,8 +1305,9 @@ export function Dashboard({
           </label>
           <label className="field">
             <span>类别</span>
-            <Select
-              aria-label="类别"
+            <ThemeFilterSelect
+              theme={theme}
+              ariaLabel="类别"
               value={filters.category}
               options={[
                 { key: '', label: '全部类别' },
@@ -1275,8 +1323,9 @@ export function Dashboard({
           </label>
           <label className="field">
             <span>排序方式</span>
-            <Select
-              aria-label="排序方式"
+            <ThemeFilterSelect
+              theme={theme}
+              ariaLabel="排序方式"
               value={filters.sort}
               options={[
                 { key: 'smart', label: '智能优先' },

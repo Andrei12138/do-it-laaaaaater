@@ -645,6 +645,11 @@ select {
   width: 100%;
 }
 
+.filter-select > select {
+  min-height: 42px;
+  width: 100%;
+}
+
 .date-field input {
   min-height: 42px;
   background: var(--ai-bg);

@@ -3,8 +3,13 @@ import { readFile } from 'node:fs/promises'
 import { strFromU8, unzipSync } from 'fflate'
 import sharp from 'sharp'
 
-async function selectAnimalOption(page: Page, name: string, option: string) {
-  await page.getByRole('combobox', { name, exact: true }).click()
+async function selectDashboardOption(page: Page, name: string, option: string) {
+  const combobox = page.getByRole('combobox', { name, exact: true })
+  if (await combobox.evaluate((element) => element.tagName === 'SELECT')) {
+    await combobox.selectOption({ label: option })
+    return
+  }
+  await combobox.click()
   await page.locator('[class*="animal-dropdown-"]:visible').getByRole('option', { name: option, exact: true }).click()
 }
 
@@ -144,21 +149,31 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(page.locator('.item-card')).toContainText('图片组')
   await search.fill('')
 
-  await selectAnimalOption(page, '内容类型', '网页')
+  await expect(page.getByRole('combobox', { name: '内容类型', exact: true })).toHaveJSProperty('tagName', 'SELECT')
+  await expect(page.getByRole('combobox', { name: '优先筛选', exact: true })).toHaveJSProperty('tagName', 'SELECT')
+  await expect(page.getByRole('combobox', { name: '类别', exact: true })).toHaveJSProperty('tagName', 'SELECT')
+  await expect(page.getByRole('combobox', { name: '排序方式', exact: true })).toHaveJSProperty('tagName', 'SELECT')
+  await page.setViewportSize({ width: 1920, height: 1080 })
+  await page.screenshot({ path: 'test-results/flat-filter-controls.png', fullPage: true })
+  await page.setViewportSize({ width: 1440, height: 900 })
+
+  await selectDashboardOption(page, '内容类型', '网页')
   await expect(page.locator('.item-card')).toHaveCount(1)
   await expect(page.locator('.item-card')).toContainText('公司里待阅读的示例文章')
-  await selectAnimalOption(page, '内容类型', '文本')
+  await selectDashboardOption(page, '内容类型', '文本')
   await expect(page.locator('.item-card')).toHaveCount(1)
   await expect(page.locator('.item-card')).toContainText('回家后整理这段纯文字')
-  await selectAnimalOption(page, '内容类型', '图片')
+  await selectDashboardOption(page, '内容类型', '图片')
   await expect(page.locator('.item-card')).toHaveCount(1)
   await expect(page.locator('.item-card')).toContainText('图片组')
   await page.getByRole('button', { name: '清除筛选' }).click()
 
-  await selectAnimalOption(page, '类别', '其他')
+  await selectDashboardOption(page, '类别', '其他')
   await expect(page.locator('.item-card')).toHaveCount(1)
   await expect(page.locator('.item-card')).toContainText('图片组')
-  await selectAnimalOption(page, '类别', '生活')
+  await selectDashboardOption(page, '类别', '全部类别')
+  await expect(page.locator('.item-card')).toHaveCount(3)
+  await selectDashboardOption(page, '类别', '生活')
   await expect(page.locator('.item-card')).toHaveCount(1)
   await expect(page.locator('.item-card')).toContainText('回家后整理这段纯文字')
   await page.getByRole('button', { name: '清除筛选' }).click()
@@ -203,17 +218,17 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(linkCard.getByRole('button', { name: '取消星标', exact: true })).toBeVisible()
   await linkCard.getByRole('button', { name: '今天处理', exact: true }).click()
   await expect(linkCard.getByRole('button', { name: '移出今日', exact: true })).toBeVisible()
-  await selectAnimalOption(page, '优先筛选', '今日 / 逾期')
+  await selectDashboardOption(page, '优先筛选', '今日 / 逾期')
   await expect(page.locator('.item-card')).toHaveCount(1)
   await expect(page.locator('.item-card')).toContainText('公司里待阅读的示例文章（已编辑）')
   await page.getByRole('button', { name: '清除筛选' }).click()
 
-  await selectAnimalOption(page, '排序方式', '最久未看')
+  await selectDashboardOption(page, '排序方式', '最久未看')
   await expect.poll(() => page.evaluate(() => localStorage.getItem('do-it-laaaaaater.item-sort.v1'))).toBe('oldest')
   await page.reload()
   await expect(page.getByText('发现一份未完成草稿')).toHaveCount(0)
   await expect(page.getByRole('combobox', { name: '排序方式' })).toContainText('最久未看')
-  await selectAnimalOption(page, '排序方式', '智能优先')
+  await selectDashboardOption(page, '排序方式', '智能优先')
 
   await page.getByRole('button', { name: '开始处理' }).click()
   const focusDialog = page.getByRole('dialog', { name: '晚间处理模式' })
@@ -243,6 +258,19 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
 
   await page.getByRole('button', { name: '选择条目' }).click()
   const bulkToolbar = page.getByRole('toolbar', { name: '批量操作' })
+  const flatSelection = page.locator('.item-card').first().locator('.item-selection-inline')
+  await expect(flatSelection).toBeVisible()
+  await expect(flatSelection.locator('input[type="checkbox"]')).toHaveCSS('width', '16px')
+  await expect(flatSelection.locator('input[type="checkbox"]')).toHaveCSS('height', '16px')
+  expect(await flatSelection.evaluate((element) => element.parentElement?.classList.contains('item-actions'))).toBe(true)
+  const selectionBox = await flatSelection.boundingBox()
+  const headingBox = await page.locator('.item-card').first().locator('.item-heading').boundingBox()
+  expect((selectionBox?.y || 0) >= (headingBox?.y || 0) + (headingBox?.height || 0)).toBe(true)
+  await page.screenshot({ path: 'test-results/flat-selection-layout.png', fullPage: true })
+  await page.setViewportSize({ width: 430, height: 932 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({ path: 'test-results/flat-selection-mobile.png' })
+  await page.setViewportSize({ width: 1440, height: 900 })
   await bulkToolbar.getByRole('button', { name: '全选当前结果' }).click()
   await expect(bulkToolbar).toContainText('已选 3 条')
   await bulkToolbar.getByRole('button', { name: '加星标' }).click()

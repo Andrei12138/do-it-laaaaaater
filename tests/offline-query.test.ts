@@ -50,6 +50,8 @@ describe('离线清单筛选', () => {
     expect(filterLibraryItems(items, { ...baseFilters, status: 'completed' }).map((entry) => entry.id)).toEqual(['done'])
     expect(filterLibraryItems(items, { ...baseFilters, kind: 'link' }).map((entry) => entry.id)).toEqual(['new'])
     expect(filterLibraryItems(items, { ...baseFilters, category: 'life' }).map((entry) => entry.id)).toEqual(['image'])
+    expect(filterLibraryItems(items, { ...baseFilters, category: '' }).map((entry) => entry.id)).toEqual(['new', 'image', 'done'])
+    expect(filterLibraryItems(items, { ...baseFilters, category: 'uncategorized' }).map((entry) => entry.id)).toEqual(['new', 'done'])
     expect(filterLibraryItems(items, { ...baseFilters, q: 'island.png' }).map((entry) => entry.id)).toEqual(['image'])
   })
 
