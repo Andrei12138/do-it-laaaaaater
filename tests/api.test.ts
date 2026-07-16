@@ -144,6 +144,15 @@ describe('本地应用接口', () => {
     expect(duplicate.status).toBe(409)
     expect(duplicate.body.details.existingId).toBe(created.body.id)
 
+    expect((await agent.delete('/api/items/' + created.body.id)).status).toBe(200)
+    const duplicateInTrash = await agent
+      .post('/api/items/link')
+      .field('url', 'https://example.com/article?q=1')
+      .field('title', '回收站重复')
+    expect(duplicateInTrash.status).toBe(409)
+    expect(duplicateInTrash.body.details.trashed).toBe(true)
+    expect((await agent.post('/api/items/' + created.body.id + '/restore')).status).toBe(200)
+
     const search = await agent.get('/api/items').query({ status: 'pending', q: '研究' })
     expect(search.status).toBe(200)
     expect(search.body).toHaveLength(1)
@@ -231,6 +240,33 @@ describe('本地应用接口', () => {
     expect((await agent.delete('/api/assets/' + ordered.body.assets[1].id)).status).toBe(200)
     expect((await agent.delete('/api/assets/' + ordered.body.assets[0].id)).status).toBe(400)
     expect((await agent.delete('/api/items/' + created.body.id)).status).toBe(200)
+    expect(readdirSync(context.originalsDir)).toHaveLength(1)
+    expect(readdirSync(context.thumbsDir)).toHaveLength(1)
+    expect((await agent.get('/api/items?status=all')).body).toHaveLength(0)
+    expect((await agent.get('/api/items?status=all&trash=only')).body).toHaveLength(1)
+    expect((await agent.post('/api/items/' + created.body.id + '/restore')).status).toBe(200)
+    expect((await agent.get('/api/items?status=all')).body).toHaveLength(1)
+    expect((await agent.delete('/api/items/' + created.body.id)).status).toBe(200)
+    expect((await agent.delete('/api/items/' + created.body.id + '/permanent')).status).toBe(200)
+    expect(readdirSync(context.originalsDir)).toHaveLength(0)
+    expect(readdirSync(context.thumbsDir)).toHaveLength(0)
+  })
+
+  it('回收站满 7 天后在下次打开清单时自动清理图片', async () => {
+    await setup()
+    const created = await agent
+      .post('/api/items/image-group')
+      .field('title', '过期回收站图片')
+      .attach('images', PNG, { filename: 'expired.png', contentType: 'image/png' })
+    expect(created.status).toBe(201)
+    expect((await agent.delete('/api/items/' + created.body.id)).status).toBe(200)
+    context.db.prepare('UPDATE items SET trashed_at=? WHERE id=?').run(
+      Date.now() - 8 * 24 * 60 * 60 * 1000,
+      created.body.id
+    )
+    const trash = await agent.get('/api/items?status=all&trash=only')
+    expect(trash.status).toBe(200)
+    expect(trash.body).toHaveLength(0)
     expect(readdirSync(context.originalsDir)).toHaveLength(0)
     expect(readdirSync(context.thumbsDir)).toHaveLength(0)
   })

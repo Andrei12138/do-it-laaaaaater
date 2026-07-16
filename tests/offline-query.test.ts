@@ -9,7 +9,8 @@ const baseFilters: ItemFilters = {
   date: '',
   q: '',
   priority: 'all',
-  sort: 'newest'
+  sort: 'newest',
+  trash: 'active'
 }
 
 function item(input: Partial<LibraryItem> & Pick<LibraryItem, 'id' | 'title'>): LibraryItem {
@@ -25,7 +26,8 @@ function item(input: Partial<LibraryItem> & Pick<LibraryItem, 'id' | 'title'>): 
     updatedAt: input.updatedAt || input.createdAt || 1,
     completedAt: input.completedAt || null,
     isStarred: input.isStarred || false,
-    plannedFor: input.plannedFor || null
+    plannedFor: input.plannedFor || null,
+    trashedAt: input.trashedAt || null
   }
 }
 
@@ -59,5 +61,15 @@ describe('离线清单筛选', () => {
     expect(filterLibraryItems(items, baseFilters).map((entry) => entry.id)).toEqual(['new', 'image', 'done'])
     expect(filterLibraryItems(items, { ...baseFilters, sort: 'oldest' }).map((entry) => entry.id)).toEqual(['done', 'image', 'new'])
     expect(filterLibraryItems(items, { ...baseFilters, sort: 'recently_completed' })[0].id).toBe('done')
+  })
+
+  it('区分阅读清单与回收站，并可按计划日期排序', () => {
+    const rows = [
+      item({ id: 'week', title: '一周后', plannedFor: '2026-07-23', createdAt: 30 }),
+      item({ id: 'tomorrow', title: '明天', plannedFor: '2026-07-17', createdAt: 20 }),
+      item({ id: 'trash', title: '已删除', trashedAt: Date.now(), createdAt: 10 })
+    ]
+    expect(filterLibraryItems(rows, { ...baseFilters, sort: 'planned_date' }).map((entry) => entry.id)).toEqual(['tomorrow', 'week'])
+    expect(filterLibraryItems(rows, { ...baseFilters, trash: 'only' }).map((entry) => entry.id)).toEqual(['trash'])
   })
 })

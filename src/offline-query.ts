@@ -14,6 +14,8 @@ export function filterLibraryItems(items: LibraryItem[], filters: ItemFilters) {
   const query = filters.q.trim().toLocaleLowerCase('zh-CN')
   const today = chinaToday()
   const result = items.filter((item) => {
+    if (filters.trash === 'active' && item.trashedAt) return false
+    if (filters.trash === 'only' && !item.trashedAt) return false
     if (filters.status !== 'all' && item.status !== filters.status) return false
     if (filters.kind !== 'all' && item.kind !== filters.kind) return false
     if (filters.category === 'uncategorized' && item.category) return false
@@ -37,6 +39,11 @@ export function filterLibraryItems(items: LibraryItem[], filters: ItemFilters) {
     if (filters.sort === 'oldest') return left.createdAt - right.createdAt || left.id.localeCompare(right.id)
     if (filters.sort === 'recently_completed') {
       return (right.completedAt || 0) - (left.completedAt || 0) || right.createdAt - left.createdAt
+    }
+    if (filters.sort === 'planned_date') {
+      const leftPlan = left.plannedFor || '9999-12-31'
+      const rightPlan = right.plannedFor || '9999-12-31'
+      return leftPlan.localeCompare(rightPlan) || right.createdAt - left.createdAt
     }
     if (filters.sort === 'smart') {
       return smartPriority(left, today) - smartPriority(right, today) || right.createdAt - left.createdAt

@@ -42,6 +42,7 @@ interface CloudItemRow {
   completed_at: string | null
   is_starred: boolean
   planned_for: string | null
+  trashed_at: string | null
   category?: Category | Category[] | null
   assets?: CloudAssetRow[] | null
 }
@@ -293,13 +294,14 @@ async function serializeRows(rows: CloudItemRow[]): Promise<LibraryItem[]> {
       updatedAt: dateValue(row.updated_at),
       completedAt: row.completed_at ? dateValue(row.completed_at) : null,
       isStarred: Boolean(row.is_starred),
-      plannedFor: row.planned_for || null
+      plannedFor: row.planned_for || null,
+      trashedAt: row.trashed_at ? dateValue(row.trashed_at) : null
     }
   })
 }
 
 const ITEM_SELECT = [
-  'id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,is_starred,planned_for',
+  'id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,is_starred,planned_for,trashed_at',
   'category:categories(id,name,color)',
   'assets(id,item_id,user_id,role,original_name,original_path,thumb_path,mime_type,size,width,height,sort_order,created_at)'
 ].join(',')
@@ -337,8 +339,11 @@ function filterRows(rows: CloudItemRow[], params: URLSearchParams) {
   const category = params.get('category')
   const date = params.get('date')
   const priority = params.get('priority')
+  const trash = params.get('trash') || 'active'
   const needle = (params.get('q') || '').trim().toLocaleLowerCase('zh-CN')
   return rows.filter((row) => {
+    if (trash === 'active' && row.trashed_at) return false
+    if (trash === 'only' && !row.trashed_at) return false
     if ((status === 'pending' || status === 'completed') && row.status !== status) return false
     if ((kind === 'link' || kind === 'text' || kind === 'image_group') && row.kind !== kind) return false
     if (category === 'uncategorized' && row.category_id) return false
@@ -364,6 +369,11 @@ function filterRows(rows: CloudItemRow[], params: URLSearchParams) {
     if (sort === 'recently_completed') {
       return dateValue(right.completed_at || '1970-01-01') - dateValue(left.completed_at || '1970-01-01') ||
         dateValue(right.created_at) - dateValue(left.created_at)
+    }
+    if (sort === 'planned_date') {
+      const leftPlan = left.planned_for || '9999-12-31'
+      const rightPlan = right.planned_for || '9999-12-31'
+      return leftPlan.localeCompare(rightPlan) || dateValue(right.created_at) - dateValue(left.created_at)
     }
     if (sort === 'newest') return dateValue(right.created_at) - dateValue(left.created_at)
     const today = chinaDate(new Date().toISOString())
@@ -433,6 +443,7 @@ interface BackupImportItem {
   completedAt: number | null
   isStarred: boolean
   plannedFor: string | null
+  trashedAt: number | null
   assets: BackupImportAsset[]
 }
 
@@ -474,6 +485,8 @@ function parseBackupImportItem(value: FormDataEntryValue | null): BackupImportIt
     }
   })
   const plannedFor = raw.plannedFor === null || raw.plannedFor === undefined ? null : validPlannedFor(raw.plannedFor)
+  const trashedAt = raw.trashedAt === null || raw.trashedAt === undefined ? null : Number(raw.trashedAt)
+  if (trashedAt !== null && (!Number.isFinite(trashedAt) || trashedAt < 0)) apiError(400, '备份条目回收站时间无效')
   const webCoverCount = assets.filter((asset) => asset.role === 'web_cover').length
   const manualCount = assets.filter((asset) => asset.role !== 'web_cover').length
   if (webCoverCount > 1 || manualCount > MAX_IMAGES_PER_ITEM) apiError(400, '备份图片数量超出限制')
@@ -488,6 +501,7 @@ function parseBackupImportItem(value: FormDataEntryValue | null): BackupImportIt
     completedAt,
     isStarred: Boolean(raw.isStarred),
     plannedFor,
+    trashedAt,
     assets
   }
 }
@@ -553,7 +567,8 @@ async function handleBackup(path: string, method: string, options: RequestInit) 
     updated_at: new Date(item.updatedAt).toISOString(),
     completed_at: item.status === 'completed' ? new Date(item.completedAt || item.updatedAt).toISOString() : null,
     is_starred: item.isStarred,
-    planned_for: item.status === 'completed' ? null : item.plannedFor
+    planned_for: item.status === 'completed' ? null : item.plannedFor,
+    trashed_at: item.trashedAt ? new Date().toISOString() : null
   }).select('id').single()
   if (inserted.error) apiError(400, messageFrom(inserted.error, '条目恢复失败'))
   try {
@@ -565,7 +580,7 @@ async function handleBackup(path: string, method: string, options: RequestInit) 
     }
   } catch (error) {
     try {
-      await deleteItem(user.id, item.id)
+      await permanentlyDeleteItem(user.id, item.id)
     } catch {
       // Keep the original restore error; the report will flag this item.
     }
@@ -664,13 +679,27 @@ async function removeAssetRows(rows: CloudAssetRow[]) {
   await removeStorage(rows.flatMap((row) => [row.original_path, row.thumb_path]))
 }
 
-async function deleteItem(userId: string, itemId: string) {
+async function permanentlyDeleteItem(userId: string, itemId: string) {
   const client = requireSupabase()
   const assetsResult = await client.from('assets').select('*').eq('item_id', itemId).eq('user_id', userId)
   if (assetsResult.error) apiError(500, '无法读取条目图片')
   const deleted = await client.from('items').delete().eq('id', itemId).eq('user_id', userId).select('id').maybeSingle()
   if (deleted.error || !deleted.data) apiError(404, '条目不存在')
   await removeStorage(((assetsResult.data || []) as CloudAssetRow[]).flatMap((row) => [row.original_path, row.thumb_path]))
+}
+
+async function purgeExpiredTrash(userId: string) {
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  const result = await requireSupabase().from('items').select('id')
+    .eq('user_id', userId).not('trashed_at', 'is', null).lte('trashed_at', cutoff)
+  if (result.error) return
+  for (const row of result.data || []) {
+    try {
+      await permanentlyDeleteItem(userId, row.id)
+    } catch {
+      // Cleanup is best-effort and will run again on the next online visit.
+    }
+  }
 }
 
 async function insertItem(input: {
@@ -701,13 +730,14 @@ async function insertItem(input: {
   }).select('id').single()
   if (result.error) {
     if (result.error.code === '23505' && input.normalizedUrl) {
-      const existing = await requireSupabase().from('items').select('id')
+      const existing = await requireSupabase().from('items').select('id,trashed_at')
         .eq('user_id', input.userId)
         .eq('kind', 'link')
         .eq('normalized_url', input.normalizedUrl)
         .maybeSingle()
-      apiError(409, '这个网页已经保存过了', {
-        existingId: existing.data?.id || undefined
+      apiError(409, existing.data?.trashed_at ? '这个网页在回收站中' : '这个网页已经保存过了', {
+        existingId: existing.data?.id || undefined,
+        trashed: Boolean(existing.data?.trashed_at)
       })
     }
     apiError(400, messageFrom(result.error, '条目保存失败'))
@@ -892,9 +922,12 @@ async function createLink(options: RequestInit) {
   const existingById = await client.from('items').select('id').eq('id', requestedId).eq('user_id', user.id).maybeSingle()
   if (existingById.data) return getItem(user.id, requestedId)
   const normalizedUrl = normalizeWebUrl(String(form.get('url') || ''))
-  const duplicate = await client.from('items').select('id').eq('user_id', user.id).eq('kind', 'link')
+  const duplicate = await client.from('items').select('id,trashed_at').eq('user_id', user.id).eq('kind', 'link')
     .eq('normalized_url', normalizedUrl).maybeSingle()
-  if (duplicate.data) apiError(409, '这个网页已经保存过了', { existingId: duplicate.data.id })
+  if (duplicate.data) apiError(409, duplicate.data.trashed_at ? '这个网页在回收站中' : '这个网页已经保存过了', {
+    existingId: duplicate.data.id,
+    trashed: Boolean(duplicate.data.trashed_at)
+  })
   const categoryId = await ensureCategory(user.id, form.get('categoryId'))
   const title = requiredTitle(form.get('title'), new URL(normalizedUrl).hostname)
   const itemId = await insertItem({
@@ -913,7 +946,7 @@ async function createLink(options: RequestInit) {
     await maybeUploadCover(user.id, itemId, String(form.get('coverUrl') || '').trim())
     return getItem(user.id, itemId)
   } catch (error) {
-    await deleteItem(user.id, itemId).catch(() => undefined)
+    await permanentlyDeleteItem(user.id, itemId).catch(() => undefined)
     throw error
   }
 }
@@ -942,7 +975,7 @@ async function createImageGroup(options: RequestInit) {
     await uploadFiles({ userId: user.id, itemId, files, role: 'gallery', assetIds: clientAssetIds(form, files.length) })
     return getItem(user.id, itemId)
   } catch (error) {
-    await deleteItem(user.id, itemId).catch(() => undefined)
+    await permanentlyDeleteItem(user.id, itemId).catch(() => undefined)
     throw error
   }
 }
@@ -952,6 +985,7 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
   const user = await currentUser()
   const path = url.pathname
   if (path === '/api/items' && method === 'GET') {
+    await purgeExpiredTrash(user.id)
     const rows = filterRows(await loadItemRows(user.id), url.searchParams)
     return serializeRows(rows)
   }
@@ -982,20 +1016,35 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
     const rows = (await loadItemRows(user.id)).filter((row) => ids.includes(row.id))
     const succeededIds: string[] = []
     const failed: Array<{ id: string; error: string }> = []
-    if (body.delete === true) {
+    if (body.permanentDelete === true) {
       for (const id of ids) {
-        if (!rows.some((row) => row.id === id)) {
-          succeededIds.push(id)
-          continue
-        }
+        const row = rows.find((entry) => entry.id === id)
+        if (!row?.trashed_at) continue
         try {
-          await deleteItem(user.id, id)
+          await permanentlyDeleteItem(user.id, id)
           succeededIds.push(id)
         } catch (error) {
           failed.push({ id, error: messageFrom(error, '删除失败') })
         }
       }
       return { updated: 0, deleted: succeededIds.length, succeededIds, failed }
+    }
+    if (body.delete === true || body.restore === true) {
+      const trashedAt = body.restore === true ? null : new Date().toISOString()
+      for (const id of ids) {
+        const row = rows.find((entry) => entry.id === id)
+        if (!row) continue
+        const result = await client.from('items').update({ trashed_at: trashedAt, updated_at: new Date().toISOString() })
+          .eq('id', id).eq('user_id', user.id)
+        if (result.error) failed.push({ id, error: '操作失败' })
+        else succeededIds.push(id)
+      }
+      return {
+        updated: body.restore === true ? succeededIds.length : 0,
+        deleted: body.delete === true ? succeededIds.length : 0,
+        succeededIds,
+        failed
+      }
     }
     if (rows.length !== ids.length) apiError(404, '部分条目不存在')
     const changes = body.changes && typeof body.changes === 'object'
@@ -1010,6 +1059,36 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
       }
     }
     return { updated: succeededIds.length, deleted: 0, succeededIds, failed }
+  }
+
+  if (path === '/api/items/trash/empty' && method === 'POST') {
+    const body = parseJsonBody(options)
+    if (body.confirmed !== true) apiError(400, '清空回收站需要明确确认')
+    const rows = (await loadItemRows(user.id)).filter((row) => row.trashed_at)
+    let deleted = 0
+    for (const row of rows) {
+      await permanentlyDeleteItem(user.id, row.id)
+      deleted += 1
+    }
+    return { deleted }
+  }
+
+  const restoreMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/restore$/i)
+  if (restoreMatch && method === 'POST') {
+    const result = await client.from('items').update({ trashed_at: null, updated_at: new Date().toISOString() })
+      .eq('id', restoreMatch[1]).eq('user_id', user.id).select('id').maybeSingle()
+    if (result.error || !result.data) apiError(404, '条目不存在')
+    return getItem(user.id, restoreMatch[1])
+  }
+
+  const permanentMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/permanent$/i)
+  if (permanentMatch && method === 'DELETE') {
+    const rows = await loadItemRows(user.id, permanentMatch[1])
+    if (!rows.length) apiError(404, '条目不存在')
+    if (!rows[0].trashed_at) apiError(400, '请先把条目移到回收站')
+    assertCloudItemVersion(rows[0], parseJsonBody(options))
+    await permanentlyDeleteItem(user.id, permanentMatch[1])
+    return { ok: true }
   }
 
   const coverMatch = path.match(/^\/api\/items\/([0-9a-f-]+)\/cover$/i)
@@ -1089,8 +1168,14 @@ async function handleItems(url: URL, method: string, options: RequestInit) {
     const rows = await loadItemRows(user.id, itemId)
     if (!rows.length) apiError(404, '条目不存在')
     assertCloudItemVersion(rows[0], parseJsonBody(options))
-    await deleteItem(user.id, itemId)
-    return { ok: true }
+    if (!rows[0].trashed_at) {
+      const updated = await client.from('items').update({
+        trashed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }).eq('id', itemId).eq('user_id', user.id)
+      if (updated.error) apiError(500, '移入回收站失败')
+    }
+    return { ok: true, item: await getItem(user.id, itemId) }
   }
   if (method === 'PATCH') return patchCloudItem(user.id, itemId, parseJsonBody(options))
   if (method === 'PUT') {

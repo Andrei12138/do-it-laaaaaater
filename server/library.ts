@@ -47,7 +47,8 @@ export function serializeItem(context: AppContext, userId: string, row: Row) {
     updatedAt: Number(row.updated_at),
     completedAt: numberOrNull(row.completed_at),
     isStarred: Boolean(Number(row.is_starred || 0)),
-    plannedFor: row.planned_for ? String(row.planned_for) : null
+    plannedFor: row.planned_for ? String(row.planned_for) : null,
+    trashedAt: numberOrNull(row.trashed_at)
   }
 }
 
@@ -65,11 +66,15 @@ export interface ItemFilters {
   q?: string
   priority?: string
   sort?: string
+  trash?: string
 }
 
 export function listItems(context: AppContext, userId: string, filters: ItemFilters) {
   const conditions = ['i.user_id = ?']
   const params: Array<string | number> = [userId]
+
+  if (filters.trash === 'only') conditions.push('i.trashed_at IS NOT NULL')
+  else if (filters.trash !== 'all') conditions.push('i.trashed_at IS NULL')
 
   if (filters.status === 'pending' || filters.status === 'completed') {
     conditions.push('i.status = ?')
@@ -122,6 +127,7 @@ export function listItems(context: AppContext, userId: string, filters: ItemFilt
   let order = 'i.created_at DESC, i.id DESC'
   if (filters.sort === 'oldest') order = 'i.created_at ASC, i.id ASC'
   if (filters.sort === 'recently_completed') order = 'COALESCE(i.completed_at,0) DESC, i.created_at DESC, i.id DESC'
+  if (filters.sort === 'planned_date') order = "CASE WHEN i.planned_for IS NULL THEN 1 ELSE 0 END, i.planned_for ASC, i.created_at DESC, i.id DESC"
   if (!filters.sort || filters.sort === 'smart') {
     order = [
       'CASE',

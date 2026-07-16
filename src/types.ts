@@ -1,7 +1,8 @@
 export type ItemStatus = 'pending' | 'completed'
 export type ItemKind = 'link' | 'text' | 'image_group'
-export type ItemSort = 'smart' | 'newest' | 'oldest' | 'recently_completed'
+export type ItemSort = 'smart' | 'newest' | 'oldest' | 'recently_completed' | 'planned_date'
 export type PriorityFilter = 'all' | 'planned' | 'starred'
+export type TrashFilter = 'active' | 'only' | 'all'
 
 export interface AuthStatus {
   setupRequired: boolean
@@ -42,6 +43,7 @@ export interface LibraryItem {
   completedAt: number | null
   isStarred: boolean
   plannedFor: string | null
+  trashedAt: number | null
 }
 
 export interface ItemFilters {
@@ -52,6 +54,7 @@ export interface ItemFilters {
   q: string
   priority: PriorityFilter
   sort: ItemSort
+  trash: TrashFilter
 }
 
 export interface AppPreferences {

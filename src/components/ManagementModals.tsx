@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Button, Card, Select } from 'animal-island-ui'
 import { api, errorMessage, jsonRequest } from '../api'
 import { requestPwaInstall, usePwaInstall } from '../pwa'
@@ -143,7 +143,9 @@ export function AccountManager({
   const [quickCategoryId, setQuickCategoryId] = useState('')
   const [preferenceBusy, setPreferenceBusy] = useState(false)
   const [showInstallGuide, setShowInstallGuide] = useState(false)
+  const [shortcutCopied, setShortcutCopied] = useState(false)
   const installMode = usePwaInstall()
+  const shortcutPrefix = (window.location.protocol === 'http:' ? window.location.origin : 'https://do-it-laaaaaater.vercel.app') + '/#quick-clipboard='
 
   useEffect(() => {
     void api<AppPreferences>('/api/preferences').then((preferences) => {
@@ -190,6 +192,16 @@ export function AccountManager({
     }
   }
 
+  async function copyShortcutPrefix() {
+    try {
+      await navigator.clipboard.writeText(shortcutPrefix)
+      setShortcutCopied(true)
+      window.setTimeout(() => setShortcutCopied(false), 1800)
+    } catch {
+      setError('浏览器没有允许复制，请手动选中接收地址复制。')
+    }
+  }
+
   return (
     <Modal title="账号设置" onClose={onClose} wide>
       <div className="account-settings stack">
@@ -227,11 +239,11 @@ export function AccountManager({
           </div>
         </AccountPanel>
 
-        <AccountPanel className="home-screen-install" label="安装到主屏幕">
+        <AccountPanel className="home-screen-install" label="安装与 iPhone">
           <div className="account-section-heading">
             <AppIcon name="install" size={24} />
             <div>
-              <h3>安装到主屏幕</h3>
+              <h3>安装与 iPhone</h3>
               <p>安装后可以从桌面直接打开，并以独立应用窗口运行。</p>
             </div>
           </div>
@@ -258,18 +270,37 @@ export function AccountManager({
             <div className="notice notice-warning">当前浏览器没有提供直接安装按钮；可在浏览器菜单中查找“安装应用”或“添加到主屏幕”。</div>
           )}
           <p className="install-note">首次从主屏幕打开时，可能需要重新登录一次。</p>
+          <div className="iphone-shortcut-guide">
+            <div className="account-section-heading">
+              <AppIcon name="clipboard" size={24} />
+              <div>
+                <h3>iPhone 剪贴板快捷保存</h3>
+                <p>快捷指令只读取文字和网址；点一次就会打开本站并按默认类别保存。</p>
+              </div>
+            </div>
+            <ol className="install-steps">
+              <li>在“快捷指令”App 中新建快捷指令，依次加入“获取剪贴板”和“URL 编码”。</li>
+              <li>加入“文本”，先粘贴下面的接收地址，再紧接着放入上一步编码后的内容。</li>
+              <li>最后加入“打开 URL”，命名为“稍后保存剪贴板”，可放到主屏幕。</li>
+            </ol>
+            <div className="shortcut-prefix-box">
+              <code>{shortcutPrefix}</code>
+              <Button size="small" onClick={() => void copyShortcutPrefix()}>{shortcutCopied ? '已复制' : '复制接收地址'}</Button>
+            </div>
+            <p className="muted">内容放在网址片段中，不会出现在 Vercel 的访问地址记录里；登录后网站会立即清除片段。</p>
+          </div>
         </AccountPanel>
 
-        <AccountPanel className="offline-settings" label="离线阅读与自动同步">
+        <AccountPanel className="offline-settings" label="离线与缓存">
           <OfflineStatusContent onChanged={onChanged} />
         </AccountPanel>
 
         <BackupManager onRestored={onChanged} />
 
-        <form className="account-section password-form stack" onSubmit={submit}>
+        <form className="account-section password-form stack" aria-label="账号安全" onSubmit={submit}>
           <div className="account-section-heading">
             <AppIcon name="account" size={24} />
-            <div><h3>修改密码</h3><p>新密码至少 10 个字符。</p></div>
+            <div><h3>账号安全</h3><p>修改登录密码；新密码至少 10 个字符。</p></div>
           </div>
           <div className="form-grid">
             <label className="field">
@@ -390,28 +421,93 @@ export function Lightbox({
   onClose: () => void
 }) {
   const [index, setIndex] = useState(Math.min(initialIndex, assets.length - 1))
+  const [scale, setScale] = useState(1)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const gesture = useRef({ x: 0, y: 0, offsetX: 0, offsetY: 0, active: false })
   const asset = assets[index]
+
+  function changeIndex(direction: -1 | 1) {
+    setIndex((value) => (value + direction + assets.length) % assets.length)
+  }
+
+  function setZoom(next: number) {
+    const value = Math.max(1, Math.min(4, next))
+    setScale(value)
+    if (value === 1) setOffset({ x: 0, y: 0 })
+  }
+
+  function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId)
+    gesture.current = { x: event.clientX, y: event.clientY, offsetX: offset.x, offsetY: offset.y, active: true }
+  }
+
+  function pointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!gesture.current.active || scale <= 1) return
+    setOffset({
+      x: gesture.current.offsetX + event.clientX - gesture.current.x,
+      y: gesture.current.offsetY + event.clientY - gesture.current.y
+    })
+  }
+
+  function pointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!gesture.current.active) return
+    const distance = event.clientX - gesture.current.x
+    gesture.current.active = false
+    if (scale === 1 && Math.abs(distance) > 55 && assets.length > 1) changeIndex(distance > 0 ? -1 : 1)
+  }
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (event.key === 'ArrowLeft') setIndex((value) => (value - 1 + assets.length) % assets.length)
-      if (event.key === 'ArrowRight') setIndex((value) => (value + 1) % assets.length)
+      if (event.key === 'ArrowLeft') changeIndex(-1)
+      if (event.key === 'ArrowRight') changeIndex(1)
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [assets.length])
 
+  useEffect(() => {
+    setScale(1)
+    setOffset({ x: 0, y: 0 })
+  }, [index])
+
   if (!asset) return null
   return (
     <Modal title={asset.originalName || '查看图片'} onClose={onClose} wide>
       <div className="lightbox">
-        <img src={asset.originalUrl} alt={asset.originalName} />
+        <div
+          className={`lightbox-stage${scale > 1 ? ' is-zoomed' : ''}`}
+          onPointerDown={pointerDown}
+          onPointerMove={pointerMove}
+          onPointerUp={pointerUp}
+          onPointerCancel={pointerUp}
+          onDoubleClick={() => setZoom(scale > 1 ? 1 : 2)}
+          onWheel={(event) => {
+            if (!event.ctrlKey && Math.abs(event.deltaY) < 2) return
+            event.preventDefault()
+            setZoom(scale + (event.deltaY < 0 ? 0.25 : -0.25))
+          }}
+        >
+          <img
+            src={asset.originalUrl}
+            alt={asset.originalName}
+            draggable={false}
+            style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}
+          />
+        </div>
+        <div className="lightbox-tools" aria-label="图片工具">
+          <button type="button" className="button button-small" disabled={scale <= 1} onClick={() => setZoom(scale - 0.5)}><AppIcon name="zoomOut" size={17} />缩小</button>
+          <span>{Math.round(scale * 100)}%</span>
+          <button type="button" className="button button-small" disabled={scale >= 4} onClick={() => setZoom(scale + 0.5)}><AppIcon name="zoomIn" size={17} />放大</button>
+          <button type="button" className="button button-small" disabled={scale === 1} onClick={() => setZoom(1)}>还原</button>
+          <a className="button button-small" href={asset.originalUrl} target="_blank" rel="noreferrer"><AppIcon name="open" size={17} />打开原图</a>
+          <a className="button button-small" href={asset.originalUrl} download={asset.originalName}><AppIcon name="download" size={17} />保存原图</a>
+        </div>
         <div className="lightbox-controls">
           <button
             type="button"
             className="button"
             disabled={assets.length <= 1}
-            onClick={() => setIndex((value) => (value - 1 + assets.length) % assets.length)}
+            onClick={() => changeIndex(-1)}
           >
             <AppIcon name="previous" size={18} />
             上一张
@@ -421,7 +517,7 @@ export function Lightbox({
             type="button"
             className="button"
             disabled={assets.length <= 1}
-            onClick={() => setIndex((value) => (value + 1) % assets.length)}
+            onClick={() => changeIndex(1)}
           >
             下一张
             <AppIcon name="next" size={18} />

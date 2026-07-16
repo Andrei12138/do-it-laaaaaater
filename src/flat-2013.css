@@ -1014,6 +1014,96 @@ html[data-theme='flat-2013'] .app-footer a {
   }
 }
 
+/* Full workflow polish: Flat Design 2013 stays rectangular, solid and shadow-free. */
+html[data-theme='flat-2013'] .app-modal,
+html[data-theme='flat-2013'] .app-modal > div,
+html[data-theme='flat-2013'] .app-modal [class*='animal-'],
+html[data-theme='flat-2013'] .app-modal button,
+html[data-theme='flat-2013'] .app-modal input,
+html[data-theme='flat-2013'] .app-modal select,
+html[data-theme='flat-2013'] .app-modal textarea {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+html[data-theme='flat-2013'] .library-view-bar {
+  color: var(--dark);
+  background: #fff;
+  border: 1px solid var(--silver);
+  border-top: 6px solid var(--blue);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+html[data-theme='flat-2013'] .library-view-bar > button:not([class*='animal-btn-']) {
+  color: var(--dark);
+  border-radius: 0;
+  font: 300 14px/1.2 var(--font);
+}
+
+html[data-theme='flat-2013'] .library-view-bar > button.is-active { color: #fff; background: var(--blue); }
+
+html[data-theme='flat-2013'] .active-filter-chips button,
+html[data-theme='flat-2013'] .empty-filter-summary span {
+  color: var(--dark);
+  background: #fff;
+  border: 1px solid var(--silver);
+  border-left: 5px solid var(--turq);
+  border-radius: 0;
+  box-shadow: none;
+  font: 300 12px/1.2 var(--font);
+}
+
+html[data-theme='flat-2013'] .item-card-shell .item-card {
+  border-left: 7px solid var(--category-color, var(--silver)) !important;
+}
+
+html[data-theme='flat-2013'] .category-color-key { border-radius: 0; border: 0; }
+html[data-theme='flat-2013'] .card-plan-menu,
+html[data-theme='flat-2013'] .card-more-menu,
+html[data-theme='flat-2013'] .delete-undo-bar,
+html[data-theme='flat-2013'] .image-input-summary,
+html[data-theme='flat-2013'] .lightbox-stage,
+html[data-theme='flat-2013'] .offline-cache-progress,
+html[data-theme='flat-2013'] .shortcut-prefix-box code,
+html[data-theme='flat-2013'] .mobile-selection-bar {
+  color: var(--dark);
+  background: #fff;
+  background-image: none;
+  border: 1px solid var(--silver);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+html[data-theme='flat-2013'] .card-plan-menu { border-top: 6px solid var(--blue); }
+html[data-theme='flat-2013'] .card-more-menu { border-top: 6px solid var(--purple); }
+html[data-theme='flat-2013'] .delete-undo-bar { border-left: 8px solid var(--turq); }
+html[data-theme='flat-2013'] .offline-cache-progress { background: var(--bg); border-left: 6px solid var(--blue); }
+html[data-theme='flat-2013'] .image-input-summary { background: #f7f9f9; border-style: dashed; }
+
+html[data-theme='flat-2013'] .card-plan-menu button,
+html[data-theme='flat-2013'] .card-more-menu button,
+html[data-theme='flat-2013'] .delete-undo-bar button,
+html[data-theme='flat-2013'] .mobile-selection-bar button {
+  color: var(--dark);
+  background: var(--bg);
+  border-radius: 0;
+  box-shadow: none;
+  font-family: var(--font);
+  font-weight: 300;
+}
+
+html[data-theme='flat-2013'] .card-plan-menu button:hover,
+html[data-theme='flat-2013'] .card-more-menu button:hover { color: #fff; background: var(--dark); }
+html[data-theme='flat-2013'] .mobile-selection-bar button.is-primary { color: #fff; background: var(--turq); }
+html[data-theme='flat-2013'] .lightbox-stage { background: #dfe6e9; }
+html[data-theme='flat-2013'] .lightbox-stage img { transition: none; }
+
+@media (max-width: 720px) {
+  html[data-theme='flat-2013'] .library-view-bar { border-top-width: 5px; }
+  html[data-theme='flat-2013'] .mobile-selection-bar { border-top: 6px solid var(--purple); }
+}
+
 @media (max-width: 480px) {
   html[data-theme='flat-2013'] .auth-page {
     padding: 72px 12px 22px;
@@ -1361,4 +1451,16 @@ html[data-theme='flat-2013'] .install-steps {
     border-radius: 0;
     font-weight: 400;
   }
+}
+
+html[data-theme='flat-2013'] .library-view-bar,
+html[data-theme='flat-2013'] .card-plan-menu,
+html[data-theme='flat-2013'] .card-more-menu,
+html[data-theme='flat-2013'] .delete-undo-bar,
+html[data-theme='flat-2013'] .mobile-selection-bar,
+html[data-theme='flat-2013'] .mobile-bottom-nav,
+html[data-theme='flat-2013'] .mobile-add-icon {
+  background-image: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }

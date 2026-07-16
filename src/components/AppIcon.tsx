@@ -35,6 +35,12 @@ export type AppIconName =
   | 'sort'
   | 'download'
   | 'upload'
+  | 'clipboard'
+  | 'trash'
+  | 'more'
+  | 'calendar'
+  | 'zoomIn'
+  | 'zoomOut'
 
 const animalIcons: Partial<Record<AppIconName, ComponentProps<typeof Icon>['name']>> = {
   add: 'icon-diy',
@@ -52,7 +58,10 @@ const animalIcons: Partial<Record<AppIconName, ComponentProps<typeof Icon>['name
   backup: 'icon-map',
   install: 'icon-miles',
   sync: 'icon-miles',
-  open: 'icon-map'
+  open: 'icon-map',
+  clipboard: 'icon-diy',
+  trash: 'icon-shopping',
+  calendar: 'icon-map'
 }
 
 function FlatPaths({ name }: { name: AppIconName }) {
@@ -88,7 +97,13 @@ function FlatPaths({ name }: { name: AppIconName }) {
     skip: <><path d="m5 4 9 8-9 8zM18 4v16" /></>,
     sort: <><path d="M8 4v16M4 8l4-4 4 4M16 20V4M12 16l4 4 4-4" /></>,
     download: <><path d="M12 3v12M7 10l5 5 5-5M4 20h16" /></>,
-    upload: <><path d="M12 21V9M7 14l5-5 5 5M4 4h16" /></>
+    upload: <><path d="M12 21V9M7 14l5-5 5 5M4 4h16" /></>,
+    clipboard: <><path d="M8 5H5v16h14V5h-3" /><rect x="8" y="2" width="8" height="5" /><path d="M8 12h8M8 16h6" /></>,
+    trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></>,
+    more: <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /></>,
+    calendar: <><rect x="3" y="5" width="18" height="16" /><path d="M7 3v4M17 3v4M3 10h18" /></>,
+    zoomIn: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5M10.5 7.5v6M7.5 10.5h6" /></>,
+    zoomOut: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5M7.5 10.5h6" /></>
   }
   return paths[name]
 }

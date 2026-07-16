@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent as ReactDragEvent,
   type ReactNode
 } from 'react'
@@ -20,8 +21,8 @@ import {
   Title
 } from 'animal-island-ui'
 import islandBag from 'animal-island-ui/items/item-022.png'
-import { api, errorMessage, jsonRequest } from '../api'
-import { chinaToday, plannedState, smartPriority } from '../china-date'
+import { ApiRequestError, api, errorMessage, jsonRequest } from '../api'
+import { addChinaDays, chinaToday, plannedDateLabel, plannedState, smartPriority } from '../china-date'
 import { discardDraft, readActiveDraft, type ActiveDraft } from '../draft-store'
 import { itemAgeLabel } from '../item-age'
 import { filterLibraryItems } from '../offline-query'
@@ -34,6 +35,7 @@ import { useSyncStatus } from '../sync-status'
 import { getThemeDefinition, useTheme, type ThemeId } from '../theme'
 import type {
   Category,
+  AppPreferences,
   BulkItemChanges,
   ImageAsset,
   ItemFilters,
@@ -124,7 +126,8 @@ const defaultFilters: ItemFilters = {
   date: '',
   q: '',
   priority: 'all',
-  sort: 'smart'
+  sort: 'smart',
+  trash: 'active'
 }
 
 const SORT_STORAGE_KEY = 'do-it-laaaaaater.item-sort.v1'
@@ -132,7 +135,7 @@ const SORT_STORAGE_KEY = 'do-it-laaaaaater.item-sort.v1'
 function initialFilters(): ItemFilters {
   try {
     const saved = localStorage.getItem(SORT_STORAGE_KEY)
-    if (saved === 'smart' || saved === 'newest' || saved === 'oldest' || saved === 'recently_completed') {
+    if (saved === 'smart' || saved === 'newest' || saved === 'oldest' || saved === 'recently_completed' || saved === 'planned_date') {
       return { ...defaultFilters, sort: saved }
     }
   } catch {
@@ -299,6 +302,7 @@ function ItemCard({
   item,
   categories,
   selectionMode,
+  trashMode,
   selected,
   busy,
   retry,
@@ -306,12 +310,15 @@ function ItemCard({
   onPatch,
   onSelect,
   onDelete,
+  onRestore,
+  onPermanentDelete,
   onPreview,
   now
 }: {
   item: LibraryItem
   categories: Category[]
   selectionMode: boolean
+  trashMode: boolean
   selected: boolean
   busy: boolean
   retry?: { changes: BulkItemChanges; label: string }
@@ -319,6 +326,8 @@ function ItemCard({
   onPatch: (changes: BulkItemChanges, label: string) => Promise<boolean>
   onSelect: (selected: boolean) => void
   onDelete: () => Promise<boolean>
+  onRestore: () => Promise<boolean>
+  onPermanentDelete: () => Promise<boolean>
   onPreview: (assets: ImageAsset[], index: number) => void
   now: number
 }) {
@@ -338,9 +347,20 @@ function ItemCard({
   const kindLabel = item.kind === 'link' ? '网页' : item.kind === 'text' ? '文本' : '图片'
   const kindIcon: AppIconName = item.kind === 'link' ? 'link' : item.kind === 'text' ? 'text' : 'image'
   const plan = plannedState(item.plannedFor)
+  const [planMenuOpen, setPlanMenuOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const trashDaysLeft = item.trashedAt
+    ? Math.max(0, Math.ceil((item.trashedAt + 7 * 24 * 60 * 60 * 1000 - now) / (24 * 60 * 60 * 1000)))
+    : 0
+  const categoryStyle = {
+    '--category-color': item.category?.color || 'transparent'
+  } as CSSProperties
 
   return (
-    <article className={`item-card-shell${selectionMode ? ' is-selection-mode' : ''}${selected ? ' is-selected' : ''}`}>
+    <article
+      className={`item-card-shell${selectionMode ? ' is-selection-mode' : ''}${selected ? ' is-selected' : ''}${trashMode ? ' is-trash-item' : ''}`}
+      style={categoryStyle}
+    >
       <Card
         className={cover ? 'item-card has-cover' : 'item-card'}
         pattern="default"
@@ -379,6 +399,8 @@ function ItemCard({
             )}
             {plan === 'overdue' && <Tag size="small" color="app-red" className="priority-tag">逾期</Tag>}
             {plan === 'today' && <Tag size="small" color="app-teal" className="priority-tag">今天</Tag>}
+            {plan === 'future' && <Tag size="small" color="app-teal" variant="outlined" className="priority-tag">{plannedDateLabel(item.plannedFor)}</Tag>}
+            {trashMode && <Tag size="small" color="app-red" variant="outlined" className="priority-tag">还可恢复 {trashDaysLeft} 天</Tag>}
             <span className={`item-age item-age-${item.status}`}>{itemAgeLabel(item, now)}</span>
             <time>{timeLabel(item.createdAt)}</time>
           </div>
@@ -397,6 +419,7 @@ function ItemCard({
           </h3>
           {item.url && <p className="item-host" title={item.url}>{hostLabel(item.url)}</p>}
           <div className="item-meta">
+            <span className="category-color-key" aria-hidden="true" style={{ backgroundColor: item.category?.color || '#95a5a6' }} />
             <label className="card-category-field">
               <span className="visually-hidden">修改类别</span>
               {theme === 'animal-island' ? (
@@ -429,6 +452,43 @@ function ItemCard({
             )}
           </div>
           <div className="item-actions">
+            {trashMode ? (
+              <>
+                <Button
+                  size="small"
+                  type="primary"
+                  disabled={busy}
+                  icon={<AppIcon name="restore" size={17} />}
+                  onClick={() => void onRestore()}
+                >
+                  恢复
+                </Button>
+                <Button
+                  size="small"
+                  danger
+                  disabled={busy}
+                  icon={<AppIcon name="delete" size={17} />}
+                  onClick={() => void onPermanentDelete()}
+                >
+                  彻底删除
+                </Button>
+              </>
+            ) : (
+              <>
+            <span className="card-action-mobile">
+              {item.kind === 'link' && item.url ? (
+                <a className="button button-primary button-small" href={item.url} target="_blank" rel="noreferrer">
+                  <AppIcon name="open" size={17} />打开
+                </a>
+              ) : (
+                <button type="button" className="button button-primary button-small" onClick={() => {
+                  if (item.kind === 'image_group' && manual.length) onPreview(manual, 0)
+                  else onEdit()
+                }}>
+                  <AppIcon name={item.kind === 'image_group' ? 'image' : 'open'} size={17} />查看
+                </button>
+              )}
+            </span>
             <Button
               size="small"
               type="primary"
@@ -444,7 +504,7 @@ function ItemCard({
             <Button
               size="small"
               disabled={busy}
-              className={item.isStarred ? 'is-active' : ''}
+              className={`card-action-secondary${item.isStarred ? ' is-active' : ''}`}
               icon={<AppIcon name="star" size={17} />}
               onClick={() => void onPatch({ isStarred: !item.isStarred }, item.isStarred ? '已取消星标' : '已加星标')}
             >
@@ -453,17 +513,39 @@ function ItemCard({
             <Button
               size="small"
               disabled={busy || item.status === 'completed'}
-              className={item.plannedFor ? 'is-active' : ''}
+              className={`card-action-secondary${item.plannedFor ? ' is-active' : ''}`}
               icon={<AppIcon name="today" size={17} />}
-              onClick={() => void onPatch(
-                { plannedFor: item.plannedFor ? null : chinaToday() },
-                item.plannedFor ? '已移出今日清单' : '已加入今日清单'
-              )}
+              onClick={() => setPlanMenuOpen((value) => !value)}
             >
-              {plan === 'overdue' ? '移出逾期' : item.plannedFor ? '移出今日' : '今天处理'}
+              {item.plannedFor ? '计划 ' + plannedDateLabel(item.plannedFor) : '安排处理'}
             </Button>
-            <Button size="small" disabled={busy} icon={<AppIcon name="edit" size={17} />} onClick={onEdit}>编辑</Button>
-            <Button size="small" disabled={busy} danger icon={<AppIcon name="delete" size={17} />} onClick={() => void onDelete()}>删除</Button>
+            <Button className="card-action-secondary" size="small" disabled={busy} icon={<AppIcon name="edit" size={17} />} onClick={onEdit}>编辑</Button>
+            <Button className="card-action-secondary" size="small" disabled={busy} danger icon={<AppIcon name="delete" size={17} />} onClick={() => void onDelete()}>删除</Button>
+            <Button
+              className="card-action-mobile card-more-trigger"
+              size="small"
+              disabled={busy}
+              icon={<AppIcon name="more" size={18} />}
+              onClick={() => setMoreOpen((value) => !value)}
+            >更多</Button>
+            {planMenuOpen && (
+              <div className="card-plan-menu" role="menu" aria-label="安排处理时间">
+                <button type="button" onClick={() => { setPlanMenuOpen(false); void onPatch({ plannedFor: chinaToday() }, '已安排今天处理') }}>今天</button>
+                <button type="button" onClick={() => { setPlanMenuOpen(false); void onPatch({ plannedFor: addChinaDays(1) }, '已安排明天处理') }}>明天</button>
+                <button type="button" onClick={() => { setPlanMenuOpen(false); void onPatch({ plannedFor: addChinaDays(7) }, '已安排一周后处理') }}>一周后</button>
+                <button type="button" disabled={!item.plannedFor} onClick={() => { setPlanMenuOpen(false); void onPatch({ plannedFor: null }, '已清除处理计划') }}>清除计划</button>
+              </div>
+            )}
+            {moreOpen && (
+              <div className="card-more-menu" role="menu" aria-label="更多条目操作">
+                <button type="button" onClick={() => { setMoreOpen(false); void onPatch({ isStarred: !item.isStarred }, item.isStarred ? '已取消星标' : '已加星标') }}>{item.isStarred ? '取消星标' : '加星标'}</button>
+                <button type="button" disabled={item.status === 'completed'} onClick={() => { setMoreOpen(false); setPlanMenuOpen(true) }}>安排处理</button>
+                <button type="button" onClick={() => { setMoreOpen(false); onEdit() }}>编辑</button>
+                <button type="button" className="danger-text" onClick={() => { setMoreOpen(false); void onDelete() }}>移到回收站</button>
+              </div>
+            )}
+              </>
+            )}
           </div>
           {retry && (
             <div className="card-retry" role="alert">
@@ -501,6 +583,7 @@ export function Dashboard({
   const themeDefinition = getThemeDefinition(theme)
   const [categories, setCategories] = useState<Category[]>([])
   const [allItems, setAllItems] = useState<LibraryItem[]>([])
+  const [preferences, setPreferences] = useState<AppPreferences>({ quickSaveCategoryId: null })
   const [filters, setFilters] = useState<ItemFilters>(initialFilters)
   const items = useMemo(() => filterLibraryItems(allItems, filters), [allItems, filters])
   const [overlay, setOverlay] = useState<Overlay>(null)
@@ -515,17 +598,20 @@ export function Dashboard({
   const [retryItems, setRetryItems] = useState<Record<string, { changes: BulkItemChanges; label: string }>>({})
   const [focusMode, setFocusMode] = useState(false)
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null)
+  const [bulkPanelOpen, setBulkPanelOpen] = useState(false)
+  const [undoDelete, setUndoDelete] = useState<{ ids: string[]; label: string } | null>(null)
   const [activeDraft, setActiveDraft] = useState<ActiveDraft | null>(() => readActiveDraft())
   const syncStatus = useSyncStatus()
   const offlineState = useOfflineRuntime()
   const requestNumber = useRef(0)
 
   const refreshReferences = useCallback(async () => {
-    const [nextCategories] = await Promise.all([
+    const [nextCategories, nextPreferences] = await Promise.all([
       api<Category[]>('/api/categories'),
-      api('/api/preferences')
+      api<AppPreferences>('/api/preferences')
     ])
     setCategories(nextCategories)
+    setPreferences(nextPreferences)
     return nextCategories
   }, [])
 
@@ -539,7 +625,7 @@ export function Dashboard({
     const currentRequest = ++requestNumber.current
     setLoading(true)
     try {
-      const fetchedItems = await api<LibraryItem[]>('/api/items?status=all&sort=newest')
+      const fetchedItems = await api<LibraryItem[]>('/api/items?status=all&sort=newest&trash=all')
       if (currentRequest === requestNumber.current) {
         setAllItems(fetchedItems)
         setError('')
@@ -597,6 +683,12 @@ export function Dashboard({
   }, [items])
 
   useEffect(() => {
+    if (!undoDelete) return
+    const timer = window.setTimeout(() => setUndoDelete(null), 10_000)
+    return () => window.clearTimeout(timer)
+  }, [undoDelete])
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get('add') === 'link' && params.get('url')) {
       setOverlay({
@@ -612,9 +704,20 @@ export function Dashboard({
     const openId = params.get('open')
     if (openId) {
       void api<LibraryItem>('/api/items/' + encodeURIComponent(openId)).then((item) => {
-        setOverlay({ type: 'edit', item })
+        if (item.trashedAt) {
+          setFilters((current) => ({ ...current, trash: 'only', status: 'all' }))
+          notifyError('这个条目在回收站中，可先恢复')
+        } else {
+          setOverlay({ type: 'edit', item })
+        }
         window.history.replaceState({}, '', window.location.pathname)
       }).catch((requestError) => notifyError(errorMessage(requestError)))
+    }
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    const clipboardValue = hash.get('quick-clipboard')
+    if (clipboardValue) {
+      window.history.replaceState({}, '', window.location.pathname + window.location.search)
+      void quickSaveClipboard(clipboardValue)
     }
   }, [])
 
@@ -673,6 +776,19 @@ export function Dashboard({
   }, [overlay])
 
   const groups = useMemo(() => {
+    if (filters.trash === 'only') {
+      const result = new Map<string, LibraryItem[]>()
+      items.forEach((item) => {
+        const key = dayKey(item.trashedAt || item.updatedAt)
+        result.set(key, [...(result.get(key) || []), item])
+      })
+      return Array.from(result.entries()).map(([key, groupItems]) => ({
+        key: 'trash-' + key,
+        label: dayLabel(key) + '移入回收站',
+        date: key,
+        items: groupItems
+      }))
+    }
     if (filters.sort === 'smart') {
       const today = chinaToday()
       const definitions = [
@@ -699,7 +815,7 @@ export function Dashboard({
       date: key,
       items: groupItems
     }))
-  }, [filters.sort, items])
+  }, [filters.sort, filters.trash, items])
 
   async function reloadAll() {
     await Promise.all([refreshReferences(), refreshItems()])
@@ -710,6 +826,68 @@ export function Dashboard({
     setActiveDraft(null)
     await reloadAll()
     notifySuccess('已保存')
+  }
+
+  async function quickSaveClipboard(rawValue: string) {
+    const value = rawValue.trim()
+    if (!value) {
+      notifyError('剪贴板里没有可保存的文字或网址')
+      return
+    }
+    try {
+      const [latestPreferences, latestCategories] = categories.length
+        ? [preferences, categories]
+        : await Promise.all([
+            api<AppPreferences>('/api/preferences'),
+            api<Category[]>('/api/categories')
+          ])
+      const categoryId = latestCategories.some((category) => category.id === latestPreferences.quickSaveCategoryId)
+        ? latestPreferences.quickSaveCategoryId
+        : null
+      const webUrl = asWebUrl(value)
+      if (webUrl) {
+        let title = hostLabel(webUrl)
+        let coverUrl = ''
+        try {
+          const metadata = await jsonRequest<{ title: string; coverUrl: string }>('/api/metadata', 'POST', { url: webUrl })
+          title = metadata.title || title
+          coverUrl = metadata.coverUrl || ''
+        } catch {
+          // A readable title is helpful but never blocks one-tap saving.
+        }
+        const form = new FormData()
+        form.set('url', webUrl)
+        form.set('title', title)
+        form.set('categoryId', categoryId || '')
+        form.set('coverUrl', coverUrl)
+        await api<LibraryItem>('/api/items/link', { method: 'POST', body: form })
+      } else {
+        await jsonRequest<LibraryItem>('/api/items/text', 'POST', {
+          title: shortPastedTitle(value),
+          categoryId
+        })
+      }
+      await reloadAll()
+      notifySuccess(webUrl ? '剪贴板网址已保存' : '剪贴板文字已保存')
+    } catch (requestError) {
+      if (requestError instanceof ApiRequestError && requestError.status === 409) {
+        const details = requestError.details as { existingId?: string; trashed?: boolean } | undefined
+        notifyError(details?.trashed ? '这个网址已在回收站中，可先恢复原条目' : '这个网址已经保存过了')
+        if (details?.trashed) setFilters((current) => ({ ...current, trash: 'only', status: 'all' }))
+        return
+      }
+      notifyError(errorMessage(requestError))
+    }
+  }
+
+  async function readClipboardAndSave() {
+    setMobilePanel(null)
+    try {
+      if (!navigator.clipboard?.readText) throw new Error('当前浏览器不允许读取剪贴板')
+      await quickSaveClipboard(await navigator.clipboard.readText())
+    } catch (requestError) {
+      notifyError(errorMessage(requestError) + '。请允许剪贴板权限，或在首页空白处直接粘贴。')
+    }
   }
 
   function optimisticItem(item: LibraryItem, changes: BulkItemChanges): LibraryItem {
@@ -764,16 +942,52 @@ export function Dashboard({
   }
 
   async function deleteItem(item: LibraryItem) {
-    const detail = item.assets.length ? '相关图片也会一起删除。' : ''
-    if (!window.confirm('确定删除“' + item.title + '”吗？' + detail)) return false
     try {
       await api('/api/items/' + item.id, { method: 'DELETE' })
       await reloadAll()
-      notifySuccess('已删除')
+      setUndoDelete({ ids: [item.id], label: '“' + item.title + '”已移到回收站' })
       return true
     } catch (requestError) {
       notifyError(errorMessage(requestError))
       return false
+    }
+  }
+
+  async function restoreItem(item: LibraryItem) {
+    try {
+      await jsonRequest<LibraryItem>('/api/items/' + item.id + '/restore', 'POST')
+      await reloadAll()
+      notifySuccess('已恢复到清单')
+      return true
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
+      return false
+    }
+  }
+
+  async function permanentDeleteItem(item: LibraryItem) {
+    if (!window.confirm('确定彻底删除“' + item.title + '”吗？相关图片也会永久删除，无法撤销。')) return false
+    try {
+      await api('/api/items/' + item.id + '/permanent', { method: 'DELETE' })
+      await reloadAll()
+      notifySuccess('已彻底删除')
+      return true
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
+      return false
+    }
+  }
+
+  async function undoLastDelete() {
+    if (!undoDelete) return
+    const ids = undoDelete.ids
+    setUndoDelete(null)
+    try {
+      await jsonRequest('/api/items/bulk', 'POST', { ids, restore: true })
+      await reloadAll()
+      notifySuccess(ids.length > 1 ? '已恢复这些条目' : '已恢复条目')
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
     }
   }
 
@@ -812,7 +1026,6 @@ export function Dashboard({
   async function runBulkDelete() {
     const ids = [...selectedIds]
     if (!ids.length || bulkBusy) return
-    if (!window.confirm('确定删除选中的 ' + ids.length + ' 条内容吗？相关图片也会一起删除。此操作不能撤销。')) return
     setBulkBusy(true)
     try {
       const result = await jsonRequest<{
@@ -824,12 +1037,65 @@ export function Dashboard({
       const failedIds = new Set((result.failed || []).map((entry) => entry.id))
       setSelectedIds(failedIds)
       await reloadAll()
-      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条未能删除，已保留选择。')
-      else notifySuccess('已删除 ' + result.deleted + ' 条')
+      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条未能移入回收站，已保留选择。')
+      else setUndoDelete({ ids: result.succeededIds || ids, label: '已将 ' + result.deleted + ' 条移到回收站' })
     } catch (requestError) {
       notifyError(errorMessage(requestError))
     } finally {
       setBulkBusy(false)
+    }
+  }
+
+  async function runBulkRestore() {
+    const ids = [...selectedIds]
+    if (!ids.length || bulkBusy) return
+    setBulkBusy(true)
+    try {
+      const result = await jsonRequest<{ updated: number; succeededIds?: string[]; failed?: Array<{ id: string; error: string }> }>(
+        '/api/items/bulk', 'POST', { ids, restore: true }
+      )
+      const failedIds = new Set((result.failed || []).map((entry) => entry.id))
+      setSelectedIds(failedIds)
+      await reloadAll()
+      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条未能恢复，已保留选择。')
+      else notifySuccess('已恢复 ' + result.updated + ' 条')
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  async function runBulkPermanentDelete() {
+    const ids = [...selectedIds]
+    if (!ids.length || bulkBusy) return
+    if (!window.confirm('确定彻底删除选中的 ' + ids.length + ' 条内容吗？相关图片也会永久删除，无法撤销。')) return
+    setBulkBusy(true)
+    try {
+      const result = await jsonRequest<{ deleted: number; succeededIds?: string[]; failed?: Array<{ id: string; error: string }> }>(
+        '/api/items/bulk', 'POST', { ids, permanentDelete: true }
+      )
+      const failedIds = new Set((result.failed || []).map((entry) => entry.id))
+      setSelectedIds(failedIds)
+      await reloadAll()
+      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条未能彻底删除，已保留选择。')
+      else notifySuccess('已彻底删除 ' + result.deleted + ' 条')
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  async function emptyTrash() {
+    const count = allItems.filter((item) => item.trashedAt).length
+    if (!count || !window.confirm('确定清空回收站中的 ' + count + ' 条内容吗？相关图片也会永久删除，无法撤销。')) return
+    try {
+      await jsonRequest('/api/items/trash/empty', 'POST', { confirmed: true })
+      await reloadAll()
+      notifySuccess('回收站已清空')
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
     }
   }
 
@@ -857,9 +1123,15 @@ export function Dashboard({
   async function openDuplicate(id: string) {
     try {
       const item = await api<LibraryItem>('/api/items/' + id)
-      await discardDraft('new-link')
       setActiveDraft(null)
-      setOverlay({ type: 'edit', item })
+      if (item.trashedAt) {
+        setOverlay(null)
+        setFilters((current) => ({ ...current, trash: 'only', status: 'all' }))
+        notifyError('这个网址在回收站中，可先恢复原条目')
+      } else {
+        setOverlay({ type: 'edit', item })
+      }
+      await discardDraft('new-link')
     } catch (requestError) {
       notifyError(errorMessage(requestError))
     }
@@ -906,12 +1178,59 @@ export function Dashboard({
         ? `${queuedCount} 项等待同步`
         : (offlineState.lastSyncedAt ? '数据已同步' : (syncStatus.message || '数据已就绪'))
   const activeFilterCount = [
+    Boolean(filters.q),
+    filters.status !== (filters.trash === 'only' ? 'all' : 'pending'),
     filters.kind !== 'all',
     filters.priority !== 'all',
     Boolean(filters.category),
     Boolean(filters.date),
     filters.sort !== 'smart'
   ].filter(Boolean).length
+  const viewTotal = allItems.filter((item) => filters.trash === 'only' ? Boolean(item.trashedAt) : !item.trashedAt).length
+  const trashTotal = allItems.filter((item) => item.trashedAt).length
+  const filterChips = [
+    filters.status !== 'all' ? { key: 'status', label: filters.status === 'pending' ? '待处理' : '已完成' } : null,
+    filters.q ? { key: 'q', label: '搜索：' + filters.q } : null,
+    filters.kind !== 'all' ? { key: 'kind', label: filters.kind === 'link' ? '网页' : filters.kind === 'text' ? '文本' : '图片' } : null,
+    filters.priority !== 'all' ? { key: 'priority', label: filters.priority === 'starred' ? '星标' : '今日 / 逾期' } : null,
+    filters.category ? {
+      key: 'category',
+      label: filters.category === 'uncategorized'
+        ? '未分类'
+        : '类别：' + (categories.find((category) => category.id === filters.category)?.name || '已删除类别')
+    } : null,
+    filters.date ? { key: 'date', label: '保存日期：' + filters.date } : null,
+    filters.sort !== 'smart' ? { key: 'sort', label: '自定义排序' } : null
+  ].filter(Boolean) as Array<{ key: string; label: string }>
+
+  function resetFilters(showAll = false) {
+    setFilters({
+      ...defaultFilters,
+      trash: filters.trash,
+      status: filters.trash === 'only' || showAll ? 'all' : 'pending'
+    })
+  }
+
+  function switchLibraryView(next: 'active' | 'only') {
+    setFilters((current) => ({ ...current, trash: next, status: next === 'only' ? 'all' : 'pending' }))
+    setSelectionMode(false)
+    setSelectedIds(new Set())
+    setBulkPanelOpen(false)
+    setMobilePanel(null)
+  }
+
+  function removeFilterChip(key: string) {
+    setFilters((current) => {
+      if (key === 'status') return { ...current, status: 'all' }
+      if (key === 'q') return { ...current, q: '' }
+      if (key === 'kind') return { ...current, kind: 'all' }
+      if (key === 'priority') return { ...current, priority: 'all' }
+      if (key === 'category') return { ...current, category: '' }
+      if (key === 'date') return { ...current, date: '' }
+      if (key === 'sort') return { ...current, sort: 'smart' }
+      return current
+    })
+  }
 
   function openFromMobile(nextOverlay: NonNullable<Overlay>) {
     setMobilePanel(null)
@@ -959,6 +1278,13 @@ export function Dashboard({
           >
             类别管理
           </Button>
+          <Button
+            size="middle"
+            icon={<AppIcon name="trash" size={26} />}
+            onClick={() => switchLibraryView(filters.trash === 'only' ? 'active' : 'only')}
+          >
+            {filters.trash === 'only' ? '返回清单' : `回收站${trashTotal ? ` ${trashTotal}` : ''}`}
+          </Button>
           <ThemeControl />
           <Button
             size="middle"
@@ -990,6 +1316,25 @@ export function Dashboard({
       </header>
 
       <main className="main-content">
+        <div className="library-view-bar" role="navigation" aria-label="清单视图">
+          <button
+            type="button"
+            className={filters.trash === 'active' ? 'is-active' : ''}
+            onClick={() => switchLibraryView('active')}
+          >
+            <AppIcon name="focus" size={18} />阅读清单
+          </button>
+          <button
+            type="button"
+            className={filters.trash === 'only' ? 'is-active' : ''}
+            onClick={() => switchLibraryView('only')}
+          >
+            <AppIcon name="trash" size={18} />回收站{trashTotal ? `（${trashTotal}）` : ''}
+          </button>
+          {filters.trash === 'only' && trashTotal > 0 && (
+            <Button size="small" danger onClick={() => void emptyTrash()}>清空回收站</Button>
+          )}
+        </div>
         <Card className="toolbar" pattern="default" aria-label="筛选和搜索">
           <div className="toolbar-tabs">
             <Tabs
@@ -1087,7 +1432,8 @@ export function Dashboard({
                 { key: 'smart', label: '智能优先' },
                 { key: 'newest', label: '最近保存' },
                 { key: 'oldest', label: '最久未看' },
-                { key: 'recently_completed', label: '最近完成' }
+                { key: 'recently_completed', label: '最近完成' },
+                { key: 'planned_date', label: '计划日期' }
               ]}
               onChange={(value) => setFilters((current) => ({
                 ...current,
@@ -1095,7 +1441,7 @@ export function Dashboard({
               }))}
             />
           </div>
-          <Button className="advanced-filter" size="small" type="dashed" onClick={() => setFilters({ ...defaultFilters })}>清除筛选</Button>
+          <Button className="advanced-filter" size="small" type="dashed" onClick={() => resetFilters()}>清除筛选</Button>
         </Card>
 
         {activeDraft && (
@@ -1111,7 +1457,8 @@ export function Dashboard({
         {error && <div className="notice notice-error" role="alert">{error}</div>}
         <div className="result-summary">
           <div className="result-count">
-            <span>{loading ? '正在加载…' : '共 ' + items.length + ' 条'}</span>
+            <span>{loading ? '正在加载…' : `显示 ${items.length} 条 · 当前视图共 ${viewTotal} 条`}</span>
+            {filters.trash !== 'only' && (
             <Button
               size="small"
               type={focusMode ? 'primary' : 'default'}
@@ -1121,6 +1468,7 @@ export function Dashboard({
             >
               开始处理
             </Button>
+            )}
             <Button
               size="small"
               icon={<AppIcon name="select" size={18} />}
@@ -1134,13 +1482,31 @@ export function Dashboard({
           </div>
           <span className="muted">在空白处按 Ctrl+V，可直接添加图片、文字或网页链接</span>
         </div>
+        {filterChips.length > 0 && (
+          <div className="active-filter-chips" aria-label="当前筛选条件">
+            <span>当前条件</span>
+            {filterChips.map((chip) => (
+              <button key={chip.key} type="button" onClick={() => removeFilterChip(chip.key)} title="移除此条件">
+                {chip.label}<span aria-hidden="true">×</span>
+              </button>
+            ))}
+            <button type="button" className="clear-filter-chip" onClick={() => resetFilters()}>清除全部条件</button>
+          </div>
+        )}
 
         {selectionMode && (
-          <div className="bulk-toolbar" role="toolbar" aria-label="批量操作">
+          <div className="bulk-toolbar desktop-bulk-toolbar" role="toolbar" aria-label="批量操作">
             <strong>已选 {selectedIds.size} 条</strong>
             <Button size="small" disabled={!items.length || bulkBusy} onClick={() => setSelectedIds(new Set(items.map((item) => item.id)))}>全选当前结果</Button>
             <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => setSelectedIds(new Set())}>取消全选</Button>
             <span className="bulk-divider" />
+            {filters.trash === 'only' ? (
+              <>
+                <Button size="small" type="primary" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="restore" size={16} />} onClick={() => void runBulkRestore()}>恢复</Button>
+                <Button size="small" danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="delete" size={16} />} onClick={() => void runBulkPermanentDelete()}>彻底删除</Button>
+              </>
+            ) : (
+              <>
             <Button size="small" type="primary" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ status: 'completed' }, '已批量完成')}>完成</Button>
             <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ status: 'pending' }, '已批量恢复')}>恢复</Button>
             <Button size="small" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="star" size={16} />} onClick={() => void runBulk({ isStarred: true }, '已批量加星标')}>加星标</Button>
@@ -1167,19 +1533,46 @@ export function Dashboard({
               )}
               <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ categoryId: bulkCategoryId || null }, '类别已批量更新')}>应用类别</Button>
             </label>
-            <Button size="small" danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="delete" size={16} />} onClick={() => void runBulkDelete()}>删除</Button>
+            <Button size="small" danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="delete" size={16} />} onClick={() => void runBulkDelete()}>移到回收站</Button>
+              </>
+            )}
           </div>
         )}
 
         {!loading && !items.length && (
           <EmptyState>
             {theme === 'animal-island' && <img src={islandBag} alt="" className="empty-mascot" />}
-            <h2>这里还没有内容</h2>
-            <p>复制图片、文字或网页链接，然后在这里按 Ctrl+V 即可添加。</p>
-            <div className="empty-actions">
-              <Button type="primary" onClick={() => setOverlay({ type: 'link' })}>添加网页</Button>
-              <Button onClick={() => setOverlay({ type: 'images', files: [] })}>保存图片</Button>
-            </div>
+            {viewTotal === 0 ? filters.trash === 'only' ? (
+              <>
+                <h2>回收站是空的</h2>
+                <p>删除的内容会在这里保留 7 天，期间可以随时恢复。</p>
+                <div className="empty-actions">
+                  <Button type="primary" onClick={() => switchLibraryView('active')}>返回阅读清单</Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2>开始建立你的稍后阅读清单</h2>
+                <p>粘贴图片、文字或网页链接即可添加，也可以使用下面的入口。</p>
+                <div className="empty-actions">
+                  <Button type="primary" onClick={() => setOverlay({ type: 'link' })}>添加网页</Button>
+                  <Button onClick={() => setOverlay({ type: 'text', initialText: '' })}>保存文本</Button>
+                  <Button onClick={() => setOverlay({ type: 'images', files: [] })}>保存图片</Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2>当前条件下没有结果</h2>
+                <p>资料库里仍有 {viewTotal} 条内容，只是没有符合当前搜索或筛选条件的条目。</p>
+                <div className="empty-filter-summary">
+                  {filterChips.map((chip) => <span key={chip.key}>{chip.label}</span>)}
+                </div>
+                <div className="empty-actions">
+                  <Button type="primary" onClick={() => resetFilters()}>清除筛选</Button>
+                  <Button onClick={() => resetFilters(true)}>查看全部</Button>
+                </div>
+              </>
+            )}
           </EmptyState>
         )}
 
@@ -1200,6 +1593,7 @@ export function Dashboard({
                     item={item}
                     categories={categories}
                     selectionMode={selectionMode}
+                    trashMode={filters.trash === 'only'}
                     selected={selectedIds.has(item.id)}
                     busy={busyItems.has(item.id)}
                     retry={retryItems[item.id]}
@@ -1207,6 +1601,8 @@ export function Dashboard({
                     onPatch={(changes, label) => patchItem(item, changes, label)}
                     onSelect={(selected) => toggleSelection(item.id, selected)}
                     onDelete={() => deleteItem(item)}
+                    onRestore={() => restoreItem(item)}
+                    onPermanentDelete={() => permanentDeleteItem(item)}
                     onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
                     now={now}
                   />
@@ -1216,6 +1612,20 @@ export function Dashboard({
           ))}
         </div>
       </main>
+
+      {selectionMode && (
+        <div className="mobile-selection-bar" role="toolbar" aria-label="移动端批量操作">
+          <strong>已选 {selectedIds.size} 条</strong>
+          <button type="button" disabled={!items.length || bulkBusy} onClick={() => setSelectedIds(new Set(items.map((item) => item.id)))}>全选</button>
+          {filters.trash === 'only' ? (
+            <button type="button" className="is-primary" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulkRestore()}>恢复</button>
+          ) : (
+            <button type="button" className="is-primary" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ status: 'completed' }, '已批量完成')}>完成</button>
+          )}
+          <button type="button" disabled={!selectedIds.size || bulkBusy} onClick={() => setBulkPanelOpen(true)}>更多</button>
+          <button type="button" onClick={() => { setSelectionMode(false); setSelectedIds(new Set()); setBulkPanelOpen(false) }}>退出</button>
+        </div>
+      )}
 
       <nav className="mobile-bottom-nav" aria-label="移动端主导航">
         <button
@@ -1326,13 +1736,14 @@ export function Dashboard({
                 { key: 'smart', label: '智能优先' },
                 { key: 'newest', label: '最近保存' },
                 { key: 'oldest', label: '最久未看' },
-                { key: 'recently_completed', label: '最近完成' }
+                { key: 'recently_completed', label: '最近完成' },
+                { key: 'planned_date', label: '计划日期' }
               ]}
               onChange={(value) => setFilters((current) => ({ ...current, sort: value as ItemFilters['sort'] }))}
             />
           </label>
           <div className="mobile-sheet-actions">
-            <Button type="dashed" onClick={() => setFilters({ ...defaultFilters })}>清除筛选</Button>
+            <Button type="dashed" onClick={() => resetFilters()}>清除筛选</Button>
             <Button type="primary" onClick={() => setMobilePanel(null)}>查看结果</Button>
           </div>
         </div>
@@ -1349,6 +1760,9 @@ export function Dashboard({
           <Button block size="large" icon={<AppIcon name="image" size={24} />} onClick={() => openFromMobile({ type: 'images', files: [] })}>
             保存图片
           </Button>
+          <Button block size="large" icon={<AppIcon name="clipboard" size={24} />} onClick={() => void readClipboardAndSave()}>
+            识别剪贴板并保存
+          </Button>
           <p>断网时也可以添加；内容会先安全保存在本机，联网后自动同步。</p>
         </div>
       </MobileActionSheet>
@@ -1361,8 +1775,10 @@ export function Dashboard({
           <Button block size="large" icon={<AppIcon name="categories" size={24} />} onClick={() => openFromMobile({ type: 'categories' })}>
             类别管理
           </Button>
-          <Button block size="large" icon={<AppIcon name="bookmark" size={24} />} onClick={() => openFromMobile({ type: 'bookmarklet' })}>
-            书签按钮
+          <Button block size="large" icon={<AppIcon name="trash" size={24} />} onClick={() => {
+            switchLibraryView(filters.trash === 'only' ? 'active' : 'only')
+          }}>
+            {filters.trash === 'only' ? '返回阅读清单' : `回收站${trashTotal ? `（${trashTotal}）` : ''}`}
           </Button>
           <ThemeControl />
           <Button block size="large" icon={<AppIcon name="account" size={24} />} onClick={() => openFromMobile({ type: 'account' })}>
@@ -1376,6 +1792,46 @@ export function Dashboard({
           </Button>
         </div>
       </MobileActionSheet>
+
+      <MobileActionSheet open={bulkPanelOpen} title="批量操作" onClose={() => setBulkPanelOpen(false)}>
+        <div className="mobile-bulk-sheet stack">
+          <p>已选择 {selectedIds.size} 条内容</p>
+          {filters.trash === 'only' ? (
+            <>
+              <Button block type="primary" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="restore" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulkRestore() }}>恢复到清单</Button>
+              <Button block danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="delete" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulkPermanentDelete() }}>彻底删除</Button>
+            </>
+          ) : (
+            <>
+              <Button block type="primary" disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ status: 'completed' }, '已批量完成') }}>标记完成</Button>
+              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ status: 'pending' }, '已批量恢复') }}>恢复待处理</Button>
+              <Button block disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="star" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulk({ isStarred: true }, '已批量加星标') }}>加星标</Button>
+              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ isStarred: false }, '已批量取消星标') }}>取消星标</Button>
+              <Button block disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="today" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulk({ plannedFor: chinaToday() }, '已安排今天处理') }}>安排今天</Button>
+              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ plannedFor: addChinaDays(1) }, '已安排明天处理') }}>安排明天</Button>
+              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ plannedFor: addChinaDays(7) }, '已安排一周后处理') }}>安排一周后</Button>
+              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ plannedFor: null }, '已清除处理计划') }}>清除计划</Button>
+              <label className="field">
+                <span>修改类别</span>
+                <select value={bulkCategoryId} onChange={(event) => setBulkCategoryId(event.target.value)}>
+                  <option value="">未分类</option>
+                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                </select>
+              </label>
+              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ categoryId: bulkCategoryId || null }, '类别已批量更新') }}>应用类别</Button>
+              <Button block danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="trash" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulkDelete() }}>移到回收站</Button>
+            </>
+          )}
+        </div>
+      </MobileActionSheet>
+
+      {undoDelete && (
+        <div className="delete-undo-bar" role="status" aria-live="polite">
+          <span>{undoDelete.label}</span>
+          <button type="button" onClick={() => void undoLastDelete()}>撤销</button>
+          <button type="button" aria-label="关闭撤销提示" onClick={() => setUndoDelete(null)}>×</button>
+        </div>
+      )}
 
       <footer className="app-footer">
         {theme === 'animal-island' ? (

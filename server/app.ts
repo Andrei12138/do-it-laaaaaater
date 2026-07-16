@@ -60,6 +60,7 @@ const BackupItemSchema = z.object({
   completedAt: z.number().int().min(0).nullable(),
   isStarred: z.boolean(),
   plannedFor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  trashedAt: z.number().int().min(0).nullable().optional(),
   assets: z.array(BackupAssetSchema).max(MAX_IMAGES_PER_ITEM + 1)
 }).passthrough()
 type Row = Record<string, unknown>
@@ -347,6 +348,34 @@ function patchItem(context: AppContext, userId: string, itemId: string, body: Re
   return getItem(context, userId, itemId)
 }
 
+async function permanentlyDeleteItems(context: AppContext, userId: string, itemIds: string[]) {
+  const ids = [...new Set(itemIds)].filter(Boolean)
+  if (!ids.length) return 0
+  const placeholders = ids.map(() => '?').join(',')
+  const owned = context.db.prepare(
+    `SELECT id FROM items WHERE user_id=? AND id IN (${placeholders})`
+  ).all(userId, ...ids).map((row) => String((row as Row).id))
+  if (!owned.length) return 0
+  const ownedPlaceholders = owned.map(() => '?').join(',')
+  const assets = context.db.prepare(
+    `SELECT file_name AS fileName,thumb_name AS thumbName FROM assets WHERE user_id=? AND item_id IN (${ownedPlaceholders})`
+  ).all(userId, ...owned) as Array<{ fileName: string; thumbName: string }>
+  runTransaction(context.db, () => {
+    context.db.prepare(`DELETE FROM items WHERE user_id=? AND id IN (${ownedPlaceholders})`).run(userId, ...owned)
+    removeUnusedTags(context, userId)
+  })
+  await removePreparedAssets(context, assets)
+  return owned.length
+}
+
+async function purgeExpiredTrash(context: AppContext, userId: string) {
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
+  const expired = context.db.prepare(
+    'SELECT id FROM items WHERE user_id=? AND trashed_at IS NOT NULL AND trashed_at<=?'
+  ).all(userId, cutoff).map((row) => String((row as Row).id))
+  return permanentlyDeleteItems(context, userId, expired)
+}
+
 const loginAttempts = new Map<string, { count: number; resetAt: number }>()
 
 function loginKey(req: Request, email: string) {
@@ -603,8 +632,8 @@ export function createApp(context = createContext()) {
         }
         runTransaction(context.db, () => {
           context.db.prepare(
-            'INSERT INTO items (id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,is_starred,planned_for) ' +
-            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
+          'INSERT INTO items (id,user_id,kind,title,url,normalized_url,status,category_id,created_at,updated_at,completed_at,is_starred,planned_for,trashed_at) ' +
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
           ).run(
             item.id,
             userId,
@@ -618,7 +647,8 @@ export function createApp(context = createContext()) {
             item.updatedAt,
             item.status === 'completed' ? (item.completedAt || item.updatedAt) : null,
             item.isStarred ? 1 : 0,
-            item.status === 'completed' ? null : validPlannedFor(item.plannedFor)
+            item.status === 'completed' ? null : validPlannedFor(item.plannedFor),
+            item.trashedAt ? Date.now() : null
           )
           prepared.forEach((asset) => insertPreparedAsset(context, asset))
         })
@@ -685,8 +715,9 @@ export function createApp(context = createContext()) {
     res.json(rows)
   })
 
-  app.get('/api/items', authRequired(context), (req: UserRequest, res) => {
+  app.get('/api/items', authRequired(context), async (req: UserRequest, res) => {
     const queryValue = (value: unknown) => typeof value === 'string' ? value : undefined
+    await purgeExpiredTrash(context, req.userId as string)
     res.json(listItems(context, req.userId as string, {
       status: queryValue(req.query.status),
       kind: queryValue(req.query.kind),
@@ -695,7 +726,8 @@ export function createApp(context = createContext()) {
       date: queryValue(req.query.date),
       q: queryValue(req.query.q),
       priority: queryValue(req.query.priority),
-      sort: queryValue(req.query.sort)
+      sort: queryValue(req.query.sort),
+      trash: queryValue(req.query.trash)
     }))
   })
 
@@ -706,24 +738,23 @@ export function createApp(context = createContext()) {
       : []
     if (!ids.length) throw new ApiError(400, '请选择至少一个条目')
     const owned = ids.filter((id) => findRawItem(context, userId, id))
-    if (req.body.delete === true) {
+    if (req.body.permanentDelete === true) {
+      const trashed = owned.filter((id) => Boolean((findRawItem(context, userId, id) as Row | undefined)?.trashed_at))
+      const deleted = await permanentlyDeleteItems(context, userId, trashed)
+      res.json({ updated: 0, deleted, succeededIds: trashed, failed: [] })
+      return
+    }
+    if (req.body.delete === true || req.body.restore === true) {
       if (!owned.length) {
         res.json({ updated: 0, deleted: 0, succeededIds: ids, failed: [] })
         return
       }
       const placeholders = owned.map(() => '?').join(',')
-      const assets = context.db.prepare(
-        `SELECT file_name AS fileName,thumb_name AS thumbName FROM assets WHERE user_id=? AND item_id IN (${placeholders})`
-      ).all(userId, ...owned) as Array<{ fileName: string; thumbName: string }>
-      runTransaction(context.db, () => {
-        context.db.prepare(`DELETE FROM items WHERE user_id=? AND id IN (${placeholders})`).run(userId, ...owned)
-        removeUnusedTags(context, userId)
-      })
-      await removePreparedAssets(context, assets.map((asset) => ({
-        fileName: asset.fileName,
-        thumbName: asset.thumbName
-      })))
-      res.json({ updated: 0, deleted: owned.length, succeededIds: ids, failed: [] })
+      const trashedAt = req.body.restore === true ? null : Date.now()
+      context.db.prepare(
+        `UPDATE items SET trashed_at=?,updated_at=? WHERE user_id=? AND id IN (${placeholders})`
+      ).run(trashedAt, Date.now(), userId, ...owned)
+      res.json({ updated: req.body.restore === true ? owned.length : 0, deleted: req.body.delete === true ? owned.length : 0, succeededIds: owned, failed: [] })
       return
     }
     if (owned.length !== ids.length) throw new ApiError(404, '部分条目不存在')
@@ -761,9 +792,12 @@ export function createApp(context = createContext()) {
         throw new ApiError(400, error instanceof Error ? error.message : '网址无效')
       }
       const duplicate = context.db.prepare(
-        "SELECT id FROM items WHERE user_id=? AND kind='link' AND normalized_url=?"
+        "SELECT id,trashed_at FROM items WHERE user_id=? AND kind='link' AND normalized_url=?"
       ).get(userId, normalizedUrl) as Row | undefined
-      if (duplicate) throw new ApiError(409, '这个网页已经保存过了', { existingId: String(duplicate.id) })
+      if (duplicate) throw new ApiError(409, duplicate.trashed_at ? '这个网页在回收站中' : '这个网页已经保存过了', {
+        existingId: String(duplicate.id),
+        trashed: Boolean(duplicate.trashed_at)
+      })
 
       const categoryId = ensureCategory(context, userId, optionalCategory(req.body.categoryId))
       const fallback = new URL(normalizedUrl).hostname
@@ -987,23 +1021,46 @@ export function createApp(context = createContext()) {
     res.json(getItem(context, userId, routeId(req)))
   })
 
+  app.post('/api/items/trash/empty', authRequired(context), async (req: UserRequest, res) => {
+    if (req.body.confirmed !== true) throw new ApiError(400, '清空回收站需要明确确认')
+    const userId = req.userId as string
+    const ids = context.db.prepare(
+      'SELECT id FROM items WHERE user_id=? AND trashed_at IS NOT NULL'
+    ).all(userId).map((row) => String((row as Row).id))
+    const deleted = await permanentlyDeleteItems(context, userId, ids)
+    res.json({ deleted })
+  })
+
+  app.post('/api/items/:id/restore', authRequired(context), (req: UserRequest, res) => {
+    const userId = req.userId as string
+    const raw = findRawItem(context, userId, routeId(req))
+    if (!raw) throw new ApiError(404, '条目不存在')
+    context.db.prepare(
+      'UPDATE items SET trashed_at=NULL,updated_at=? WHERE id=? AND user_id=?'
+    ).run(Date.now(), routeId(req), userId)
+    res.json(getItem(context, userId, routeId(req)))
+  })
+
+  app.delete('/api/items/:id/permanent', authRequired(context), async (req: UserRequest, res) => {
+    const userId = req.userId as string
+    const raw = findRawItem(context, userId, routeId(req))
+    if (!raw) throw new ApiError(404, '条目不存在')
+    if (!raw.trashed_at) throw new ApiError(400, '请先把条目移到回收站')
+    assertItemVersion(context, userId, routeId(req), req.body as Record<string, unknown>)
+    await permanentlyDeleteItems(context, userId, [routeId(req)])
+    res.json({ ok: true })
+  })
+
   app.delete('/api/items/:id', authRequired(context), async (req: UserRequest, res) => {
     const userId = req.userId as string
     const raw = findRawItem(context, userId, routeId(req))
     if (!raw) throw new ApiError(404, '条目不存在')
     assertItemVersion(context, userId, routeId(req), req.body as Record<string, unknown>)
-    const assets = context.db.prepare(
-      'SELECT file_name AS fileName,thumb_name AS thumbName FROM assets WHERE item_id=? AND user_id=?'
-    ).all(routeId(req), userId) as Array<{ fileName: string; thumbName: string }>
-    runTransaction(context.db, () => {
-      context.db.prepare('DELETE FROM items WHERE id=? AND user_id=?').run(routeId(req), userId)
-      removeUnusedTags(context, userId)
-    })
-    await removePreparedAssets(context, assets.map((asset) => ({
-      fileName: asset.fileName,
-      thumbName: asset.thumbName
-    })))
-    res.json({ ok: true })
+    if (!raw.trashed_at) {
+      context.db.prepare('UPDATE items SET trashed_at=?,updated_at=? WHERE id=? AND user_id=?')
+        .run(Date.now(), Date.now(), routeId(req), userId)
+    }
+    res.json({ ok: true, item: getItem(context, userId, routeId(req)) })
   })
 
   app.post(

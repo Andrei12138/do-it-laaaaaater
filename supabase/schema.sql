@@ -35,7 +35,8 @@ create table if not exists public.items (
   updated_at timestamptz not null default now(),
   completed_at timestamptz,
   is_starred boolean not null default false,
-  planned_for date
+  planned_for date,
+  trashed_at timestamptz
 );
 
 create unique index if not exists items_id_user_unique
@@ -50,6 +51,9 @@ create index if not exists items_user_status_date
 
 create index if not exists items_user_priority
   on public.items (user_id, planned_for, is_starred, created_at desc);
+
+create index if not exists items_user_trash
+  on public.items (user_id, trashed_at, created_at desc);
 
 create table if not exists public.user_preferences (
   user_id uuid primary key references auth.users(id) on delete cascade,
