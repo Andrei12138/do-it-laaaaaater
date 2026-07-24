@@ -279,6 +279,17 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(page.getByText('发现一份未完成草稿')).toHaveCount(0)
   await expect(page.getByRole('combobox', { name: '排序方式' })).toContainText('最久未看')
   await selectDashboardOption(page, '排序方式', '智能优先')
+  const smartLaterGroup = page.locator('[data-group-key="later"]')
+  const smartStarredGroup = page.locator('[data-group-key="starred"]')
+  const currentChinaDateLabel = await page.evaluate(() => new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  }).format(new Date()))
+  await expect(smartLaterGroup.getByRole('heading', { level: 3, name: currentChinaDateLabel })).toBeVisible()
+  await expect(smartLaterGroup.locator('.rest-date-group')).toHaveCount(1)
+  await expect(smartStarredGroup.locator('.rest-date-heading')).toHaveCount(0)
 
   await page.getByRole('button', { name: '开始处理' }).click()
   const focusDialog = page.getByRole('dialog', { name: '晚间处理模式' })
@@ -457,6 +468,7 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(page.locator('.app-header')).toBeVisible()
   await expect(page.locator('.mobile-bottom-nav')).toBeVisible()
+  await expect(page.locator('[data-group-key="later"] .rest-date-heading')).toBeVisible()
   await expect(page.locator('.mobile-bottom-nav').getByRole('button')).toHaveCount(5)
   const compactHeaderBox = await page.locator('.app-header').boundingBox()
   const compactToolbarBox = await page.locator('.toolbar').boundingBox()
@@ -989,6 +1001,7 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(animalBulkToolbar).toContainText('已选 0 条')
 
   await page.setViewportSize({ width: 430, height: 932 })
+  await expect(page.locator('[data-group-key="later"] .rest-date-heading')).toBeVisible()
   const mobileSelectionBar = page.getByRole('toolbar', { name: '移动端批量操作' })
   await expect(mobileSelectionBar).toBeVisible()
   await expect(page.locator('.mobile-bottom-nav')).toBeHidden()

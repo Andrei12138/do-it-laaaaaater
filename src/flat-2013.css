@@ -632,6 +632,33 @@ html[data-theme='flat-2013'] .date-divider[class*='animal-divider-'] {
   background-image: none !important;
 }
 
+html[data-theme='flat-2013'] .rest-date-groups {
+  gap: 27px;
+}
+
+html[data-theme='flat-2013'] .rest-date-heading {
+  gap: 12px;
+  margin: 0 0 12px;
+}
+
+html[data-theme='flat-2013'] .rest-date-heading time {
+  padding: 0;
+  color: var(--dark);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: 17px;
+  font-weight: 400;
+}
+
+html[data-theme='flat-2013'] .rest-date-divider,
+html[data-theme='flat-2013'] .rest-date-divider[class*='animal-divider-'] {
+  height: 1px !important;
+  background: var(--turq) !important;
+  background-image: none !important;
+  opacity: 1;
+}
+
 html[data-theme='flat-2013'] .item-list {
   gap: 16px;
 }

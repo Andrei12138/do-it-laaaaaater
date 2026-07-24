@@ -24,7 +24,8 @@ import {
 } from 'animal-island-ui'
 import islandBag from 'animal-island-ui/items/item-022.png'
 import { ApiRequestError, api, errorMessage, jsonRequest } from '../api'
-import { addChinaDays, chinaToday, plannedDateLabel, plannedState, smartPriority } from '../china-date'
+import { addChinaDays, chinaToday, plannedDateLabel, plannedState } from '../china-date'
+import { smartDashboardGroups, type DashboardGroup } from '../dashboard-groups'
 import { discardDraft, readActiveDraft, type ActiveDraft } from '../draft-store'
 import { itemAgeLabel } from '../item-age'
 import { filterLibraryItems } from '../offline-query'
@@ -798,7 +799,7 @@ export function Dashboard({
     }
   }, [overlay])
 
-  const groups = useMemo(() => {
+  const groups = useMemo<DashboardGroup[]>(() => {
     if (filters.trash === 'only') {
       const result = new Map<string, LibraryItem[]>()
       items.forEach((item) => {
@@ -813,19 +814,7 @@ export function Dashboard({
       }))
     }
     if (filters.sort === 'smart') {
-      const today = chinaToday()
-      const definitions = [
-        { key: 'overdue', label: '逾期的今天处理', rank: 0 },
-        { key: 'today', label: '今天处理', rank: 1 },
-        { key: 'starred', label: '星标优先', rank: 2 },
-        { key: 'later', label: '其余内容', rank: 3 }
-      ]
-      return definitions.map((definition) => ({
-        key: definition.key,
-        label: definition.label,
-        date: '',
-        items: items.filter((item) => smartPriority(item, today) === definition.rank)
-      })).filter((group) => group.items.length)
+      return smartDashboardGroups(items, chinaToday())
     }
     const result = new Map<string, LibraryItem[]>()
     items.forEach((item) => {
@@ -1260,6 +1249,31 @@ export function Dashboard({
     setOverlay(nextOverlay)
   }
 
+  const renderItemList = (groupItems: LibraryItem[]) => (
+    <div className="item-list">
+      {groupItems.map((item) => (
+        <ItemCard
+          key={item.id}
+          item={item}
+          categories={categories}
+          selectionMode={selectionMode}
+          trashMode={filters.trash === 'only'}
+          selected={selectedIds.has(item.id)}
+          busy={busyItems.has(item.id)}
+          retry={retryItems[item.id]}
+          onEdit={() => setOverlay({ type: 'edit', item })}
+          onPatch={(changes, label) => patchItem(item, changes, label)}
+          onSelect={(selected) => toggleSelection(item.id, selected)}
+          onDelete={() => deleteItem(item)}
+          onRestore={() => restoreItem(item)}
+          onPermanentDelete={() => permanentDeleteItem(item)}
+          onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
+          now={now}
+        />
+      ))}
+    </div>
+  )
+
   return (
     <div className="app-shell" onDragOver={dropOnMain}>
       <header className="app-header">
@@ -1616,7 +1630,11 @@ export function Dashboard({
 
         <div className="date-groups">
           {groups.map((group) => (
-            <section key={group.key} className={`date-group${filters.sort === 'smart' ? ' priority-group' : ''}`}>
+            <section
+              key={group.key}
+              className={`date-group${filters.sort === 'smart' ? ' priority-group' : ''}`}
+              data-group-key={group.key}
+            >
               <div className="date-heading">
                 <Title size="small" color="app-teal">
                   <span role="heading" aria-level={2}>{group.label}</span>
@@ -1624,28 +1642,21 @@ export function Dashboard({
                 {group.date && <time dateTime={group.date}>{group.date}</time>}
               </div>
               <Divider type="line-teal" className="date-divider" />
-              <div className="item-list">
-                {group.items.map((item) => (
-                  <ItemCard
-                    key={item.id}
-                    item={item}
-                    categories={categories}
-                    selectionMode={selectionMode}
-                    trashMode={filters.trash === 'only'}
-                    selected={selectedIds.has(item.id)}
-                    busy={busyItems.has(item.id)}
-                    retry={retryItems[item.id]}
-                    onEdit={() => setOverlay({ type: 'edit', item })}
-                    onPatch={(changes, label) => patchItem(item, changes, label)}
-                    onSelect={(selected) => toggleSelection(item.id, selected)}
-                    onDelete={() => deleteItem(item)}
-                    onRestore={() => restoreItem(item)}
-                    onPermanentDelete={() => permanentDeleteItem(item)}
-                    onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
-                    now={now}
-                  />
-                ))}
-              </div>
+              {group.dateGroups ? (
+                <div className="rest-date-groups">
+                  {group.dateGroups.map((dateGroup) => (
+                    <section key={dateGroup.key} className="rest-date-group">
+                      <div className="rest-date-heading">
+                        <time dateTime={dateGroup.date}>
+                          <span role="heading" aria-level={3}>{dateGroup.label}</span>
+                        </time>
+                        <Divider type="line-teal" className="rest-date-divider" />
+                      </div>
+                      {renderItemList(dateGroup.items)}
+                    </section>
+                  ))}
+                </div>
+              ) : renderItemList(group.items)}
             </section>
           ))}
         </div>
