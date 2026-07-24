@@ -559,6 +559,11 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await memoInspector.getByRole('button', { name: '选中卡片并调整位置、大小或角度' }).click()
   const referenceMoved = await referenceCard.boundingBox()
   expect(referenceMoved).toBeTruthy()
+  const referenceTitle = referenceCard.locator('.memo-reference-copy strong')
+  const referenceTag = referenceCard.locator('.memo-reference-tags span').first()
+  const titleFontBeforeResize = await referenceTitle.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
+  const tagFontBeforeResize = await referenceTag.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
+  const tagBoxBeforeResize = await referenceTag.boundingBox()
   await page.mouse.move(
     (referenceMoved?.x || 0) + (referenceMoved?.width || 0) + 8,
     (referenceMoved?.y || 0) + (referenceMoved?.height || 0) + 8
@@ -571,6 +576,15 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   )
   await page.mouse.up()
   await expect.poll(async () => (await referenceCard.boundingBox())?.width || 0).toBeGreaterThan((referenceMoved?.width || 0) + 30)
+  await expect.poll(
+    () => referenceTitle.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
+  ).toBeGreaterThan(titleFontBeforeResize + 1)
+  await expect.poll(
+    () => referenceTag.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
+  ).toBeGreaterThan(tagFontBeforeResize + .5)
+  await expect.poll(
+    async () => (await referenceTag.boundingBox())?.height || 0
+  ).toBeGreaterThan((tagBoxBeforeResize?.height || 0) + 1)
 
   await memoInspector.getByRole('button', { name: '选中卡片并调整位置、大小或角度' }).click()
   const referenceResized = await referenceCard.boundingBox()
