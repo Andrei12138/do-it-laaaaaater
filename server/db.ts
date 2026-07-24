@@ -7,6 +7,7 @@ export interface AppContext {
   dataDir: string
   originalsDir: string
   thumbsDir: string
+  memoAssetsDir: string
 }
 
 export const DEFAULT_CATEGORIES = [
@@ -93,7 +94,25 @@ export function initializeDatabase(db: DatabaseSync) {
     '  created_at INTEGER NOT NULL',
     ');',
     'CREATE INDEX IF NOT EXISTS idx_assets_item_order',
-    '  ON assets(item_id, role, sort_order);'
+    '  ON assets(item_id, role, sort_order);',
+    'CREATE TABLE IF NOT EXISTS memo_canvas (',
+    '  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,',
+    '  scene_json TEXT NOT NULL,',
+    "  background TEXT NOT NULL DEFAULT 'solid' CHECK(background IN ('solid', 'grid', 'dots', 'lines')),",
+    "  color_mode TEXT NOT NULL DEFAULT 'light' CHECK(color_mode IN ('light', 'dark')),",
+    '  updated_at INTEGER NOT NULL',
+    ');',
+    'CREATE TABLE IF NOT EXISTS memo_assets (',
+    '  file_id TEXT NOT NULL,',
+    '  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,',
+    '  file_name TEXT NOT NULL,',
+    '  mime_type TEXT NOT NULL,',
+    '  size INTEGER NOT NULL,',
+    '  created_at INTEGER NOT NULL,',
+    '  PRIMARY KEY(user_id, file_id)',
+    ');',
+    'CREATE INDEX IF NOT EXISTS idx_memo_assets_user_created',
+    '  ON memo_assets(user_id, created_at);'
   ].join('\n'))
 
   const itemsSchema = db.prepare(
@@ -176,11 +195,13 @@ export function createContext(dataDir = process.env.DATA_DIR || path.join(proces
   const resolvedDataDir = path.resolve(dataDir)
   const originalsDir = path.join(resolvedDataDir, 'images', 'originals')
   const thumbsDir = path.join(resolvedDataDir, 'images', 'thumbs')
+  const memoAssetsDir = path.join(resolvedDataDir, 'memo-canvas', 'images')
   mkdirSync(originalsDir, { recursive: true })
   mkdirSync(thumbsDir, { recursive: true })
+  mkdirSync(memoAssetsDir, { recursive: true })
   const db = new DatabaseSync(path.join(resolvedDataDir, 'do-it-laaaaaater.sqlite'))
   initializeDatabase(db)
-  return { db, dataDir: resolvedDataDir, originalsDir, thumbsDir }
+  return { db, dataDir: resolvedDataDir, originalsDir, thumbsDir, memoAssetsDir }
 }
 
 export function runTransaction<T>(db: DatabaseSync, action: () => T): T {

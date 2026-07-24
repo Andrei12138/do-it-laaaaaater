@@ -9,6 +9,8 @@ import 'animal-island-ui/style'
 import './styles.css'
 import './flat-2013.css'
 
+(window as Window & { EXCALIDRAW_ASSET_PATH?: string }).EXCALIDRAW_ASSET_PATH = '/excalidraw-assets/'
+
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
     <ThemeProvider>

@@ -75,3 +75,27 @@ export interface BulkItemChanges {
   isStarred?: boolean
   plannedFor?: string | null
 }
+
+export type MemoBackground = 'solid' | 'grid' | 'dots' | 'lines'
+export type MemoColorMode = 'light' | 'dark'
+
+export interface MemoCanvasAsset {
+  fileId: string
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
+  size: number
+  createdAt: number
+  url: string
+}
+
+export interface MemoCanvasScene {
+  elements: unknown[]
+  appState: Record<string, unknown>
+}
+
+export interface MemoCanvasSnapshot {
+  scene: MemoCanvasScene
+  background: MemoBackground
+  colorMode: MemoColorMode
+  updatedAt: number
+  assets: MemoCanvasAsset[]
+}

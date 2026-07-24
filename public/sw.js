@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'do-it-laaaaaater-shell-'
-const CACHE_NAME = CACHE_PREFIX + '2026-07-16-offline-v2'
+const CACHE_NAME = CACHE_PREFIX + '2026-07-24-memo-canvas-v3'
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -54,6 +54,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   const staticAsset = url.pathname.startsWith('/assets/') ||
+    url.pathname.startsWith('/excalidraw-assets/') ||
     url.pathname.startsWith('/icons/') ||
     url.pathname === '/manifest.webmanifest'
   if (!staticAsset) return

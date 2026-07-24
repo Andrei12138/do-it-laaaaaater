@@ -563,6 +563,7 @@ select {
 }
 
 .header-actions {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -571,6 +572,70 @@ select {
 
 .header-actions button {
   flex: 0 0 auto;
+}
+
+.desktop-add-menu {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 10px);
+  left: 0;
+  display: grid;
+  width: 290px;
+  padding: 8px;
+  color: var(--ai-text);
+  background: var(--ai-bg);
+  border: 2px solid var(--ai-primary);
+  border-radius: var(--ai-radius-lg);
+  box-shadow: var(--ai-shadow-lg);
+}
+
+.desktop-add-menu::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: 30px;
+  width: 14px;
+  height: 14px;
+  background: var(--ai-bg);
+  border-top: 2px solid var(--ai-primary);
+  border-left: 2px solid var(--ai-primary);
+  transform: rotate(45deg);
+}
+
+.desktop-add-menu > button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 12px;
+  color: var(--ai-text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--ai-radius-base);
+  text-align: left;
+  cursor: pointer;
+}
+
+.desktop-add-menu > button:hover {
+  background: var(--ai-primary-bg);
+}
+
+.desktop-add-menu > button > span {
+  display: grid;
+  gap: 2px;
+}
+
+.desktop-add-menu strong {
+  font-size: 14px;
+}
+
+.desktop-add-menu small {
+  color: var(--ai-text-secondary);
+  font-size: 11px;
 }
 
 .main-content {

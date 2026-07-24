@@ -124,6 +124,60 @@ describe('本地应用接口', () => {
     expect(conflict.body.details.conflict).toBe(true)
   })
 
+  it('每个账号拥有一个可同步的备忘录画布，并会清理移除的画布图片', async () => {
+    await setup()
+    const empty = await agent.get('/api/memo-canvas')
+    expect(empty.status).toBe(200)
+    expect(empty.body).toMatchObject({
+      scene: { elements: [], appState: {} },
+      background: 'solid',
+      colorMode: 'light',
+      assets: []
+    })
+
+    const fileId = 'memoImageExample01'
+    const uploaded = await agent
+      .post('/api/memo-assets')
+      .field('fileId', fileId)
+      .field('createdAt', '1700000000000')
+      .attach('file', PNG, { filename: 'canvas.png', contentType: 'image/png' })
+    expect(uploaded.status).toBe(201)
+    expect(uploaded.body).toMatchObject({ fileId, mimeType: 'image/png', size: PNG.length })
+    expect(readdirSync(context.memoAssetsDir)).toHaveLength(1)
+
+    const scene = {
+      elements: [{
+        id: 'image-element',
+        type: 'image',
+        fileId,
+        isDeleted: false
+      }],
+      appState: { scrollX: 12, scrollY: 34 }
+    }
+    const saved = await agent.put('/api/memo-canvas').send({
+      scene,
+      background: 'dots',
+      colorMode: 'dark',
+      fileIds: [fileId]
+    })
+    expect(saved.status).toBe(200)
+    expect(saved.body.background).toBe('dots')
+    expect(saved.body.colorMode).toBe('dark')
+    expect(saved.body.scene).toEqual(scene)
+    expect(saved.body.assets).toHaveLength(1)
+    expect((await agent.get(saved.body.assets[0].url)).status).toBe(200)
+
+    const cleared = await agent.put('/api/memo-canvas').send({
+      scene: { elements: [], appState: {} },
+      background: 'lines',
+      colorMode: 'light',
+      fileIds: []
+    })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.assets).toEqual([])
+    expect(readdirSync(context.memoAssetsDir)).toHaveLength(0)
+  })
+
   it('保存、搜索、去重并切换网页状态', async () => {
     await setup()
     const categories = (await agent.get('/api/categories')).body as Array<{ id: string; name: string }>

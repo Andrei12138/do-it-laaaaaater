@@ -25,6 +25,8 @@ import {
   MAX_IMAGES_PER_ITEM,
   insertPreparedAsset,
   prepareImage,
+  prepareMemoAsset,
+  removeMemoAssets,
   removePreparedAsset,
   removePreparedAssets,
   type PreparedAsset
@@ -65,6 +67,8 @@ const BackupItemSchema = z.object({
 }).passthrough()
 type Row = Record<string, unknown>
 type UserRequest = Request & { userId?: string; userEmail?: string }
+const MEMO_FILE_ID = /^[a-zA-Z0-9_-]{1,128}$/
+const MAX_MEMO_SCENE_BYTES = 12 * 1024 * 1024
 
 class ApiError extends Error {
   status: number
@@ -114,6 +118,68 @@ function categoryColor(value: unknown) {
   const color = String(value || '').trim()
   if (!/^#[0-9a-f]{6}$/i.test(color)) throw new ApiError(400, '请选择有效的类别颜色')
   return color.toLowerCase()
+}
+
+function memoBackground(value: unknown) {
+  if (value === 'solid' || value === 'grid' || value === 'dots' || value === 'lines') return value
+  throw new ApiError(400, '画布背景无效')
+}
+
+function memoColorMode(value: unknown) {
+  if (value === 'light' || value === 'dark') return value
+  throw new ApiError(400, '画布昼夜模式无效')
+}
+
+function memoFileIds(value: unknown) {
+  if (!Array.isArray(value) || value.length > 10_000) throw new ApiError(400, '画布图片清单无效')
+  const ids = value.map(String)
+  if (new Set(ids).size !== ids.length || ids.some((id) => !MEMO_FILE_ID.test(id))) {
+    throw new ApiError(400, '画布图片清单无效')
+  }
+  return ids
+}
+
+function memoSceneJson(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ApiError(400, '画布内容无效')
+  const scene = value as Record<string, unknown>
+  if (!Array.isArray(scene.elements) || scene.elements.length > 100_000) throw new ApiError(400, '画布元素过多或格式无效')
+  if (!scene.appState || typeof scene.appState !== 'object' || Array.isArray(scene.appState)) {
+    throw new ApiError(400, '画布视图设置无效')
+  }
+  const serialized = JSON.stringify({ elements: scene.elements, appState: scene.appState })
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_MEMO_SCENE_BYTES) throw new ApiError(400, '画布内容超过 12 MB 限制')
+  return serialized
+}
+
+function memoCanvasSnapshot(context: AppContext, userId: string) {
+  const row = context.db.prepare(
+    'SELECT scene_json,background,color_mode,updated_at FROM memo_canvas WHERE user_id=?'
+  ).get(userId) as Row | undefined
+  const assets = context.db.prepare(
+    'SELECT file_id,mime_type,size,created_at FROM memo_assets WHERE user_id=? ORDER BY created_at'
+  ).all(userId) as Row[]
+  let scene: { elements: unknown[]; appState: Record<string, unknown> } = { elements: [], appState: {} }
+  if (row?.scene_json) {
+    try {
+      const parsed = JSON.parse(String(row.scene_json)) as typeof scene
+      if (Array.isArray(parsed.elements) && parsed.appState && typeof parsed.appState === 'object') scene = parsed
+    } catch {
+      // A damaged local row must not prevent the user from opening the rest of the app.
+    }
+  }
+  return {
+    scene,
+    background: row?.background || 'solid',
+    colorMode: row?.color_mode || 'light',
+    updatedAt: row?.updated_at ? Number(row.updated_at) : 0,
+    assets: assets.map((asset) => ({
+      fileId: String(asset.file_id),
+      mimeType: String(asset.mime_type),
+      size: Number(asset.size),
+      createdAt: Number(asset.created_at),
+      url: `/api/memo-assets/${encodeURIComponent(String(asset.file_id))}`
+    }))
+  }
 }
 
 function clientUuid(value: unknown) {
@@ -410,7 +476,7 @@ export function createApp(context = createContext()) {
 
   app.disable('x-powered-by')
   app.set('trust proxy', false)
-  app.use(express.json({ limit: '1mb' }))
+  app.use(express.json({ limit: '12mb' }))
   app.use(express.urlencoded({ extended: true, limit: '1mb' }))
   app.use(cookieParser())
 
@@ -552,20 +618,131 @@ export function createApp(context = createContext()) {
     res.json(getPreferences(context, userId))
   })
 
+  app.get('/api/memo-canvas', authRequired(context), (req: UserRequest, res) => {
+    res.json(memoCanvasSnapshot(context, req.userId as string))
+  })
+
+  app.put('/api/memo-canvas', authRequired(context), async (req: UserRequest, res) => {
+    const userId = req.userId as string
+    const sceneJson = memoSceneJson(req.body.scene)
+    const background = memoBackground(req.body.background)
+    const colorMode = memoColorMode(req.body.colorMode)
+    const fileIds = memoFileIds(req.body.fileIds)
+    const storedIds = context.db.prepare(
+      'SELECT file_id FROM memo_assets WHERE user_id=?'
+    ).all(userId).map((row) => String((row as Row).file_id))
+    const missing = fileIds.filter((id) => !storedIds.includes(id))
+    if (missing.length) throw new ApiError(400, '画布图片尚未上传完成')
+    const stale = storedIds.filter((id) => !fileIds.includes(id))
+    const staleRows = stale.length
+      ? context.db.prepare(
+          `SELECT file_name AS fileName FROM memo_assets WHERE user_id=? AND file_id IN (${stale.map(() => '?').join(',')})`
+        ).all(userId, ...stale) as Array<{ fileName: string }>
+      : []
+    const updatedAt = Date.now()
+    runTransaction(context.db, () => {
+      context.db.prepare(
+        'INSERT INTO memo_canvas (user_id,scene_json,background,color_mode,updated_at) VALUES (?,?,?,?,?) ' +
+        'ON CONFLICT(user_id) DO UPDATE SET scene_json=excluded.scene_json,background=excluded.background,color_mode=excluded.color_mode,updated_at=excluded.updated_at'
+      ).run(userId, sceneJson, background, colorMode, updatedAt)
+      if (stale.length) {
+        context.db.prepare(
+          `DELETE FROM memo_assets WHERE user_id=? AND file_id IN (${stale.map(() => '?').join(',')})`
+        ).run(userId, ...stale)
+      }
+    })
+    await removeMemoAssets(context, staleRows)
+    res.json(memoCanvasSnapshot(context, userId))
+  })
+
+  app.post(
+    '/api/memo-assets',
+    authRequired(context),
+    upload.single('file'),
+    async (req: UserRequest, res) => {
+      const userId = req.userId as string
+      const fileId = String(req.body.fileId || '')
+      if (!MEMO_FILE_ID.test(fileId)) throw new ApiError(400, '画布图片编号无效')
+      const existing = context.db.prepare(
+        'SELECT file_id,mime_type,size,created_at FROM memo_assets WHERE user_id=? AND file_id=?'
+      ).get(userId, fileId) as Row | undefined
+      if (existing) {
+        res.json({
+          fileId,
+          mimeType: String(existing.mime_type),
+          size: Number(existing.size),
+          createdAt: Number(existing.created_at),
+          url: `/api/memo-assets/${encodeURIComponent(fileId)}`
+        })
+        return
+      }
+      const file = req.file
+      if (!file) throw new ApiError(400, '请选择画布图片')
+      const prepared = await prepareMemoAsset(context, {
+        fileId,
+        userId,
+        buffer: file.buffer,
+        createdAt: Number(req.body.createdAt)
+      })
+      try {
+        context.db.prepare(
+          'INSERT INTO memo_assets (file_id,user_id,file_name,mime_type,size,created_at) VALUES (?,?,?,?,?,?)'
+        ).run(
+          prepared.fileId,
+          prepared.userId,
+          prepared.fileName,
+          prepared.mimeType,
+          prepared.size,
+          prepared.createdAt
+        )
+      } catch (error) {
+        await removeMemoAssets(context, [{ fileName: prepared.fileName }])
+        throw error
+      }
+      res.status(201).json({
+        fileId,
+        mimeType: prepared.mimeType,
+        size: prepared.size,
+        createdAt: prepared.createdAt,
+        url: `/api/memo-assets/${encodeURIComponent(fileId)}`
+      })
+    }
+  )
+
+  app.get('/api/memo-assets/:id', authRequired(context), (req: UserRequest, res) => {
+    const fileId = routeId(req)
+    const row = context.db.prepare(
+      'SELECT file_name,mime_type FROM memo_assets WHERE user_id=? AND file_id=?'
+    ).get(req.userId as string, fileId) as Row | undefined
+    if (!row) throw new ApiError(404, '画布图片不存在')
+    const filePath = path.join(context.memoAssetsDir, path.basename(String(row.file_name)))
+    if (!existsSync(filePath)) throw new ApiError(404, '画布图片文件不存在')
+    res.setHeader('Cache-Control', 'private, max-age=86400')
+    res.type(String(row.mime_type))
+    res.setHeader('Content-Disposition', 'inline')
+    res.sendFile(filePath)
+  })
+
   app.post('/api/backup/clear', authRequired(context), async (req: UserRequest, res) => {
     if (req.body.confirmed !== true) throw new ApiError(400, '完整覆盖需要明确确认')
     const userId = req.userId as string
     const assets = context.db.prepare(
       'SELECT file_name AS fileName,thumb_name AS thumbName FROM assets WHERE user_id=?'
     ).all(userId) as Array<{ fileName: string; thumbName: string }>
+    const memoAssets = context.db.prepare(
+      'SELECT file_name AS fileName FROM memo_assets WHERE user_id=?'
+    ).all(userId) as Array<{ fileName: string }>
     runTransaction(context.db, () => {
       context.db.prepare('DELETE FROM items WHERE user_id=?').run(userId)
       context.db.prepare('DELETE FROM categories WHERE user_id=?').run(userId)
+      context.db.prepare('DELETE FROM memo_canvas WHERE user_id=?').run(userId)
+      context.db.prepare('DELETE FROM memo_assets WHERE user_id=?').run(userId)
       context.db.prepare('UPDATE user_preferences SET quick_save_category_id=NULL,updated_at=? WHERE user_id=?')
         .run(Date.now(), userId)
       removeUnusedTags(context, userId)
     })
     await removePreparedAssets(context, assets)
+    await removeMemoAssets(context, memoAssets)
     res.json({ cleared: true })
   })
 

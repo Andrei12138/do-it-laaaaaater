@@ -31,3 +31,16 @@ design-atlas 中对应风格条目的许可字段与当前正式包不一致；�
 完整许可文本见 `licenses/flat-design-2013-MIT.txt`。
 
 Flat Design 2013 原项目主要提供色板、排版、磁贴、按钮与输入框规则，并不包含覆盖本应用全部功能的图标包。新增工作流继续使用其原版色板、直角组件和零阴影规则，缺少的图标以统一的 24×24 几何 SVG 补充。
+
+## Excalidraw 与画布字体
+
+唯一备忘录画布使用 **Excalidraw 0.18.1** 作为绘图与无限画布基础。
+
+- 项目：<https://github.com/excalidraw/excalidraw>
+- 固定版本：`@excalidraw/excalidraw@0.18.1`
+- 许可：MIT
+- 完整许可文本：`licenses/excalidraw-MIT.txt`
+
+为保证画布断网时仍能正常显示文字，本项目按照 Excalidraw 的自托管说明，将该固定版本正式包中的字体文件保存在 `public/excalidraw-assets/fonts`，运行时不会再从外部字体服务器下载。
+
+其中 Excalifont、Assistant、Cascadia Code、Liberation Sans、Lilita One、Nunito、Virgil 和 Xiaolai 继续遵守各字体文件内记录的原始许可；适用的 SIL Open Font License 1.1 全文见 `licenses/SIL-OFL-1.1.txt`。Comic Shanns Mono 使用 MIT 许可，完整文本与作者署名见 `licenses/comic-shanns-MIT.txt`。这些字体仅随画布功能一起分发，没有被单独出售。
