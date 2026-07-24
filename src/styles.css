@@ -768,6 +768,45 @@ select {
   opacity: 0.82;
 }
 
+.rest-date-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.rest-date-group {
+  min-width: 0;
+}
+
+.rest-date-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 12px 12px;
+}
+
+.rest-date-heading time {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  color: #665640;
+  background: rgba(248, 248, 240, 0.76);
+  border: 2px solid rgba(121, 79, 39, 0.16);
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.rest-date-divider,
+.rest-date-divider[class*='animal-divider-'] {
+  flex: 1 1 auto;
+  width: auto !important;
+  min-width: 36px;
+  margin: 0 !important;
+  opacity: 0.68;
+}
+
 .item-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1655,6 +1694,20 @@ select {
     justify-content: space-between;
     gap: 8px;
     margin-inline: 9px;
+  }
+
+  .rest-date-groups {
+    gap: 24px;
+  }
+
+  .rest-date-heading {
+    gap: 9px;
+    margin-inline: 4px;
+  }
+
+  .rest-date-heading time {
+    padding: 5px 9px;
+    font-size: 13px;
   }
 
   .item-card.has-cover {
