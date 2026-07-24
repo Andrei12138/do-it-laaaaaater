@@ -521,42 +521,72 @@
 }
 
 .memo-reference-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  position: relative;
+  display: block;
   width: 100%;
   height: 100%;
   overflow: hidden;
   color: #34495e;
   background: #fff;
-  border: 4px solid #1abc9c;
-  border-left-width: 7px;
-  border-left-color: var(--memo-category-color, #95a5a6);
   border-radius: 0;
   box-sizing: border-box;
-  container-type: size;
   pointer-events: none;
 }
 
-.memo-reference-card.has-cover {
-  grid-template-columns: 28.8% minmax(0, 1fr);
+.memo-reference-card-surface {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: calc(680px * var(--memo-content-scale, 1));
+  height: calc(204px * var(--memo-content-scale, 1));
+  color: #34495e;
+  background: #fff;
+}
+
+.memo-reference-card.has-cover .memo-reference-card-surface {
+  grid-template-columns: calc(196px * var(--memo-content-scale, 1)) minmax(0, 1fr);
+}
+
+.memo-reference-card-frame {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: block;
+  border: 4px solid #1abc9c;
+  border-left-width: 7px;
+  border-left-color: var(--memo-category-color, #95a5a6);
+  border-radius: inherit;
+  box-sizing: border-box;
 }
 
 .memo-site-animal-island .memo-reference-card {
   color: #794f27;
   background: #fffdf5;
-  border: 4px solid #19c8b9;
-  border-left-width: 7px;
-  border-left-color: var(--memo-category-color, #95a5a6);
   border-radius: 24px;
+}
+
+.memo-site-animal-island .memo-reference-card-surface {
+  color: #794f27;
+  background: #fffdf5;
+}
+
+.memo-site-animal-island .memo-reference-card-frame {
+  border-color: #19c8b9;
+  border-left-color: var(--memo-category-color, #95a5a6);
   box-shadow: inset 0 -6px 0 rgba(121, 79, 39, .08);
 }
 
-.memo-reference-card.is-selected {
+.memo-reference-card.is-selected .memo-reference-card-frame {
   border-color: #f1c40f;
 }
 
 .memo-reference-card.is-trashed {
   filter: saturate(.45);
+}
+
+.memo-reference-card.is-trashed .memo-reference-card-frame {
   border-color: #e74c3c;
 }
 
@@ -564,32 +594,31 @@
   opacity: .78;
 }
 
-.memo-reference-card > img {
+.memo-reference-card-surface > img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
 .memo-reference-copy {
-  --memo-card-unit: min(1cqw, 3.333333cqh);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   min-width: 0;
   padding:
-    calc(var(--memo-card-unit) * 2.65)
-    calc(var(--memo-card-unit) * 2.8)
-    calc(var(--memo-card-unit) * 2.5);
+    calc(18px * var(--memo-content-scale, 1))
+    calc(19px * var(--memo-content-scale, 1))
+    calc(17px * var(--memo-content-scale, 1));
 }
 
 .memo-reference-copy strong {
   display: -webkit-box;
   overflow: hidden;
   margin:
-    calc(var(--memo-card-unit) * 1.9)
+    calc(13px * var(--memo-content-scale, 1))
     0
-    calc(var(--memo-card-unit) * .88);
-  font-size: calc(var(--memo-card-unit) * 3);
+    calc(6px * var(--memo-content-scale, 1));
+  font-size: calc(20px * var(--memo-content-scale, 1));
   line-height: 1.35;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
@@ -597,28 +626,28 @@
 }
 
 .memo-reference-copy small {
-  margin-top: calc(var(--memo-card-unit) * .44);
+  margin-top: calc(3px * var(--memo-content-scale, 1));
   overflow: hidden;
   color: #7f8c8d;
-  font-size: calc(var(--memo-card-unit) * 2);
+  font-size: calc(14px * var(--memo-content-scale, 1));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .memo-reference-tags {
   display: flex;
-  gap: calc(var(--memo-card-unit) * .59);
+  gap: calc(4px * var(--memo-content-scale, 1));
   overflow: hidden;
 }
 
 .memo-reference-tags span {
   flex: 0 0 auto;
   padding:
-    calc(var(--memo-card-unit) * .44)
-    calc(var(--memo-card-unit) * .74);
+    calc(3px * var(--memo-content-scale, 1))
+    calc(5px * var(--memo-content-scale, 1));
   color: #fff;
   background: #3498db;
-  font-size: calc(var(--memo-card-unit) * 1.76);
+  font-size: calc(12px * var(--memo-content-scale, 1));
 }
 
 .memo-site-animal-island .memo-reference-tags span {
@@ -628,12 +657,22 @@
 }
 
 .memo-reference-card.is-missing {
+  color: var(--memo-muted);
+  background: var(--memo-panel);
+}
+
+.memo-reference-card.is-missing .memo-reference-card-surface {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
-  padding: 20px;
+  gap: calc(8px * var(--memo-content-scale, 1));
+  padding: calc(20px * var(--memo-content-scale, 1));
   color: var(--memo-muted);
+  background: var(--memo-panel);
+  box-sizing: border-box;
+}
+
+.memo-reference-card.is-missing .memo-reference-card-frame {
   border-color: var(--memo-danger);
 }
 

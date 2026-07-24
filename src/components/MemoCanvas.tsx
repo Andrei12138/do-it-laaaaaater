@@ -45,10 +45,13 @@ import {
   findMemoItemPlacement,
   MEMO_ITEM_HEIGHT,
   MEMO_ITEM_WIDTH,
+  memoContentScaleAfterResize,
+  memoItemContentScale,
   memoItemId,
   normalizeMemoItemElements,
   persistedMemoAppState,
-  removeMemoItemReference
+  removeMemoItemReference,
+  updateMemoItemContentScale
 } from '../memo-scene'
 import { clearMemoDraft, readMemoDraft, writeMemoDraft, type MemoDraft } from '../memo-store'
 import { filterLibraryItems } from '../offline-query'
@@ -78,6 +81,16 @@ const DEFAULT_FILTERS: ItemFilters = {
 }
 
 type SavePhase = 'loading' | 'saved' | 'saving' | 'draft' | 'offline' | 'error'
+type MemoResizeSession = {
+  elementId: string
+  handleType: PointerDownState['resize']['handleType']
+  initialWidth: number
+  initialHeight: number
+  initialScale: number
+  liveScale: number
+}
+
+const MEMO_CORNER_HANDLES = new Set(['nw', 'ne', 'sw', 'se'])
 
 function manualAssets(item: LibraryItem) {
   return item.assets.filter((asset) => asset.role !== 'web_cover')
@@ -115,22 +128,35 @@ function memoChangeSignature(
 function MemoReferenceCard({
   element,
   item,
-  selected
+  selected,
+  contentScale
 }: {
   element: ExcalidrawEmbeddableElement
   item: LibraryItem | null
   selected: boolean
+  contentScale: number
 }) {
+  const scaleStyle = {
+    '--memo-content-scale': String(contentScale)
+  } as CSSProperties
   if (!item) {
     return (
-      <div className={`memo-reference-card is-missing${selected ? ' is-selected' : ''}`}>
-        <strong>原条目已被彻底删除</strong>
-        <span>可在选中后从画布移除此空引用</span>
+      <div
+        className={`memo-reference-card is-missing${selected ? ' is-selected' : ''}`}
+        data-element-id={element.id}
+        style={scaleStyle}
+      >
+        <div className="memo-reference-card-surface">
+          <strong>原条目已被彻底删除</strong>
+          <span>可在选中后从画布移除此空引用</span>
+        </div>
+        <i className="memo-reference-card-frame" aria-hidden="true" />
       </div>
     )
   }
   const cover = itemCover(item)
   const categoryStyle = {
+    ...scaleStyle,
     '--memo-category-color': item.category?.color || '#95a5a6'
   } as CSSProperties
   return (
@@ -145,18 +171,21 @@ function MemoReferenceCard({
       data-element-id={element.id}
       style={categoryStyle}
     >
-      {cover && <img src={cover.thumbUrl} alt="" />}
-      <div className="memo-reference-copy">
-        <div className="memo-reference-tags">
-          <span>{kindLabel(item)}</span>
-          <span>{item.status === 'pending' ? '待处理' : '已完成'}</span>
-          {item.isStarred && <span>★ 星标</span>}
-          {item.trashedAt && <span>回收站</span>}
+      <div className="memo-reference-card-surface">
+        {cover && <img src={cover.thumbUrl} alt="" />}
+        <div className="memo-reference-copy">
+          <div className="memo-reference-tags">
+            <span>{kindLabel(item)}</span>
+            <span>{item.status === 'pending' ? '待处理' : '已完成'}</span>
+            {item.isStarred && <span>★ 星标</span>}
+            {item.trashedAt && <span>回收站</span>}
+          </div>
+          <strong>{item.title}</strong>
+          <small>{item.category?.name || '未分类'}</small>
+          {item.plannedFor && <small>{plannedDateLabel(item.plannedFor)}</small>}
         </div>
-        <strong>{item.title}</strong>
-        <small>{item.category?.name || '未分类'}</small>
-        {item.plannedFor && <small>{plannedDateLabel(item.plannedFor)}</small>}
       </div>
+      <i className="memo-reference-card-frame" aria-hidden="true" />
     </div>
   )
 }
@@ -490,6 +519,7 @@ export function MemoCanvas({
   const readyRef = useRef(false)
   const applyingRemoteRef = useRef(false)
   const lastChangeSignatureRef = useRef('')
+  const resizeSessionRef = useRef<MemoResizeSession | null>(null)
   const mountedRef = useRef(true)
   const [initialData, setInitialData] = useState<{
     elements: readonly ExcalidrawElement[]
@@ -507,6 +537,7 @@ export function MemoCanvas({
   const [filters, setFilters] = useState<ItemFilters>({ ...DEFAULT_FILTERS })
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
+  const [liveContentScale, setLiveContentScale] = useState<{ elementId: string; scale: number } | null>(null)
   const [inspectorBusy, setInspectorBusy] = useState(false)
   const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false)
   const channelRef = useRef<BroadcastChannel | null>(null)
@@ -778,6 +809,22 @@ export function MemoCanvas({
     elementsRef.current = elements
     appStateRef.current = appState
     filesRef.current = files as unknown as Record<string, MemoBinaryFile>
+    const resizeSession = resizeSessionRef.current
+    if (resizeSession && MEMO_CORNER_HANDLES.has(String(resizeSession.handleType))) {
+      const resized = elements.find((element) => element.id === resizeSession.elementId && !element.isDeleted)
+      if (resized) {
+        const scale = memoContentScaleAfterResize(
+          resizeSession.handleType,
+          resizeSession.initialScale,
+          { width: resizeSession.initialWidth, height: resizeSession.initialHeight },
+          { width: resized.width, height: resized.height }
+        )
+        if (Math.abs(scale - resizeSession.liveScale) > 0.0001) {
+          resizeSession.liveScale = scale
+          setLiveContentScale({ elementId: resizeSession.elementId, scale })
+        }
+      }
+    }
     const selected = elements.find((element) => !element.isDeleted && appState.selectedElementIds[element.id])
     const itemId = selected ? memoItemId(selected) : null
     if (itemId) {
@@ -840,7 +887,44 @@ export function MemoCanvas({
     })
   }
 
+  function pointerDown(_tool: AppState['activeTool'], pointerDownState: PointerDownState) {
+    resizeSessionRef.current = null
+    setLiveContentScale(null)
+    const handleType = pointerDownState.resize.handleType
+    if (!handleType || handleType === 'rotation') return
+    const selectedIds = apiRef.current?.getAppState().selectedElementIds || {}
+    const selectedReferences = [...pointerDownState.originalElements.values()].filter(
+      (element) => selectedIds[element.id] && !element.isDeleted && memoItemId(element)
+    )
+    if (selectedReferences.length !== 1) return
+    const element = selectedReferences[0]
+    const initialScale = memoItemContentScale(element)
+    resizeSessionRef.current = {
+      elementId: element.id,
+      handleType,
+      initialWidth: element.width,
+      initialHeight: element.height,
+      initialScale,
+      liveScale: initialScale
+    }
+  }
+
   function pointerUp(_tool: AppState['activeTool'], pointerDownState: PointerDownState) {
+    const resizeSession = resizeSessionRef.current
+    resizeSessionRef.current = null
+    if (resizeSession && MEMO_CORNER_HANDLES.has(String(resizeSession.handleType))) {
+      const api = apiRef.current
+      const current = api?.getSceneElementsIncludingDeleted() || []
+      const resized = current.find((element) => element.id === resizeSession.elementId && !element.isDeleted)
+      if (api && resized) {
+        const next = updateMemoItemContentScale(current, resizeSession.elementId, resizeSession.liveScale)
+        api.updateScene({
+          elements: next,
+          captureUpdate: CaptureUpdateAction.IMMEDIATELY
+        })
+      }
+    }
+    setLiveContentScale(null)
     if (pointerDownState.drag.hasOccurred || pointerDownState.resize.isResizing) return
     selectItemReference(pointerDownState.hit.element)
   }
@@ -1090,9 +1174,15 @@ export function MemoCanvas({
                     element={element}
                     item={itemById.get(memoItemId(element) || '') || null}
                     selected={Boolean(appState.selectedElementIds[element.id])}
+                    contentScale={
+                      liveContentScale?.elementId === element.id
+                        ? liveContentScale.scale
+                        : memoItemContentScale(element)
+                    }
                   />
                 )}
                 onChange={changed}
+                onPointerDown={pointerDown}
                 onPointerUp={pointerUp}
                 onLinkOpen={(element, event) => {
                   const itemId = memoItemId(element)

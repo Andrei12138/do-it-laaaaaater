@@ -586,6 +586,41 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
     async () => (await referenceTag.boundingBox())?.height || 0
   ).toBeGreaterThan((tagBoxBeforeResize?.height || 0) + 1)
 
+  const titleFontAfterCornerResize = await referenceTitle.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
+  const tagFontAfterCornerResize = await referenceTag.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
+  const tagBoxAfterCornerResize = await referenceTag.boundingBox()
+  await memoInspector.getByRole('button', { name: '选中卡片并调整位置、大小或角度' }).click()
+  const referenceBeforeEdgeResize = await referenceCard.boundingBox()
+  expect(referenceBeforeEdgeResize).toBeTruthy()
+  await page.mouse.move(
+    (referenceBeforeEdgeResize?.x || 0) - 8,
+    (referenceBeforeEdgeResize?.y || 0) + (referenceBeforeEdgeResize?.height || 0) / 2
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    (referenceBeforeEdgeResize?.x || 0) - 98,
+    (referenceBeforeEdgeResize?.y || 0) + (referenceBeforeEdgeResize?.height || 0) / 2,
+    { steps: 8 }
+  )
+  await page.mouse.up()
+  await expect.poll(async () => (await referenceCard.boundingBox())?.width || 0).toBeGreaterThan((referenceBeforeEdgeResize?.width || 0) + 50)
+  await expect.poll(
+    async () => Math.abs(
+      await referenceTitle.evaluate((element) => parseFloat(getComputedStyle(element).fontSize)) -
+      titleFontAfterCornerResize
+    )
+  ).toBeLessThan(0.1)
+  await expect.poll(
+    async () => Math.abs(
+      await referenceTag.evaluate((element) => parseFloat(getComputedStyle(element).fontSize)) -
+      tagFontAfterCornerResize
+    )
+  ).toBeLessThan(0.1)
+  await expect.poll(
+    async () => Math.abs(((await referenceTag.boundingBox())?.height || 0) - (tagBoxAfterCornerResize?.height || 0))
+  ).toBeLessThan(0.2)
+  await page.screenshot({ path: 'test-results/memo-card-corner-scale-edge-boundary.png' })
+
   await memoInspector.getByRole('button', { name: '选中卡片并调整位置、大小或角度' }).click()
   const referenceResized = await referenceCard.boundingBox()
   expect(referenceResized).toBeTruthy()

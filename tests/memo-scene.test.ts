@@ -7,10 +7,13 @@ import {
   findMemoItemPlacement,
   MEMO_ITEM_HEIGHT,
   MEMO_ITEM_WIDTH,
+  memoContentScaleAfterResize,
+  memoItemContentScale,
   memoItemId,
   normalizeMemoItemElements,
   persistedMemoAppState,
-  removeMemoItemReference
+  removeMemoItemReference,
+  updateMemoItemContentScale
 } from '../src/memo-scene.js'
 
 describe('备忘录画布场景', () => {
@@ -66,15 +69,41 @@ describe('备忘录画布场景', () => {
     const custom = {
       ...createMemoItemElement('custom', 500, 300),
       width: 420,
-      height: 260
+      height: 260,
+      customData: {
+        source: 'do-it-laaaaaater',
+        itemId: 'custom'
+      }
     } as ExcalidrawElement
 
     const normalized = normalizeMemoItemElements([legacy, custom])
     expect(normalized.changed).toBe(true)
     expect(normalized.elements[0]).toMatchObject({
       width: MEMO_ITEM_WIDTH,
-      height: MEMO_ITEM_HEIGHT
+      height: MEMO_ITEM_HEIGHT,
+      customData: { contentScale: 1 }
     })
-    expect(normalized.elements[1]).toMatchObject({ width: 420, height: 260 })
+    expect(normalized.elements[1]).toMatchObject({
+      width: 420,
+      height: 260,
+      customData: { contentScale: 420 / MEMO_ITEM_WIDTH }
+    })
+  })
+
+  it('四角调整会缩放卡片内容，四条边只改变外框', () => {
+    const initialSize = { width: MEMO_ITEM_WIDTH, height: MEMO_ITEM_HEIGHT }
+    const largerSize = { width: MEMO_ITEM_WIDTH * 1.5, height: MEMO_ITEM_HEIGHT * 1.5 }
+    for (const handle of ['nw', 'ne', 'sw', 'se']) {
+      expect(memoContentScaleAfterResize(handle, 1, initialSize, largerSize)).toBeCloseTo(1.5)
+    }
+    for (const handle of ['n', 's', 'e', 'w']) {
+      expect(memoContentScaleAfterResize(handle, 1, initialSize, largerSize)).toBe(1)
+    }
+
+    const reference = createMemoItemElement('scaled', 0, 0)
+    const updated = updateMemoItemContentScale([reference], reference.id, 1.75)
+    expect(memoItemContentScale(updated[0])).toBe(1.75)
+    expect(updated[0].width).toBe(MEMO_ITEM_WIDTH)
+    expect(updated[0].height).toBe(MEMO_ITEM_HEIGHT)
   })
 })
