@@ -6,6 +6,10 @@ import type {
 import type { AppState } from '@excalidraw/excalidraw/types'
 
 const ITEM_LINK_PREFIX = 'https://do-it-laaaaaater.local/item/'
+export const MEMO_ITEM_WIDTH = 680
+export const MEMO_ITEM_HEIGHT = 204
+const LEGACY_MEMO_ITEM_WIDTH = 340
+const LEGACY_MEMO_ITEM_HEIGHT = 220
 const APP_STATE_KEYS = [
   'scrollX',
   'scrollY',
@@ -41,8 +45,8 @@ export function createMemoItemElement(itemId: string, x: number, y: number) {
     type: 'embeddable',
     x,
     y,
-    width: 340,
-    height: 220,
+    width: MEMO_ITEM_WIDTH,
+    height: MEMO_ITEM_HEIGHT,
     angle: 0,
     strokeColor: '#1abc9c',
     backgroundColor: '#ffffff',
@@ -78,8 +82,8 @@ export function findMemoItemPlacement(
   elements: readonly ExcalidrawElement[],
   center: { x: number; y: number }
 ) {
-  const width = 340
-  const height = 220
+  const width = MEMO_ITEM_WIDTH
+  const height = MEMO_ITEM_HEIGHT
   const gapX = 40
   const gapY = 40
   const existing = elements.filter((element) => !element.isDeleted && memoItemId(element))
@@ -106,6 +110,32 @@ export function findMemoItemPlacement(
     x: center.x - width / 2 + existing.length * gapX,
     y: center.y - height / 2 + existing.length * gapY
   }
+}
+
+export function normalizeMemoItemElements(elements: readonly ExcalidrawElement[]) {
+  let changed = false
+  const normalized = elements.map((element) => {
+    if (
+      element.isDeleted ||
+      !memoItemId(element) ||
+      Math.abs(element.width - LEGACY_MEMO_ITEM_WIDTH) > 0.01 ||
+      Math.abs(element.height - LEGACY_MEMO_ITEM_HEIGHT) > 0.01
+    ) {
+      return element
+    }
+    changed = true
+    return {
+      ...element,
+      x: element.x - (MEMO_ITEM_WIDTH - element.width) / 2,
+      y: element.y - (MEMO_ITEM_HEIGHT - element.height) / 2,
+      width: MEMO_ITEM_WIDTH,
+      height: MEMO_ITEM_HEIGHT,
+      version: element.version + 1,
+      versionNonce: randomInteger(),
+      updated: Date.now()
+    } as ExcalidrawElement
+  })
+  return { elements: normalized, changed }
 }
 
 export function removeMemoItemReference(elements: readonly ExcalidrawElement[], elementId: string) {

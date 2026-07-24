@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type CSSProperties,
   type ReactNode
 } from 'react'
 import {
@@ -42,7 +43,10 @@ import {
   createMemoItemElement,
   findMemoItemElement,
   findMemoItemPlacement,
+  MEMO_ITEM_HEIGHT,
+  MEMO_ITEM_WIDTH,
   memoItemId,
+  normalizeMemoItemElements,
   persistedMemoAppState,
   removeMemoItemReference
 } from '../memo-scene'
@@ -126,15 +130,20 @@ function MemoReferenceCard({
     )
   }
   const cover = itemCover(item)
+  const categoryStyle = {
+    '--memo-category-color': item.category?.color || '#95a5a6'
+  } as CSSProperties
   return (
     <div
       className={[
         'memo-reference-card',
+        cover ? 'has-cover' : '',
         selected ? 'is-selected' : '',
         item.trashedAt ? 'is-trashed' : '',
         item.status === 'completed' ? 'is-completed' : ''
       ].filter(Boolean).join(' ')}
       data-element-id={element.id}
+      style={categoryStyle}
     >
       {cover && <img src={cover.thumbUrl} alt="" />}
       <div className="memo-reference-copy">
@@ -251,6 +260,7 @@ function MemoLibrary({
           return (
             <article
               key={item.id}
+              className={cover ? 'has-cover' : ''}
               draggable
               onDragStart={(event) => {
                 event.dataTransfer.effectAllowed = 'copy'
@@ -263,13 +273,21 @@ function MemoLibrary({
                 <span>{kindLabel(item)} · {item.category?.name || '未分类'}</span>
                 <strong>{item.title}</strong>
               </div>
-              <Button size="small" onClick={() => onAdd(item.id)}>放到画布</Button>
+              <button
+                type="button"
+                className="memo-library-add"
+                aria-label="放到画布"
+                title={`放到画布：${item.title}`}
+                onClick={() => onAdd(item.id)}
+              >
+                <AppIcon name="add" size={17} />
+              </button>
             </article>
           )
         })}
         {!filtered.length && <p className="memo-library-empty">没有符合当前筛选的内容。</p>}
       </div>
-      <p className="memo-library-tip">电脑可直接拖到画布；手机点“放到画布”。同一条内容只会放入一次。</p>
+      <p className="memo-library-tip">电脑可直接拖到画布；手机点右侧的添加图标。同一条内容只会放入一次。</p>
     </Pane>
   )
 }
@@ -526,8 +544,11 @@ export function MemoCanvas({
   }, [])
 
   const applyLoadedSnapshot = useCallback(async (draft: MemoDraft, knownIds: string[], remote = false) => {
+    const normalized = normalizeMemoItemElements(
+      draft.scene.elements as unknown as readonly ExcalidrawElement[]
+    )
     const restored = restoreElements(
-      draft.scene.elements as Parameters<typeof restoreElements>[0],
+      normalized.elements as Parameters<typeof restoreElements>[0],
       remote ? elementsRef.current : null
     )
     elementsRef.current = restored
@@ -560,6 +581,7 @@ export function MemoCanvas({
         files: draft.files as unknown as BinaryFiles
       })
     }
+    return normalized.changed
   }, [appearanceState])
 
   const loadCanvas = useCallback(async () => {
@@ -604,9 +626,16 @@ export function MemoCanvas({
           files: serverFiles
         }
     serverUpdatedAtRef.current = server.updatedAt
-    await applyLoadedSnapshot(source, server.assets.map((asset) => asset.fileId))
-    setSavePhase(navigator.onLine ? 'saved' : 'offline')
-    setSaveMessage(navigator.onLine ? '画布已同步' : '当前离线，修改会保存在本机')
+    const normalizedLegacyCards = await applyLoadedSnapshot(source, server.assets.map((asset) => asset.fileId))
+    if (normalizedLegacyCards) {
+      revisionRef.current = Math.max(revisionRef.current, 1)
+      savedRevisionRef.current = 0
+      setSavePhase(navigator.onLine ? 'draft' : 'offline')
+      setSaveMessage(navigator.onLine ? '已优化旧卡片比例，正在同步' : '已优化旧卡片比例并保存在本机')
+    } else {
+      setSavePhase(navigator.onLine ? 'saved' : 'offline')
+      setSaveMessage(navigator.onLine ? '画布已同步' : '当前离线，修改会保存在本机')
+    }
     if (localDraft && server.updatedAt >= localDraft.updatedAt) await clearMemoDraft()
   }, [applyLoadedSnapshot])
 
@@ -686,19 +715,26 @@ export function MemoCanvas({
       if (server.updatedAt <= serverUpdatedAtRef.current) return
       const files = await loadMemoBinaryFiles(server.assets)
       serverUpdatedAtRef.current = server.updatedAt
-      await applyLoadedSnapshot({
+      const normalizedLegacyCards = await applyLoadedSnapshot({
         scene: server.scene,
         background: server.background,
         colorMode: server.colorMode,
         updatedAt: server.updatedAt,
         files
       }, server.assets.map((asset) => asset.fileId), true)
-      setSavePhase('saved')
-      setSaveMessage('已载入另一台设备的最新画布')
+      if (normalizedLegacyCards) {
+        revisionRef.current += 1
+        setSavePhase('draft')
+        setSaveMessage('已优化另一台设备上的旧卡片比例，正在同步')
+        scheduleSave()
+      } else {
+        setSavePhase('saved')
+        setSaveMessage('已载入另一台设备的最新画布')
+      }
     } catch {
       // Keep the current scene intact when a background refresh fails.
     }
-  }, [applyLoadedSnapshot])
+  }, [applyLoadedSnapshot, scheduleSave])
 
   useEffect(() => {
     void loadCanvas()
@@ -831,7 +867,7 @@ export function MemoCanvas({
       clientY: bounds.top + bounds.height / 2
     }, appState)
     const placement = point
-      ? { x: point.x - 170, y: point.y - 110 }
+      ? { x: point.x - MEMO_ITEM_WIDTH / 2, y: point.y - MEMO_ITEM_HEIGHT / 2 }
       : findMemoItemPlacement(current, center)
     const raw = createMemoItemElement(itemId, placement.x, placement.y)
     const next = restoreElements(

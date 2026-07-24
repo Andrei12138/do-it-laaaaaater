@@ -519,7 +519,16 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await memoDialog.getByRole('button', { name: '资料库' }).click()
   const memoLibrary = memoDialog.locator('.memo-library-pane')
   await expect(memoLibrary).toBeVisible()
-  await memoLibrary.getByRole('searchbox', { name: '搜索资料库' }).fill('图片组')
+  const memoLibrarySearch = memoLibrary.getByRole('searchbox', { name: '搜索资料库' })
+  await memoLibrarySearch.fill('回家后整理这段纯文字')
+  const textLibraryCard = memoLibrary.locator('.memo-library-results article').filter({ hasText: '回家后整理这段纯文字' })
+  await expect(textLibraryCard).not.toHaveClass(/has-cover/)
+  await expect(textLibraryCard.locator('strong')).toHaveCSS('white-space', 'normal')
+  expect(await textLibraryCard.locator('strong').evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(true)
+  const compactAddButton = textLibraryCard.getByRole('button', { name: '放到画布' })
+  expect((await compactAddButton.boundingBox())?.width).toBeLessThanOrEqual(40)
+  expect(await compactAddButton.innerText()).toBe('')
+  await memoLibrarySearch.fill('图片组')
   await memoLibrary.getByRole('button', { name: '放到画布' }).click()
   await expect(memoDialog.locator('.memo-reference-card')).toHaveCount(1)
   let memoInspector = memoDialog.locator('.memo-inspector-pane')
@@ -529,17 +538,18 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   const referenceCard = memoDialog.locator('.memo-reference-card')
   const referenceInitial = await referenceCard.boundingBox()
   expect(referenceInitial).toBeTruthy()
+  expect((referenceInitial?.width || 0) / (referenceInitial?.height || 1)).toBeGreaterThan(3.2)
   await memoInspector.getByRole('button', { name: '选中卡片并调整位置、大小或角度' }).click()
   await expect(referenceCard).toHaveClass(/is-selected/)
   const referenceBefore = await referenceCard.boundingBox()
   expect(referenceBefore).toBeTruthy()
   await page.mouse.move(
-    (referenceBefore?.x || 0) + 4,
+    (referenceBefore?.x || 0) + (referenceBefore?.width || 0) * 0.56,
     (referenceBefore?.y || 0) + (referenceBefore?.height || 0) * 0.25
   )
   await page.mouse.down()
   await page.mouse.move(
-    (referenceBefore?.x || 0) + 74,
+    (referenceBefore?.x || 0) + (referenceBefore?.width || 0) * 0.56 + 70,
     (referenceBefore?.y || 0) + (referenceBefore?.height || 0) * 0.25 + 35,
     { steps: 8 }
   )
@@ -696,7 +706,9 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
 
   await page.setViewportSize({ width: 430, height: 932 })
   await memoDialog.getByRole('button', { name: '资料库' }).click()
-  await memoDialog.locator('.memo-library-pane').getByRole('button', { name: '放到画布' }).click()
+  const mobileMemoAdd = memoDialog.locator('.memo-library-pane').getByRole('button', { name: '放到画布' })
+  expect((await mobileMemoAdd.boundingBox())?.width).toBeLessThanOrEqual(40)
+  await mobileMemoAdd.click()
   memoInspector = memoDialog.locator('.memo-inspector-pane')
   await expect(memoInspector).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
@@ -724,7 +736,9 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await memoDialog.getByRole('button', { name: '资料库' }).click()
   await expect(memoDialog.locator('.memo-library-pane')).not.toHaveCSS('border-radius', '0px')
   await memoDialog.locator('.memo-library-pane').getByRole('searchbox', { name: '搜索资料库' }).fill('图片组')
-  await memoDialog.locator('.memo-library-pane').getByRole('button', { name: '放到画布' }).click()
+  const animalMemoAdd = memoDialog.locator('.memo-library-pane').getByRole('button', { name: '放到画布' })
+  expect((await animalMemoAdd.boundingBox())?.width).toBeLessThanOrEqual(40)
+  await animalMemoAdd.click()
   await expect(memoDialog.locator('.memo-reference-card')).not.toHaveCSS('border-radius', '0px')
   await page.screenshot({ path: 'test-results/animal-memo-canvas-dark-dots.png' })
   await page.setViewportSize({ width: 430, height: 932 })

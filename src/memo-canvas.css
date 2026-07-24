@@ -419,14 +419,19 @@
 
 .memo-library-results article {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) auto;
-  gap: 9px;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 10px;
   align-items: center;
   min-width: 0;
-  padding: 8px;
+  min-height: 72px;
+  padding: 10px;
   background: color-mix(in srgb, var(--memo-surface) 90%, var(--memo-accent));
   border: 1px solid var(--memo-line);
   cursor: grab;
+}
+
+.memo-library-results article.has-cover {
+  grid-template-columns: 64px minmax(0, 1fr) 34px;
 }
 
 .memo-site-animal-island .memo-library-results article {
@@ -438,8 +443,8 @@
 }
 
 .memo-library-results article > img {
-  width: 54px;
-  height: 54px;
+  width: 64px;
+  height: 64px;
   object-fit: cover;
   border-radius: 0;
 }
@@ -450,11 +455,12 @@
 
 .memo-library-results article > div {
   display: grid;
+  align-content: center;
+  gap: 4px;
   min-width: 0;
 }
 
-.memo-library-results article span,
-.memo-library-results article strong {
+.memo-library-results article span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -462,12 +468,49 @@
 
 .memo-library-results article span {
   color: var(--memo-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .memo-library-results article strong {
-  margin-top: 3px;
-  font-size: 13px;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.memo-library-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--memo-text);
+  background: var(--memo-surface);
+  border: 1px solid var(--memo-line);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.memo-library-add:hover,
+.memo-library-add:focus-visible {
+  color: #fff;
+  background: var(--memo-accent);
+  border-color: var(--memo-accent);
+}
+
+.memo-site-animal-island .memo-library-add {
+  color: #794f27;
+  background: #fff6dc;
+  border: 2px solid #19c8b9;
+  border-radius: 50%;
+}
+
+.memo-site-animal-island .memo-library-add:hover,
+.memo-site-animal-island .memo-library-add:focus-visible {
+  color: #794f27;
+  background: #f5c31c;
 }
 
 .memo-library-tip,
@@ -479,22 +522,31 @@
 
 .memo-reference-card {
   display: grid;
-  grid-template-columns: minmax(0, 38%) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   height: 100%;
   overflow: hidden;
   color: #34495e;
   background: #fff;
   border: 4px solid #1abc9c;
+  border-left-width: 7px;
+  border-left-color: var(--memo-category-color, #95a5a6);
   border-radius: 0;
   box-sizing: border-box;
+  container-type: inline-size;
   pointer-events: none;
+}
+
+.memo-reference-card.has-cover {
+  grid-template-columns: clamp(110px, 28.8%, 196px) minmax(0, 1fr);
 }
 
 .memo-site-animal-island .memo-reference-card {
   color: #794f27;
   background: #fffdf5;
   border: 4px solid #19c8b9;
+  border-left-width: 7px;
+  border-left-color: var(--memo-category-color, #95a5a6);
   border-radius: 24px;
   box-shadow: inset 0 -6px 0 rgba(121, 79, 39, .08);
 }
@@ -521,25 +573,27 @@
 .memo-reference-copy {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   min-width: 0;
-  padding: 14px;
+  padding: 18px 19px 17px;
 }
 
 .memo-reference-copy strong {
   display: -webkit-box;
   overflow: hidden;
-  font-size: clamp(14px, 3.8cqw, 22px);
-  line-height: 1.25;
+  margin: 13px 0 6px;
+  font-size: clamp(16px, 3cqw, 21px);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 4;
 }
 
 .memo-reference-copy small {
-  margin-top: 7px;
+  margin-top: 3px;
   overflow: hidden;
   color: #7f8c8d;
-  font-size: clamp(10px, 2.8cqw, 14px);
+  font-size: clamp(11px, 2cqw, 14px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -547,7 +601,6 @@
 .memo-reference-tags {
   display: flex;
   gap: 4px;
-  margin-bottom: 8px;
   overflow: hidden;
 }
 
@@ -556,7 +609,7 @@
   padding: 3px 5px;
   color: #fff;
   background: #3498db;
-  font-size: clamp(9px, 2.5cqw, 12px);
+  font-size: clamp(10px, 1.8cqw, 12px);
 }
 
 .memo-site-animal-island .memo-reference-tags span {
@@ -842,12 +895,16 @@
   }
 
   .memo-library-results article {
-    grid-template-columns: 48px minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .memo-library-results article.has-cover {
+    grid-template-columns: 56px minmax(0, 1fr) 34px;
   }
 
   .memo-library-results article > img {
-    width: 48px;
-    height: 48px;
+    width: 56px;
+    height: 56px;
   }
 
   .memo-canvas-stage .excalidraw .App-toolbar {
