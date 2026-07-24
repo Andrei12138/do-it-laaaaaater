@@ -1,9 +1,11 @@
 import {
   useCallback,
   useEffect,
+  lazy,
   useMemo,
   useRef,
   useState,
+  Suspense,
   type CSSProperties,
   type DragEvent as ReactDragEvent,
   type ReactNode
@@ -55,6 +57,8 @@ import { EmptyState, Modal } from './Modal'
 import { ThemeControl } from './ThemeControl'
 import { showThemeNotification } from './ThemeNotification'
 import { OfflineManagerModal } from './OfflineManager'
+
+const MemoCanvas = lazy(() => import('./MemoCanvas').then((module) => ({ default: module.MemoCanvas })))
 
 type Overlay =
   | { type: 'link'; initial?: { url?: string; title?: string } }
@@ -597,6 +601,8 @@ export function Dashboard({
   const [busyItems, setBusyItems] = useState<Set<string>>(() => new Set())
   const [retryItems, setRetryItems] = useState<Record<string, { changes: BulkItemChanges; label: string }>>({})
   const [focusMode, setFocusMode] = useState(false)
+  const [memoOpen, setMemoOpen] = useState(false)
+  const [desktopAddOpen, setDesktopAddOpen] = useState(false)
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null)
   const [bulkPanelOpen, setBulkPanelOpen] = useState(false)
   const [undoDelete, setUndoDelete] = useState<{ ids: string[]; label: string } | null>(null)
@@ -687,6 +693,23 @@ export function Dashboard({
     const timer = window.setTimeout(() => setUndoDelete(null), 10_000)
     return () => window.clearTimeout(timer)
   }, [undoDelete])
+
+  useEffect(() => {
+    if (!desktopAddOpen) return
+    const close = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (!target?.closest('.header-add-button, .desktop-add-menu')) setDesktopAddOpen(false)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDesktopAddOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [desktopAddOpen])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -1253,16 +1276,31 @@ export function Dashboard({
             type="primary"
             size="middle"
             icon={<AppIcon name="add" size={26} />}
-            onClick={() => setOverlay({ type: 'link' })}
+            className="header-add-button"
+            aria-expanded={desktopAddOpen}
+            onClick={() => setDesktopAddOpen((open) => !open)}
           >
-            添加网页
+            添加
           </Button>
+          {desktopAddOpen && (
+            <div className="desktop-add-menu" role="menu" aria-label="选择添加类型">
+              <button type="button" role="menuitem" onClick={() => { setDesktopAddOpen(false); setOverlay({ type: 'link' }) }}>
+                <AppIcon name="link" size={22} /><span><strong>添加网页</strong><small>自动读取标题和封面</small></span>
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setDesktopAddOpen(false); setOverlay({ type: 'text', initialText: '' }) }}>
+                <AppIcon name="text" size={22} /><span><strong>添加文本</strong><small>保存一段文字</small></span>
+              </button>
+              <button type="button" role="menuitem" onClick={() => { setDesktopAddOpen(false); setOverlay({ type: 'images', files: [] }) }}>
+                <AppIcon name="image" size={22} /><span><strong>添加图片</strong><small>一张或多张图片成组</small></span>
+              </button>
+            </div>
+          )}
           <Button
             size="middle"
-            icon={<AppIcon name="image" size={26} />}
-            onClick={() => setOverlay({ type: 'images', files: [] })}
+            icon={<AppIcon name="memo" size={26} />}
+            onClick={() => setMemoOpen(true)}
           >
-            保存图片
+            备忘录
           </Button>
           <Button
             size="middle"
@@ -1556,8 +1594,8 @@ export function Dashboard({
                 <p>粘贴图片、文字或网页链接即可添加，也可以使用下面的入口。</p>
                 <div className="empty-actions">
                   <Button type="primary" onClick={() => setOverlay({ type: 'link' })}>添加网页</Button>
-                  <Button onClick={() => setOverlay({ type: 'text', initialText: '' })}>保存文本</Button>
-                  <Button onClick={() => setOverlay({ type: 'images', files: [] })}>保存图片</Button>
+                  <Button onClick={() => setOverlay({ type: 'text', initialText: '' })}>添加文本</Button>
+                  <Button onClick={() => setOverlay({ type: 'images', files: [] })}>添加图片</Button>
                 </div>
               </>
             ) : (
@@ -1657,15 +1695,14 @@ export function Dashboard({
         </button>
         <button
           type="button"
-          className={selectionMode ? 'is-active' : ''}
+          className={memoOpen ? 'is-active' : ''}
           onClick={() => {
             setMobilePanel(null)
-            setSelectionMode((value) => !value)
-            if (selectionMode) setSelectedIds(new Set())
+            setMemoOpen(true)
           }}
         >
-          <AppIcon name="select" size={22} />
-          <span>选择</span>
+          <AppIcon name="memo" size={22} />
+          <span>备忘录</span>
         </button>
         <button
           type="button"
@@ -1755,10 +1792,10 @@ export function Dashboard({
             添加网页
           </Button>
           <Button block size="large" icon={<AppIcon name="text" size={24} />} onClick={() => openFromMobile({ type: 'text', initialText: '' })}>
-            保存文本
+            添加文本
           </Button>
           <Button block size="large" icon={<AppIcon name="image" size={24} />} onClick={() => openFromMobile({ type: 'images', files: [] })}>
-            保存图片
+            添加图片
           </Button>
           <Button block size="large" icon={<AppIcon name="clipboard" size={24} />} onClick={() => void readClipboardAndSave()}>
             识别剪贴板并保存
@@ -1779,6 +1816,13 @@ export function Dashboard({
             switchLibraryView(filters.trash === 'only' ? 'active' : 'only')
           }}>
             {filters.trash === 'only' ? '返回阅读清单' : `回收站${trashTotal ? `（${trashTotal}）` : ''}`}
+          </Button>
+          <Button block size="large" icon={<AppIcon name="select" size={24} />} onClick={() => {
+            setMobilePanel(null)
+            setSelectionMode((value) => !value)
+            if (selectionMode) setSelectedIds(new Set())
+          }}>
+            {selectionMode ? '退出选择模式' : '选择与批量操作'}
           </Button>
           <ThemeControl />
           <Button block size="large" icon={<AppIcon name="account" size={24} />} onClick={() => openFromMobile({ type: 'account' })}>
@@ -1872,7 +1916,7 @@ export function Dashboard({
         </Modal>
       )}
       {overlay?.type === 'text' && (
-        <Modal title="保存文本" onClose={() => setOverlay(null)}>
+        <Modal title="添加文本" onClose={() => setOverlay(null)}>
           <TextItemForm
             categories={categories}
             onCreateCategory={createCategory}
@@ -1886,7 +1930,7 @@ export function Dashboard({
         </Modal>
       )}
       {overlay?.type === 'images' && (
-        <Modal title="保存图片" onClose={() => setOverlay(null)} wide>
+        <Modal title="添加图片" onClose={() => setOverlay(null)} wide>
           <ImageGroupForm
             categories={categories}
             onCreateCategory={createCategory}
@@ -1951,6 +1995,22 @@ export function Dashboard({
           onDelete={deleteItem}
           onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
         />
+      )}
+      {memoOpen && (
+        <Suspense fallback={<div className="memo-canvas-overlay"><div className="memo-canvas-loading"><span className="spinner" /><p>正在加载备忘录画布…</p></div></div>}>
+          <MemoCanvas
+            items={allItems}
+            categories={categories}
+            onClose={() => setMemoOpen(false)}
+            onEdit={(item) => setOverlay({ type: 'edit', item })}
+            onPatch={patchItem}
+            onDelete={deleteItem}
+            onRestore={restoreItem}
+            onPermanentDelete={permanentDeleteItem}
+            onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
+            onRefresh={reloadAll}
+          />
+        </Suspense>
       )}
     </div>
   )

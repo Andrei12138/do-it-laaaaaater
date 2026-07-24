@@ -147,7 +147,10 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
     }
   }
 
-  const imageCount = backup?.manifest.items.reduce((sum, item) => sum + item.assets.filter((asset) => asset.path).length, 0) || 0
+  const imageCount = backup
+    ? backup.manifest.items.reduce((sum, item) => sum + item.assets.filter((asset) => asset.path).length, 0) +
+      (backup.manifest.memoCanvas?.assets.filter((asset) => asset.path).length || 0)
+    : 0
   const percent = progressPercent(progress)
 
   return (
@@ -156,7 +159,7 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
         <AppIcon name="backup" size={24} />
         <div>
           <h3>数据备份与恢复</h3>
-          <p>备份包含类别、条目、状态、日期、星标、今日计划、图片顺序和默认类别，不包含密码或登录信息。</p>
+          <p>备份包含类别、条目、状态、日期、星标、今日计划、图片顺序、默认类别和唯一备忘录画布，不包含密码或登录信息。</p>
         </div>
       </div>
       {error && <div className="notice notice-error" role="alert">{error}</div>}
@@ -212,7 +215,7 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
           {backup && (
             <div className="backup-summary">
               <strong>{sourceName}</strong>
-              <span>{backup.manifest.items.length} 条内容 · {backup.manifest.categories.length} 个类别 · {imageCount} 张原图</span>
+              <span>{backup.manifest.items.length} 条内容 · {backup.manifest.categories.length} 个类别 · {imageCount} 张原图 · {backup.manifest.memoCanvas ? '含备忘录画布' : '不含画布'}</span>
               <span>解压后原图约 {formatBytes(backup.totalBytes)}</span>
             </div>
           )}
@@ -248,7 +251,10 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
 
       {report && (
         <div className="restore-report">
-          <strong>恢复报告：新增 {report.added} · 跳过 {report.skipped} · 失败 {report.failed.length}</strong>
+          <strong>
+            恢复报告：新增 {report.added} · 跳过 {report.skipped} · 失败 {report.failed.length}
+            {report.canvas === 'restored' ? ' · 画布已恢复' : report.canvas === 'skipped' ? ' · 现有画布已保留' : ''}
+          </strong>
           {report.failed.length > 0 && (
             <ul>{report.failed.slice(0, 20).map((entry, index) => <li key={index}>{entry.title}：{entry.error}</li>)}</ul>
           )}

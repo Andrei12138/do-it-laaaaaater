@@ -8,6 +8,7 @@ import type { AppContext } from './db.js'
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 export const MAX_IMAGES_PER_ITEM = 30
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const MEMO_FILE_ID = /^[a-zA-Z0-9_-]{1,128}$/
 
 export interface PreparedAsset {
   id: string
@@ -22,6 +23,15 @@ export interface PreparedAsset {
   width: number | null
   height: number | null
   sortOrder: number
+  createdAt: number
+}
+
+export interface PreparedMemoAsset {
+  fileId: string
+  userId: string
+  fileName: string
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
+  size: number
   createdAt: number
 }
 
@@ -121,4 +131,45 @@ export function insertPreparedAsset(context: AppContext, asset: PreparedAsset) {
     asset.sortOrder,
     asset.createdAt
   )
+}
+
+export async function prepareMemoAsset(
+  context: AppContext,
+  input: {
+    fileId: string
+    userId: string
+    buffer: Buffer
+    createdAt?: number
+  }
+): Promise<PreparedMemoAsset> {
+  if (!MEMO_FILE_ID.test(input.fileId)) throw new Error('画布图片编号无效')
+  if (!input.buffer.length) throw new Error('画布图片内容为空')
+  if (input.buffer.length > MAX_IMAGE_BYTES) throw new Error('画布图片不能超过 20 MB')
+  const detected = await fileTypeFromBuffer(input.buffer)
+  if (!detected || !ALLOWED_TYPES.has(detected.mime)) {
+    throw new Error('画布只支持 PNG、JPEG 和 WebP 图片')
+  }
+  const extension = detected.mime === 'image/png' ? 'png' : detected.mime === 'image/webp' ? 'webp' : 'jpg'
+  const safeUser = input.userId.replace(/[^a-zA-Z0-9_-]/g, '_')
+  const fileName = `${safeUser}-${input.fileId}.${extension}`
+  await writeFile(path.join(context.memoAssetsDir, fileName), input.buffer)
+  return {
+    fileId: input.fileId,
+    userId: input.userId,
+    fileName,
+    mimeType: detected.mime as PreparedMemoAsset['mimeType'],
+    size: input.buffer.length,
+    createdAt: Number.isFinite(input.createdAt) && Number(input.createdAt) > 0
+      ? Number(input.createdAt)
+      : Date.now()
+  }
+}
+
+export async function removeMemoAssets(
+  context: AppContext,
+  assets: Array<{ fileName: string }>
+) {
+  await Promise.all(assets.map((asset) => unlink(
+    path.join(context.memoAssetsDir, path.basename(asset.fileName))
+  ).catch(() => undefined)))
 }

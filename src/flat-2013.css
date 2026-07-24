@@ -471,20 +471,57 @@ html[data-theme='flat-2013'] .header-actions > button {
   font-weight: 300 !important;
 }
 
-html[data-theme='flat-2013'] .header-actions > button:nth-child(2) { background: var(--blue) !important; }
-html[data-theme='flat-2013'] .header-actions > button:nth-child(3) { background: var(--purple) !important; }
-html[data-theme='flat-2013'] .header-actions > button:nth-child(4) { background: var(--orange) !important; }
-html[data-theme='flat-2013'] .header-actions > button:nth-child(5) { background: var(--yellow) !important; color: var(--dark) !important; }
-html[data-theme='flat-2013'] .header-actions > button:nth-child(6) { background: var(--green) !important; }
-html[data-theme='flat-2013'] .header-actions > button:nth-child(7) { background: var(--red) !important; }
+html[data-theme='flat-2013'] .header-actions > button:nth-of-type(2) { background: var(--blue) !important; }
+html[data-theme='flat-2013'] .header-actions > button:nth-of-type(3) { background: var(--purple) !important; }
+html[data-theme='flat-2013'] .header-actions > button:nth-of-type(4) { background: var(--orange) !important; }
+html[data-theme='flat-2013'] .header-actions > button:nth-of-type(5) { background: var(--yellow) !important; color: var(--dark) !important; }
+html[data-theme='flat-2013'] .header-actions > button:nth-of-type(6) { background: var(--green) !important; }
+html[data-theme='flat-2013'] .header-actions > button:nth-of-type(7) { background: var(--red) !important; }
 
 html[data-theme='flat-2013'] .header-actions > button:hover:not(:disabled) {
   opacity: 0.84;
   color: #fff !important;
 }
 
-html[data-theme='flat-2013'] .header-actions > button:nth-child(5):hover:not(:disabled) {
+html[data-theme='flat-2013'] .header-actions > button:nth-of-type(5):hover:not(:disabled) {
   color: var(--dark) !important;
+}
+
+html[data-theme='flat-2013'] .desktop-add-menu {
+  width: 290px;
+  padding: 0;
+  color: var(--dark);
+  background: #fff;
+  border: 1px solid var(--silver);
+  border-top: 6px solid var(--turq);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+html[data-theme='flat-2013'] .desktop-add-menu::before {
+  display: none;
+}
+
+html[data-theme='flat-2013'] .desktop-add-menu > button {
+  min-height: 62px;
+  padding: 10px 13px;
+  color: var(--dark);
+  border: 0;
+  border-bottom: 1px solid var(--bg);
+  border-radius: 0;
+}
+
+html[data-theme='flat-2013'] .desktop-add-menu > button:hover {
+  color: #fff;
+  background: var(--turq);
+}
+
+html[data-theme='flat-2013'] .desktop-add-menu small {
+  color: var(--gray);
+}
+
+html[data-theme='flat-2013'] .desktop-add-menu > button:hover small {
+  color: #fff;
 }
 
 /* Main content */

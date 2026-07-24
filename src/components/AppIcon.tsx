@@ -41,6 +41,17 @@ export type AppIconName =
   | 'calendar'
   | 'zoomIn'
   | 'zoomOut'
+  | 'memo'
+  | 'library'
+  | 'background'
+  | 'grid'
+  | 'dots'
+  | 'lines'
+  | 'moon'
+  | 'sun'
+  | 'fullscreen'
+  | 'fullscreenExit'
+  | 'remove'
 
 const animalIcons: Partial<Record<AppIconName, ComponentProps<typeof Icon>['name']>> = {
   add: 'icon-diy',
@@ -61,7 +72,15 @@ const animalIcons: Partial<Record<AppIconName, ComponentProps<typeof Icon>['name
   open: 'icon-map',
   clipboard: 'icon-diy',
   trash: 'icon-shopping',
-  calendar: 'icon-map'
+  calendar: 'icon-map',
+  memo: 'icon-chat',
+  library: 'icon-critterpedia',
+  background: 'icon-design',
+  grid: 'icon-design',
+  dots: 'icon-diy',
+  lines: 'icon-map',
+  fullscreen: 'icon-variant',
+  fullscreenExit: 'icon-variant'
 }
 
 function FlatPaths({ name }: { name: AppIconName }) {
@@ -103,7 +122,18 @@ function FlatPaths({ name }: { name: AppIconName }) {
     more: <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /></>,
     calendar: <><rect x="3" y="5" width="18" height="16" /><path d="M7 3v4M17 3v4M3 10h18" /></>,
     zoomIn: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5M10.5 7.5v6M7.5 10.5h6" /></>,
-    zoomOut: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5M7.5 10.5h6" /></>
+    zoomOut: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5M7.5 10.5h6" /></>,
+    memo: <><path d="M4 3h16v18H4zM8 3v18M11 8h6M11 12h6M11 16h4" /></>,
+    library: <><path d="M4 4h5v16H4zM10 4h5v16h-5zM16 5l4-1 2 15-4 1z" /></>,
+    background: <><rect x="3" y="3" width="18" height="18" /><path d="M3 15 15 3M7 21 21 7" /></>,
+    grid: <><path d="M3 3h18v18H3zM9 3v18M15 3v18M3 9h18M3 15h18" /></>,
+    dots: <><circle cx="5" cy="5" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="5" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="5" r="1" fill="currentColor" stroke="none" /><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="5" cy="19" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none" /><circle cx="19" cy="19" r="1" fill="currentColor" stroke="none" /></>,
+    lines: <><path d="M3 5h18M3 10h18M3 15h18M3 20h18" /></>,
+    moon: <path d="M19.5 15.5A8 8 0 0 1 8.5 4.5 8.5 8.5 0 1 0 19.5 15.5Z" />,
+    sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" /></>,
+    fullscreen: <path d="M9 3H3v6M15 3h6v6M21 15v6h-6M9 21H3v-6" />,
+    fullscreenExit: <path d="M3 9h6V3M21 9h-6V3M15 21v-6h6M9 21v-6H3" />,
+    remove: <><rect x="3" y="3" width="18" height="18" /><path d="M7 12h10" /></>
   }
   return paths[name]
 }

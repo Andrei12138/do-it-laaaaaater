@@ -1,13 +1,27 @@
 import type { User } from '@supabase/supabase-js'
 import { ApiRequestError } from '../api-error'
-import type { AppPreferences, AuthStatus, Category, ImageAsset, LibraryItem } from '../types'
+import type {
+  AppPreferences,
+  AuthStatus,
+  Category,
+  ImageAsset,
+  LibraryItem,
+  MemoBackground,
+  MemoCanvasAsset,
+  MemoCanvasScene,
+  MemoCanvasSnapshot,
+  MemoColorMode
+} from '../types'
 import { requireSupabase } from './supabase'
 
 const BUCKET = 'library-images'
+const MEMO_BUCKET = 'memo-canvas-images'
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 const MAX_IMAGES_PER_ITEM = 30
+const MAX_MEMO_SCENE_BYTES = 12 * 1024 * 1024
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const MEMO_FILE_ID = /^[a-zA-Z0-9_-]{1,128}$/
 
 type ItemKind = 'link' | 'text' | 'image_group'
 type AssetRole = 'web_cover' | 'attachment' | 'gallery'
@@ -45,6 +59,15 @@ interface CloudItemRow {
   trashed_at: string | null
   category?: Category | Category[] | null
   assets?: CloudAssetRow[] | null
+}
+
+interface CloudMemoAssetRow {
+  file_id: string
+  user_id: string
+  storage_path: string
+  mime_type: 'image/png' | 'image/jpeg' | 'image/webp'
+  size: number
+  created_at: string
 }
 
 function apiError(status: number, message: string, details?: unknown): never {
@@ -423,6 +446,168 @@ async function handlePreferences(method: string, options: RequestInit): Promise<
   apiError(405, '操作方式不支持')
 }
 
+function validMemoBackground(value: unknown): MemoBackground {
+  if (value === 'solid' || value === 'grid' || value === 'dots' || value === 'lines') return value
+  apiError(400, '画布背景无效')
+}
+
+function validMemoColorMode(value: unknown): MemoColorMode {
+  if (value === 'light' || value === 'dark') return value
+  apiError(400, '画布昼夜模式无效')
+}
+
+function validMemoScene(value: unknown): MemoCanvasScene {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) apiError(400, '画布内容无效')
+  const scene = value as Record<string, unknown>
+  if (!Array.isArray(scene.elements) || scene.elements.length > 100_000) apiError(400, '画布元素过多或格式无效')
+  if (!scene.appState || typeof scene.appState !== 'object' || Array.isArray(scene.appState)) {
+    apiError(400, '画布视图设置无效')
+  }
+  const result = {
+    elements: scene.elements,
+    appState: scene.appState as Record<string, unknown>
+  }
+  if (new Blob([JSON.stringify(result)]).size > MAX_MEMO_SCENE_BYTES) apiError(400, '画布内容超过 12 MB 限制')
+  return result
+}
+
+function validMemoFileIds(value: unknown) {
+  if (!Array.isArray(value) || value.length > 10_000) apiError(400, '画布图片清单无效')
+  const ids = value.map(String)
+  if (new Set(ids).size !== ids.length || ids.some((id) => !MEMO_FILE_ID.test(id))) apiError(400, '画布图片清单无效')
+  return ids
+}
+
+async function memoSnapshot(userId: string): Promise<MemoCanvasSnapshot> {
+  const client = requireSupabase()
+  const [canvas, assets] = await Promise.all([
+    client.from('memo_canvas').select('scene_json,background,color_mode,updated_at').eq('user_id', userId).maybeSingle(),
+    client.from('memo_assets').select('file_id,user_id,storage_path,mime_type,size,created_at')
+      .eq('user_id', userId).order('created_at')
+  ])
+  if (canvas.error) apiError(500, messageFrom(canvas.error, '无法读取备忘录画布'))
+  if (assets.error) apiError(500, messageFrom(assets.error, '无法读取画布图片'))
+  const rows = (assets.data || []) as CloudMemoAssetRow[]
+  const urls = new Map<string, string>()
+  if (rows.length) {
+    const signed = await client.storage.from(MEMO_BUCKET).createSignedUrls(rows.map((row) => row.storage_path), 60 * 60)
+    if (signed.error) apiError(500, '暂时无法读取画布图片')
+    for (const entry of signed.data || []) {
+      if (entry.path && entry.signedUrl) urls.set(entry.path, entry.signedUrl)
+    }
+  }
+  const data = canvas.data as {
+    scene_json?: MemoCanvasScene
+    background?: MemoBackground
+    color_mode?: MemoColorMode
+    updated_at?: string
+  } | null
+  return {
+    scene: data?.scene_json && Array.isArray(data.scene_json.elements)
+      ? data.scene_json
+      : { elements: [], appState: {} },
+    background: data?.background || 'solid',
+    colorMode: data?.color_mode || 'light',
+    updatedAt: data?.updated_at ? new Date(data.updated_at).getTime() : 0,
+    assets: rows.map((row): MemoCanvasAsset => ({
+      fileId: row.file_id,
+      mimeType: row.mime_type,
+      size: Number(row.size),
+      createdAt: new Date(row.created_at).getTime(),
+      url: urls.get(row.storage_path) || ''
+    }))
+  }
+}
+
+async function handleMemo(path: string, method: string, options: RequestInit) {
+  const client = requireSupabase()
+  const user = await currentUser()
+  if (path === '/api/memo-canvas' && method === 'GET') return memoSnapshot(user.id)
+  if (path === '/api/memo-canvas' && method === 'PUT') {
+    const body = parseJsonBody(options)
+    const scene = validMemoScene(body.scene)
+    const background = validMemoBackground(body.background)
+    const colorMode = validMemoColorMode(body.colorMode)
+    const fileIds = validMemoFileIds(body.fileIds)
+    const current = await client.from('memo_assets').select('file_id,storage_path').eq('user_id', user.id)
+    if (current.error) apiError(500, '无法核对画布图片')
+    const currentRows = current.data || []
+    const storedIds = currentRows.map((row) => row.file_id)
+    if (fileIds.some((id) => !storedIds.includes(id))) apiError(400, '画布图片尚未上传完成')
+    const saved = await client.from('memo_canvas').upsert({
+      user_id: user.id,
+      scene_json: scene,
+      background,
+      color_mode: colorMode,
+      updated_at: new Date().toISOString()
+    })
+    if (saved.error) apiError(500, messageFrom(saved.error, '画布保存失败'))
+    const stale = currentRows.filter((row) => !fileIds.includes(row.file_id))
+    if (stale.length) {
+      const removed = await client.from('memo_assets').delete().eq('user_id', user.id)
+        .in('file_id', stale.map((row) => row.file_id))
+      if (removed.error) apiError(500, '画布已保存，但旧图片清理失败')
+      await client.storage.from(MEMO_BUCKET).remove(stale.map((row) => row.storage_path))
+    }
+    return memoSnapshot(user.id)
+  }
+  if (path === '/api/memo-assets' && method === 'POST' && options.body instanceof FormData) {
+    const form = options.body
+    const fileId = String(form.get('fileId') || '')
+    const file = form.get('file')
+    if (!MEMO_FILE_ID.test(fileId)) apiError(400, '画布图片编号无效')
+    const existing = await client.from('memo_assets').select('*').eq('user_id', user.id).eq('file_id', fileId).maybeSingle()
+    if (existing.error) apiError(500, '无法检查画布图片')
+    if (existing.data) {
+      const row = existing.data as CloudMemoAssetRow
+      const signed = await client.storage.from(MEMO_BUCKET).createSignedUrl(row.storage_path, 60 * 60)
+      if (signed.error) apiError(500, '暂时无法读取画布图片')
+      return {
+        fileId,
+        mimeType: row.mime_type,
+        size: Number(row.size),
+        createdAt: new Date(row.created_at).getTime(),
+        url: signed.data.signedUrl
+      } satisfies MemoCanvasAsset
+    }
+    if (!(file instanceof File) || !file.size) apiError(400, '请选择画布图片')
+    if (file.size > MAX_IMAGE_BYTES || !ALLOWED_TYPES.has(file.type)) {
+      apiError(400, '画布图片只支持 PNG、JPEG、WebP，且单张不能超过 20 MB')
+    }
+    const storagePath = `${user.id}/${fileId}.${extensionFor(file.type)}`
+    const uploaded = await client.storage.from(MEMO_BUCKET).upload(storagePath, file, {
+      contentType: file.type,
+      cacheControl: '31536000',
+      upsert: false
+    })
+    if (uploaded.error) apiError(400, messageFrom(uploaded.error, '画布图片上传失败'))
+    const createdValue = Number(form.get('createdAt'))
+    const createdAt = Number.isFinite(createdValue) && createdValue > 0 ? new Date(createdValue) : new Date()
+    const inserted = await client.from('memo_assets').insert({
+      file_id: fileId,
+      user_id: user.id,
+      storage_path: storagePath,
+      mime_type: file.type,
+      size: file.size,
+      created_at: createdAt.toISOString()
+    }).select('*').single()
+    if (inserted.error) {
+      await client.storage.from(MEMO_BUCKET).remove([storagePath])
+      apiError(400, messageFrom(inserted.error, '画布图片记录保存失败'))
+    }
+    const signed = await client.storage.from(MEMO_BUCKET).createSignedUrl(storagePath, 60 * 60)
+    if (signed.error) apiError(500, '画布图片已保存，但暂时无法读取')
+    return {
+      fileId,
+      mimeType: file.type as MemoCanvasAsset['mimeType'],
+      size: file.size,
+      createdAt: createdAt.getTime(),
+      url: signed.data.signedUrl
+    } satisfies MemoCanvasAsset
+  }
+  apiError(405, '操作方式不支持')
+}
+
 interface BackupImportAsset {
   role: AssetRole
   originalName: string
@@ -515,10 +700,16 @@ async function handleBackup(path: string, method: string, options: RequestInit) 
     if (body.confirmed !== true) apiError(400, '完整覆盖需要明确确认')
     const assetRows = await client.from('assets').select('original_path,thumb_path').eq('user_id', user.id)
     if (assetRows.error) apiError(500, '无法读取现有图片')
+    const memoAssetRows = await client.from('memo_assets').select('storage_path').eq('user_id', user.id)
+    if (memoAssetRows.error) apiError(500, '无法读取现有画布图片')
     const removedItems = await client.from('items').delete().eq('user_id', user.id)
     if (removedItems.error) apiError(500, messageFrom(removedItems.error, '无法清空现有条目'))
     const removedCategories = await client.from('categories').delete().eq('user_id', user.id)
     if (removedCategories.error) apiError(500, messageFrom(removedCategories.error, '无法清空现有类别'))
+    const removedMemo = await client.from('memo_canvas').delete().eq('user_id', user.id)
+    if (removedMemo.error) apiError(500, '无法清空现有画布')
+    const removedMemoAssets = await client.from('memo_assets').delete().eq('user_id', user.id)
+    if (removedMemoAssets.error) apiError(500, '无法清空现有画布图片')
     const preferences = await client.from('user_preferences').upsert({
       user_id: user.id,
       quick_save_category_id: null,
@@ -526,6 +717,7 @@ async function handleBackup(path: string, method: string, options: RequestInit) 
     })
     if (preferences.error) apiError(500, '无法重置账号偏好')
     await removeStorage((assetRows.data || []).flatMap((row) => [row.original_path, row.thumb_path]))
+    await client.storage.from(MEMO_BUCKET).remove((memoAssetRows.data || []).map((row) => row.storage_path))
     return { cleared: true }
   }
   if (path !== '/api/backup/item' || !(options.body instanceof FormData)) apiError(404, '功能不存在')
@@ -1254,6 +1446,8 @@ export async function cloudApi<T>(path: string, options: RequestInit = {}): Prom
     result = await handleCategories(url.pathname, method, options)
   } else if (url.pathname === '/api/preferences') {
     result = await handlePreferences(method, options)
+  } else if (url.pathname.startsWith('/api/memo-')) {
+    result = await handleMemo(url.pathname, method, options)
   } else if (url.pathname.startsWith('/api/backup/')) {
     result = await handleBackup(url.pathname, method, options)
   } else if (url.pathname.startsWith('/api/items')) {
