@@ -9,6 +9,16 @@ import { BackupManager } from './BackupManager'
 import { ErrorNotice, Modal } from './Modal'
 import { OfflineStatusContent } from './OfflineManager'
 
+function publicAppOrigin() {
+  const configuredUrl = (import.meta.env.VITE_PUBLIC_APP_URL || '').trim()
+  if (!configuredUrl) return window.location.origin
+  try {
+    return new URL(configuredUrl).origin
+  } catch {
+    return window.location.origin
+  }
+}
+
 function AccountPanel({ className, label, children }: { className: string; label: string; children: ReactNode }) {
   const { theme } = useTheme()
   const classes = `account-section ${className}`
@@ -145,7 +155,7 @@ export function AccountManager({
   const [showInstallGuide, setShowInstallGuide] = useState(false)
   const [shortcutCopied, setShortcutCopied] = useState(false)
   const installMode = usePwaInstall()
-  const shortcutPrefix = (window.location.protocol === 'http:' ? window.location.origin : 'https://do-it-laaaaaater.vercel.app') + '/#quick-clipboard='
+  const shortcutPrefix = publicAppOrigin() + '/#quick-clipboard='
 
   useEffect(() => {
     void api<AppPreferences>('/api/preferences').then((preferences) => {
@@ -330,9 +340,7 @@ export function BookmarkletHelp({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState<'quick' | 'detail' | ''>('')
   const quickBookmarkRef = useRef<HTMLAnchorElement>(null)
   const detailBookmarkRef = useRef<HTMLAnchorElement>(null)
-  const origin = window.location.protocol === 'http:'
-    ? window.location.origin
-    : 'https://do-it-laaaaaater.vercel.app'
+  const origin = publicAppOrigin()
   const detailCode =
     'javascript:(()=>{const u=' +
     JSON.stringify(origin + '/?add=link&url=') +
