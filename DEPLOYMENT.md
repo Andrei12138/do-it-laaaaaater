@@ -2,6 +2,8 @@
 
 Do It Laaaaaater 同时支持本机模式和云端模式。只有设置了 `VITE_SUPABASE_URL` 与 `VITE_SUPABASE_ANON_KEY`，正式构建才会连接 Supabase；不设置时仍使用本机数据库与图片目录。
 
+可选的 `VITE_PUBLIC_APP_URL` 用于指定书签按钮和 iPhone 快捷指令应打开的正式域名。不设置时，应用会自动使用当前打开的网站地址。
+
 ## 部署前准备
 
 需要以下账号：
@@ -30,6 +32,7 @@ Do It Laaaaaater 同时支持本机模式和云端模式。只有设置了 `VITE
 - 条目、图片和账号偏好表。
 - 星标与今日计划字段和索引。
 - 7 天回收站字段和索引。
+- 唯一备忘录画布、画布图片记录及私人画布图片空间。
 - 私人图片空间与访问限制。
 
 ### 已有项目升级
@@ -40,13 +43,16 @@ Do It Laaaaaater 同时支持本机模式和云端模式。只有设置了 `VITE
 
 [`supabase/migrations/20260716_trash_ux_upgrade.sql`](supabase/migrations/20260716_trash_ux_upgrade.sql)
 
-这是一份可重复执行的增量升级，会：
+[`supabase/migrations/20260724_single_memo_canvas.sql`](supabase/migrations/20260724_single_memo_canvas.sql)
+
+这些是可重复执行的增量升级，会：
 
 - 为已有条目增加星标与今日计划。
 - 创建快速保存默认类别偏好。
 - 补充索引和当前账号的访问规则。
 - 把已有条目安全回填为“未星标、无今日计划”。
 - 增加回收站时间与查询索引；已有条目保持在原清单中，不会自动进入回收站。
+- 增加唯一画布、画布图片记录及其私人存储空间。
 
 它不会删除或重建现有账号、类别、条目和图片。确认 SQL 执行成功后，再发布包含新功能的网页版本；否则新网页会因为缺少字段而无法正常读取数据。
 
@@ -71,7 +77,7 @@ VITE_SUPABASE_ANON_KEY=你的 Publishable key
 ## 3. 在 Vercel 导入仓库
 
 1. 在 Vercel 选择 **Add New → Project**。
-2. 导入 GitHub 仓库 `Andrei12138/do-it-laaaaaater`，或你自己 Fork 后的仓库。
+2. 导入你自己 Fork 后的仓库；也可以使用 README 中的 **Deploy with Vercel** 按钮复制项目。
 3. Framework Preset 选择 **Vite**；构建与路由设置由 `vercel.json` 提供。
 4. 在项目 **Settings → Environment Variables** 中添加：
    - `VITE_SUPABASE_URL`
@@ -80,6 +86,12 @@ VITE_SUPABASE_ANON_KEY=你的 Publishable key
 6. 点击 Deploy。
 
 Vercel 会为 `main` 分支提供正式地址，并为其他分支或 Pull Request 生成预览地址。如果 Preview 和 Production 使用同一个 Supabase 项目，两者会看到同一份账号和数据。
+
+如果希望所有预览地址生成的书签和 iPhone 快捷指令都回到同一个正式域名，可以额外设置：
+
+```text
+VITE_PUBLIC_APP_URL=https://你的正式域名
+```
 
 ## 4. 设置邮件跳转地址
 
@@ -101,7 +113,7 @@ Vercel 会为 `main` 分支提供正式地址，并为其他分支或 Pull Reque
 推荐顺序：
 
 1. 从当前正式网页导出一份包含全部原图的 ZIP 备份。
-2. 在 Supabase SQL Editor 运行 `20260716_trash_ux_upgrade.sql`；若还没运行前一天的工作流升级，也先按顺序补跑。
+2. 在 Supabase SQL Editor 按顺序运行尚未执行的增量迁移；当前最后一份是 `20260724_single_memo_canvas.sql`。
 3. 确认没有错误后，先查看 Vercel Preview。
 4. 验证登录、现有条目、现有图片、星标、计划日期、默认类别和回收站。
 5. 再把功能分支合并到 `main`，由 Vercel 自动更新正式站。
@@ -121,7 +133,7 @@ Vercel 会为 `main` 分支提供正式地址，并为其他分支或 Pull Reque
 - 含原图与不含原图的 ZIP 都能导出。
 - 安全合并和完整覆盖能显示正确恢复报告。
 - 两套主题可以切换，刷新后仍记住选择。
-- 在移动端确认底部“清单 / 筛选 / 添加 / 选择 / 更多”导航可用，选择模式会切换成紧凑批量栏，筛选和添加抽屉不会超出屏幕。
+- 在移动端确认底部“清单 / 筛选 / 添加 / 备忘录 / 更多”导航可用，选择模式会切换成紧凑批量栏，筛选和添加抽屉不会超出屏幕。
 - 验证手机“识别剪贴板并保存”和账号设置中的 iPhone 快捷指令接收地址。
 - 联网打开一次完整清单后断网刷新，确认清单、文本和图片仍可查看；确认首页不等待原图缓存，缓存面板可暂停、继续和重试；断网新增一条文本或图片，恢复联网后确认自动同步。
 - `/manifest.webmanifest`、`/sw.js` 与 `/icons/app-icon-512.png` 可以访问。
