@@ -67,9 +67,11 @@ describe('离线清单筛选', () => {
     const rows = [
       item({ id: 'week', title: '一周后', plannedFor: '2026-07-23', createdAt: 30 }),
       item({ id: 'tomorrow', title: '明天', plannedFor: '2026-07-17', createdAt: 20 }),
+      item({ id: 'future', title: '未来计划', plannedFor: '2999-01-01', createdAt: 40 }),
       item({ id: 'trash', title: '已删除', trashedAt: Date.now(), createdAt: 10 })
     ]
-    expect(filterLibraryItems(rows, { ...baseFilters, sort: 'planned_date' }).map((entry) => entry.id)).toEqual(['tomorrow', 'week'])
+    expect(filterLibraryItems(rows, { ...baseFilters, priority: 'planned' }).map((entry) => entry.id)).toEqual(['future', 'week', 'tomorrow'])
+    expect(filterLibraryItems(rows, { ...baseFilters, sort: 'planned_date' }).map((entry) => entry.id)).toEqual(['tomorrow', 'week', 'future'])
     expect(filterLibraryItems(rows, { ...baseFilters, trash: 'only' }).map((entry) => entry.id)).toEqual(['trash'])
   })
 })

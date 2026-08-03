@@ -372,8 +372,7 @@ function filterRows(rows: CloudItemRow[], params: URLSearchParams) {
     if (category === 'uncategorized' && row.category_id) return false
     if (category && category !== 'uncategorized' && row.category_id !== category) return false
     if (date && /^\d{4}-\d{2}-\d{2}$/.test(date) && chinaDate(row.created_at) !== date) return false
-    const today = chinaDate(new Date().toISOString())
-    if (priority === 'planned' && (!row.planned_for || row.planned_for > today)) return false
+    if (priority === 'planned' && !row.planned_for) return false
     if (priority === 'starred' && !row.is_starred) return false
     if (needle) {
       const rawCategory = Array.isArray(row.category) ? row.category[0] : row.category

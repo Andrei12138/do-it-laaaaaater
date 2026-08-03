@@ -104,8 +104,7 @@ export function listItems(context: AppContext, userId: string, filters: ItemFilt
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
   }).format(new Date())
   if (filters.priority === 'planned') {
-    conditions.push('i.planned_for IS NOT NULL AND i.planned_for <= ?')
-    params.push(today)
+    conditions.push('i.planned_for IS NOT NULL')
   } else if (filters.priority === 'starred') {
     conditions.push('i.is_starred = 1')
   }

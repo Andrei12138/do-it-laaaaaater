@@ -21,7 +21,7 @@ export function filterLibraryItems(items: LibraryItem[], filters: ItemFilters) {
     if (filters.category === 'uncategorized' && item.category) return false
     if (filters.category && filters.category !== 'uncategorized' && item.category?.id !== filters.category) return false
     if (filters.date && chinaDayKey(item.createdAt) !== filters.date) return false
-    if (filters.priority === 'planned' && (!item.plannedFor || item.plannedFor > today)) return false
+    if (filters.priority === 'planned' && !item.plannedFor) return false
     if (filters.priority === 'starred' && !item.isStarred) return false
     if (query) {
       const haystack = [

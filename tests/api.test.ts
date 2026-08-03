@@ -414,7 +414,7 @@ describe('本地应用接口', () => {
     expect(blocked.body.error).toContain('内网')
   })
 
-  it('默认类别、星标、今日计划、智能排序和批量操作保持一致', async () => {
+  it('默认类别、星标、全部计划日期、智能排序和批量操作保持一致', async () => {
     await setup()
     const categories = (await agent.get('/api/categories')).body as Array<{ id: string; name: string }>
     const other = categories.find((category) => category.name === '其他') as { id: string }
@@ -438,7 +438,10 @@ describe('本地应用接口', () => {
       starred.id,
       ordinary.id
     ])
-    expect((await agent.get('/api/items').query({ priority: 'planned' })).body).toHaveLength(2)
+    const future = (await agent.post('/api/items/text').send({ title: '未来计划', categoryId: other.id })).body
+    expect((await agent.patch('/api/items/' + future.id).send({ plannedFor: '2999-01-01' })).status).toBe(200)
+    const planned = (await agent.get('/api/items').query({ priority: 'planned', sort: 'planned_date' })).body
+    expect(planned.map((item: { id: string }) => item.id)).toEqual([overdue.id, todayItem.id, future.id])
     expect((await agent.get('/api/items').query({ priority: 'starred' })).body[0].id).toBe(starred.id)
 
     const bulk = await agent.post('/api/items/bulk').send({

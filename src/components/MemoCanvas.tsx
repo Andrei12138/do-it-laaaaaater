@@ -272,7 +272,7 @@ function MemoLibrary({
         ], (value) => update('category', value))}
         {select('优先级', filters.priority, [
           { key: 'all', label: '全部优先级' },
-          { key: 'planned', label: '今日 / 逾期' },
+          { key: 'planned', label: '计划处理' },
           { key: 'starred', label: '星标' }
         ], (value) => update('priority', value as ItemFilters['priority']))}
         <label>

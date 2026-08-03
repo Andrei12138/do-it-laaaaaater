@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { strFromU8, unzipSync } from 'fflate'
 import sharp from 'sharp'
@@ -11,6 +11,38 @@ async function selectDashboardOption(page: Page, name: string, option: string) {
   }
   await combobox.click()
   await page.locator('[class*="animal-dropdown-"]:visible').getByRole('option', { name: option, exact: true }).click()
+}
+
+async function expectTagContentInside(tag: Locator) {
+  await expect(tag).toBeVisible()
+  const result = await tag.evaluate((element) => {
+    const outer = element.getBoundingClientRect()
+    const text = element.querySelector<HTMLElement>('[class*="animal-text-"]')
+    const icon = element.querySelector<HTMLElement>('.app-icon')
+    if (!text || !icon) return { passed: false, reason: 'missing content' }
+    const boxes = [text, icon].map((content) => {
+      const box = content.getBoundingClientRect()
+      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom }
+    })
+    const contained = boxes.every((box) => box.left >= outer.left - 0.5 && box.right <= outer.right + 0.5 &&
+      box.top >= outer.top - 0.5 && box.bottom <= outer.bottom + 0.5)
+    const style = getComputedStyle(text)
+    return {
+      passed: contained && style.display.endsWith('flex') && style.alignItems === 'center' && style.whiteSpace === 'nowrap',
+      contained,
+      outer: { left: outer.left, right: outer.right, top: outer.top, bottom: outer.bottom },
+      boxes,
+      display: style.display,
+      alignItems: style.alignItems,
+      whiteSpace: style.whiteSpace
+    }
+  })
+  expect(result).toMatchObject({
+    passed: true,
+    contained: true,
+    alignItems: 'center',
+    whiteSpace: 'nowrap'
+  })
 }
 
 async function openDesktopAdd(page: Page, kind: '网页' | '文本' | '图片') {
@@ -268,6 +300,12 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   linkCard = page.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
   await linkCard.getByRole('button', { name: '星标', exact: true }).click()
   await expect(linkCard.getByRole('button', { name: '取消星标', exact: true })).toBeVisible()
+  const flatStarTag = linkCard.locator('.priority-tag').filter({ hasText: '星标' })
+  await expectTagContentInside(flatStarTag)
+  await page.setViewportSize({ width: 430, height: 932 })
+  await expectTagContentInside(flatStarTag)
+  await page.screenshot({ path: 'test-results/flat-star-tag-mobile.png', fullPage: true })
+  await page.setViewportSize({ width: 1440, height: 900 })
   const yesterdayDate = addDateKey(chinaDate, -1)
   const tomorrowDate = addDateKey(chinaDate, 1)
   const futureDate = addDateKey(chinaDate, 10)
@@ -316,15 +354,24 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
     delete testWindow.__scheduleOriginalFetch
   })
   await scheduleDialog.locator(`[data-date="${chinaDate}"]`).click()
-  await expect(linkCard.getByRole('button', { name: '计划 今天', exact: true })).toBeVisible()
-  await selectDashboardOption(page, '优先筛选', '今日 / 逾期')
-  await expect(page.locator('.item-card')).toHaveCount(1)
-  await expect(page.locator('.item-card')).toContainText('公司里待阅读的示例文章（已编辑）')
+  const smartPlannedGroup = page.locator('[data-group-key="planned"]')
+  const smartStarredGroup = page.locator('[data-group-key="starred"]')
+  let plannedLinkCard = smartPlannedGroup.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
+  let starredLinkCard = smartStarredGroup.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
+  await expect(plannedLinkCard.getByRole('button', { name: '计划 今天', exact: true })).toBeVisible()
+  await expect(starredLinkCard.getByRole('button', { name: '计划 今天', exact: true })).toBeVisible()
+  await selectDashboardOption(page, '优先筛选', '计划处理')
+  await expect(page.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })).toHaveCount(2)
+  await expect(page.locator('.result-summary')).toContainText('显示 1 条')
   await page.getByRole('button', { name: '清除筛选' }).click()
-  await linkCard.getByRole('button', { name: '计划 今天', exact: true }).click()
+  await plannedLinkCard.getByRole('button', { name: '计划 今天', exact: true }).click()
   scheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
   await scheduleDialog.locator(`[data-date="${tomorrowDate}"]`).click()
-  await expect(linkCard.getByRole('button', { name: '计划 明天', exact: true })).toBeVisible()
+  await expect(plannedLinkCard.getByRole('button', { name: '计划 明天', exact: true })).toBeVisible()
+  await expect(starredLinkCard.getByRole('button', { name: '计划 明天', exact: true })).toBeVisible()
+  await selectDashboardOption(page, '优先筛选', '计划处理')
+  await expect(smartPlannedGroup.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })).toBeVisible()
+  await page.getByRole('button', { name: '清除筛选' }).click()
   await selectDashboardOption(page, '排序方式', '计划日期')
   await expect(page.locator('.item-card').first()).toContainText('公司里待阅读的示例文章（已编辑）')
 
@@ -336,21 +383,49 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(page.getByRole('combobox', { name: '排序方式' })).toContainText('最久未看')
   await selectDashboardOption(page, '排序方式', '智能优先')
   const smartLaterGroup = page.locator('[data-group-key="later"]')
-  const smartStarredGroup = page.locator('[data-group-key="starred"]')
   const currentChinaDateLabel = await page.evaluate(() => new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: 'long',
     day: 'numeric'
   }).format(new Date()))
+  const tomorrowChinaDateLabel = await page.evaluate((value) => new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  }).format(new Date(value + 'T12:00:00+08:00')), tomorrowDate)
+  await expect(smartPlannedGroup.getByRole('heading', { level: 2, name: '计划处理' })).toBeVisible()
+  await expect(smartPlannedGroup.getByRole('heading', { level: 3, name: `明天 · ${tomorrowChinaDateLabel}` })).toBeVisible()
   await expect(smartLaterGroup.getByRole('heading', { level: 3, name: currentChinaDateLabel })).toBeVisible()
   await expect(smartLaterGroup.locator('.rest-date-group')).toHaveCount(1)
   await expect(smartStarredGroup.locator('.rest-date-heading')).toHaveCount(0)
+  plannedLinkCard = smartPlannedGroup.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
+  starredLinkCard = smartStarredGroup.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
+  await expect(plannedLinkCard).toBeVisible()
+  await expect(starredLinkCard).toBeVisible()
+  await expect(page.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })).toHaveCount(2)
 
-  linkCard = page.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
-  await linkCard.getByRole('button', { name: '计划 明天', exact: true }).click()
+  await page.getByRole('button', { name: '选择条目' }).click()
+  const plannedSelectionToggle = plannedLinkCard.locator('.item-card-selection-toggle')
+  const starredSelectionToggle = starredLinkCard.locator('.item-card-selection-toggle')
+  await plannedSelectionToggle.click()
+  await expect(plannedSelectionToggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(starredSelectionToggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.bulk-toolbar')).toContainText('已选 1 条')
+  await page.getByRole('button', { name: '退出选择' }).click()
+
+  await starredLinkCard.getByRole('button', { name: '取消星标', exact: true }).click()
+  await expect(smartStarredGroup).toHaveCount(0)
+  await expect(plannedLinkCard.getByRole('button', { name: '星标', exact: true })).toBeVisible()
+  await plannedLinkCard.getByRole('button', { name: '星标', exact: true }).click()
+  await expect(starredLinkCard).toBeVisible()
+
+  await plannedLinkCard.getByRole('button', { name: '计划 明天', exact: true }).click()
   scheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
   await scheduleDialog.getByRole('button', { name: '取消计划' }).click()
+  await expect(smartPlannedGroup).toHaveCount(0)
+  linkCard = smartStarredGroup.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
   await expect(linkCard.getByRole('button', { name: '安排处理', exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: '开始处理' }).click()
@@ -615,6 +690,7 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await memoDialog.getByRole('button', { name: '资料库' }).click()
   const memoLibrary = memoDialog.locator('.memo-library-pane')
   await expect(memoLibrary).toBeVisible()
+  await expect(memoLibrary.getByRole('combobox', { name: '优先级' })).toContainText('计划处理')
   const memoLibrarySearch = memoLibrary.getByRole('searchbox', { name: '搜索资料库' })
   await memoLibrarySearch.fill('回家后整理这段纯文字')
   const textLibraryCard = memoLibrary.locator('.memo-library-results article').filter({ hasText: '回家后整理这段纯文字' })
@@ -1123,6 +1199,10 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await page.locator('.mobile-bottom-nav').getByRole('button', { name: '筛选' }).click()
   const animalFilterDrawer = page.getByRole('dialog', { name: '筛选与排序' })
   await expect(animalFilterDrawer).toBeVisible()
+  const animalMobilePriority = animalFilterDrawer.getByRole('combobox', { name: '优先筛选' })
+  await animalMobilePriority.click()
+  await expect(page.locator('[class*="animal-dropdown-"]:visible').getByRole('option', { name: '计划处理', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
   await page.waitForTimeout(400)
   await page.screenshot({ path: 'test-results/animal-mobile-filter-drawer.png' })
   await animalFilterDrawer.getByRole('button', { name: '关闭' }).click()
@@ -1141,17 +1221,31 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   const animalTextCard = page.locator('.item-card').filter({ hasText: '回家后整理这段纯文字' })
   await animalTextCard.getByRole('button', { name: '星标', exact: true }).click()
   await expect(page.locator('.animal-notification-host')).toContainText('已加星标')
+  const animalStarTag = animalTextCard.locator('.priority-tag').filter({ hasText: '星标' })
+  await expectTagContentInside(animalStarTag)
+  await page.setViewportSize({ width: 430, height: 932 })
+  await expectTagContentInside(animalStarTag)
+  await page.screenshot({ path: 'test-results/animal-star-tag-mobile.png', fullPage: true })
+  await page.setViewportSize({ width: 1440, height: 900 })
   await animalTextCard.getByRole('button', { name: '安排处理', exact: true }).click()
   const animalScheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
   await expect(animalScheduleDialog).toBeVisible()
   expect(parseFloat(await animalScheduleDialog.evaluate((element) => getComputedStyle(element).borderRadius))).toBeGreaterThan(0)
   await page.screenshot({ path: 'test-results/animal-schedule-calendar.png', fullPage: true })
   await animalScheduleDialog.locator(`[data-date="${futureDate}"]`).click()
-  const animalPlannedButton = animalTextCard.getByRole('button', { name: /^计划 / })
+  const animalPlannedGroup = page.locator('[data-group-key="planned"]')
+  const animalStarredGroup = page.locator('[data-group-key="starred"]')
+  const animalPlannedTextCard = animalPlannedGroup.locator('.item-card').filter({ hasText: '回家后整理这段纯文字' })
+  const animalStarredTextCard = animalStarredGroup.locator('.item-card').filter({ hasText: '回家后整理这段纯文字' })
+  await expect(animalPlannedTextCard).toBeVisible()
+  await expect(animalStarredTextCard).toBeVisible()
+  await expect(page.locator('.item-card').filter({ hasText: '回家后整理这段纯文字' })).toHaveCount(2)
+  const animalPlannedButton = animalPlannedTextCard.getByRole('button', { name: /^计划 / })
   await expect(animalPlannedButton).toBeVisible()
   await animalPlannedButton.click()
   await page.getByRole('dialog', { name: '安排处理日期' }).getByRole('button', { name: '取消计划' }).click()
-  await expect(animalTextCard.getByRole('button', { name: '安排处理', exact: true })).toBeVisible()
+  await expect(animalPlannedTextCard).toHaveCount(0)
+  await expect(animalStarredTextCard.getByRole('button', { name: '安排处理', exact: true })).toBeVisible()
   await openDesktopAdd(page, '网页')
   const animalDialog = page.getByRole('dialog', { name: '添加网页' })
   await expect(animalDialog.locator(':scope > div')).not.toHaveCSS('clip-path', 'none')
