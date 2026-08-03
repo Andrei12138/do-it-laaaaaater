@@ -1,4 +1,4 @@
-import { chinaDateKey, smartPriority } from './china-date.js'
+import { addChinaDays, chinaDateKey } from './china-date.js'
 import type { LibraryItem } from './types.js'
 
 export type DashboardDateGroup = {
@@ -36,23 +36,66 @@ export function groupItemsByCreatedDate(items: LibraryItem[]) {
   }))
 }
 
+export function plannedDateGroupLabel(key: string, today: string) {
+  const date = absoluteChinaDateLabel(key)
+  if (key < today) return `逾期 · ${date}`
+  if (key === today) return `今天 · ${date}`
+  if (key === addChinaDays(1, today)) return `明天 · ${date}`
+  return date
+}
+
+export function groupItemsByPlannedDate(items: LibraryItem[], today: string) {
+  const result = new Map<string, LibraryItem[]>()
+  items.forEach((item) => {
+    if (!item.plannedFor) return
+    result.set(item.plannedFor, [...(result.get(item.plannedFor) || []), item])
+  })
+  return Array.from(result.entries())
+    .sort(([left], [right]) => {
+      const leftOverdue = left < today
+      const rightOverdue = right < today
+      if (leftOverdue !== rightOverdue) return leftOverdue ? -1 : 1
+      if (leftOverdue) return right.localeCompare(left)
+      return left.localeCompare(right)
+    })
+    .map(([key, groupItems]) => ({
+      key,
+      label: plannedDateGroupLabel(key, today),
+      date: key,
+      items: [...groupItems].sort((left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id))
+    }))
+}
+
 export function smartDashboardGroups(items: LibraryItem[], today: string): DashboardGroup[] {
-  const definitions = [
-    { key: 'overdue', label: '逾期的今天处理', rank: 0 },
-    { key: 'today', label: '今天处理', rank: 1 },
-    { key: 'starred', label: '星标优先', rank: 2 },
-    { key: 'later', label: '其余内容', rank: 3 }
-  ]
-  return definitions.map((definition) => {
-    const groupItems = items.filter((item) => smartPriority(item, today) === definition.rank)
-    return {
-      key: definition.key,
-      label: definition.label,
+  const plannedDateGroups = groupItemsByPlannedDate(items, today)
+  const plannedItems = plannedDateGroups.flatMap((group) => group.items)
+  const starredItems = items
+    .filter((item) => item.isStarred)
+    .sort((left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id))
+  const laterItems = items
+    .filter((item) => !item.plannedFor && !item.isStarred)
+    .sort((left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id))
+
+  return [
+    {
+      key: 'planned',
+      label: '计划处理',
       date: '',
-      items: groupItems,
-      ...(definition.key === 'later'
-        ? { dateGroups: groupItemsByCreatedDate(groupItems) }
-        : {})
+      items: plannedItems,
+      dateGroups: plannedDateGroups
+    },
+    {
+      key: 'starred',
+      label: '星标优先',
+      date: '',
+      items: starredItems
+    },
+    {
+      key: 'later',
+      label: '其余内容',
+      date: '',
+      items: laterItems,
+      dateGroups: groupItemsByCreatedDate(laterItems)
     }
-  }).filter((group) => group.items.length)
+  ].filter((group) => group.items.length)
 }

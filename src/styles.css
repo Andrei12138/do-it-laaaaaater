@@ -2299,6 +2299,20 @@ html[data-theme='animal-island'] .result-summary > .muted {
   flex: 0 0 auto;
 }
 
+.priority-tag [class*='animal-text-'] {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 3px !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+.priority-tag .app-icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
 .card-category-field {
   display: inline-flex;
   min-width: 0;

@@ -1233,7 +1233,7 @@ export function Dashboard({
     filters.status !== 'all' ? { key: 'status', label: filters.status === 'pending' ? '待处理' : '已完成' } : null,
     filters.q ? { key: 'q', label: '搜索：' + filters.q } : null,
     filters.kind !== 'all' ? { key: 'kind', label: filters.kind === 'link' ? '网页' : filters.kind === 'text' ? '文本' : '图片' } : null,
-    filters.priority !== 'all' ? { key: 'priority', label: filters.priority === 'starred' ? '星标' : '今日 / 逾期' } : null,
+    filters.priority !== 'all' ? { key: 'priority', label: filters.priority === 'starred' ? '星标' : '计划处理' } : null,
     filters.category ? {
       key: 'category',
       label: filters.category === 'uncategorized'
@@ -1473,7 +1473,7 @@ export function Dashboard({
               value={filters.priority}
               options={[
                 { key: 'all', label: '全部优先级' },
-                { key: 'planned', label: '今日 / 逾期' },
+                { key: 'planned', label: '计划处理' },
                 { key: 'starred', label: '星标' }
               ]}
               onChange={(value) => setFilters((current) => ({
@@ -1787,7 +1787,7 @@ export function Dashboard({
               value={filters.priority}
               options={[
                 { key: 'all', label: '全部优先级' },
-                { key: 'planned', label: '今日 / 逾期' },
+                { key: 'planned', label: '计划处理' },
                 { key: 'starred', label: '星标' }
               ]}
               onChange={(value) => setFilters((current) => ({ ...current, priority: value as ItemFilters['priority'] }))}
