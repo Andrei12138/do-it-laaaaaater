@@ -24,7 +24,7 @@ import {
 } from 'animal-island-ui'
 import islandBag from 'animal-island-ui/items/item-022.png'
 import { ApiRequestError, api, errorMessage, jsonRequest } from '../api'
-import { addChinaDays, chinaToday, plannedDateLabel, plannedState } from '../china-date'
+import { chinaToday, plannedDateLabel, plannedState } from '../china-date'
 import { smartDashboardGroups, type DashboardGroup } from '../dashboard-groups'
 import { discardDraft, readActiveDraft, type ActiveDraft } from '../draft-store'
 import { itemAgeLabel } from '../item-age'
@@ -58,6 +58,7 @@ import { EmptyState, Modal } from './Modal'
 import { ThemeControl } from './ThemeControl'
 import { showThemeNotification } from './ThemeNotification'
 import { OfflineManagerModal } from './OfflineManager'
+import { SchedulePicker } from './SchedulePicker'
 
 const MemoCanvas = lazy(() => import('./MemoCanvas').then((module) => ({ default: module.MemoCanvas })))
 
@@ -353,6 +354,7 @@ function ItemCard({
   const kindIcon: AppIconName = item.kind === 'link' ? 'link' : item.kind === 'text' ? 'text' : 'image'
   const plan = plannedState(item.plannedFor)
   const [planMenuOpen, setPlanMenuOpen] = useState(false)
+  const [planAnchor, setPlanAnchor] = useState<HTMLElement | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const trashDaysLeft = item.trashedAt
     ? Math.max(0, Math.ceil((item.trashedAt + 7 * 24 * 60 * 60 * 1000 - now) / (24 * 60 * 60 * 1000)))
@@ -520,7 +522,11 @@ function ItemCard({
               disabled={busy || item.status === 'completed'}
               className={`card-action-secondary${item.plannedFor ? ' is-active' : ''}`}
               icon={<AppIcon name="today" size={17} />}
-              onClick={() => setPlanMenuOpen((value) => !value)}
+              onClick={(event) => {
+                setMoreOpen(false)
+                setPlanAnchor(event.currentTarget as HTMLElement)
+                setPlanMenuOpen((value) => !value)
+              }}
             >
               {item.plannedFor ? '计划 ' + plannedDateLabel(item.plannedFor) : '安排处理'}
             </Button>
@@ -533,18 +539,14 @@ function ItemCard({
               icon={<AppIcon name="more" size={18} />}
               onClick={() => setMoreOpen((value) => !value)}
             >更多</Button>
-            {planMenuOpen && (
-              <div className="card-plan-menu" role="menu" aria-label="安排处理时间">
-                <button type="button" onClick={() => { setPlanMenuOpen(false); void onPatch({ plannedFor: chinaToday() }, '已安排今天处理') }}>今天</button>
-                <button type="button" onClick={() => { setPlanMenuOpen(false); void onPatch({ plannedFor: addChinaDays(1) }, '已安排明天处理') }}>明天</button>
-                <button type="button" onClick={() => { setPlanMenuOpen(false); void onPatch({ plannedFor: addChinaDays(7) }, '已安排一周后处理') }}>一周后</button>
-                <button type="button" disabled={!item.plannedFor} onClick={() => { setPlanMenuOpen(false); void onPatch({ plannedFor: null }, '已清除处理计划') }}>清除计划</button>
-              </div>
-            )}
             {moreOpen && (
               <div className="card-more-menu" role="menu" aria-label="更多条目操作">
                 <button type="button" onClick={() => { setMoreOpen(false); void onPatch({ isStarred: !item.isStarred }, item.isStarred ? '已取消星标' : '已加星标') }}>{item.isStarred ? '取消星标' : '加星标'}</button>
-                <button type="button" disabled={item.status === 'completed'} onClick={() => { setMoreOpen(false); setPlanMenuOpen(true) }}>安排处理</button>
+                <button type="button" disabled={item.status === 'completed'} onClick={(event) => {
+                  setMoreOpen(false)
+                  setPlanAnchor(event.currentTarget)
+                  setPlanMenuOpen(true)
+                }}>安排处理</button>
                 <button type="button" onClick={() => { setMoreOpen(false); onEdit() }}>编辑</button>
                 <button type="button" className="danger-text" onClick={() => { setMoreOpen(false); void onDelete() }}>移到回收站</button>
               </div>
@@ -562,6 +564,15 @@ function ItemCard({
           )}
         </div>
       </Card>
+      <SchedulePicker
+        open={planMenuOpen}
+        anchor={planAnchor}
+        value={item.plannedFor}
+        busy={busy}
+        onSelect={(date) => onPatch({ plannedFor: date }, `已安排 ${plannedDateLabel(date)}处理`)}
+        onClear={() => onPatch({ plannedFor: null }, '已取消处理计划')}
+        onClose={() => setPlanMenuOpen(false)}
+      />
       {selectionMode && (
         <button
           type="button"
@@ -599,6 +610,8 @@ export function Dashboard({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [bulkCategoryId, setBulkCategoryId] = useState('')
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false)
+  const [bulkScheduleAnchor, setBulkScheduleAnchor] = useState<HTMLElement | null>(null)
   const [busyItems, setBusyItems] = useState<Set<string>>(() => new Set())
   const [retryItems, setRetryItems] = useState<Record<string, { changes: BulkItemChanges; label: string }>>({})
   const [focusMode, setFocusMode] = useState(false)
@@ -611,6 +624,20 @@ export function Dashboard({
   const syncStatus = useSyncStatus()
   const offlineState = useOfflineRuntime()
   const requestNumber = useRef(0)
+  const bulkPlannedFor = useMemo(() => {
+    const selected = allItems.filter((item) => selectedIds.has(item.id))
+    if (!selected.length) return null
+    const first = selected[0].plannedFor
+    return selected.every((item) => item.plannedFor === first) ? first : null
+  }, [allItems, selectedIds])
+  const bulkHasPlanned = useMemo(
+    () => allItems.some((item) => selectedIds.has(item.id) && Boolean(item.plannedFor)),
+    [allItems, selectedIds]
+  )
+  const bulkCanSchedule = useMemo(
+    () => allItems.some((item) => selectedIds.has(item.id) && item.status === 'pending'),
+    [allItems, selectedIds]
+  )
 
   const refreshReferences = useCallback(async () => {
     const [nextCategories, nextPreferences] = await Promise.all([
@@ -1014,7 +1041,7 @@ export function Dashboard({
 
   async function runBulk(changes: BulkItemChanges, label: string) {
     const ids = [...selectedIds]
-    if (!ids.length || bulkBusy) return
+    if (!ids.length || bulkBusy) return false
     setBulkBusy(true)
     try {
       const result = await jsonRequest<{
@@ -1028,8 +1055,10 @@ export function Dashboard({
       await reloadAll()
       if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条没有处理成功，已保留选择，可再次重试。')
       else notifySuccess(label + '（' + result.updated + ' 条）')
+      return failedIds.size === 0
     } catch (requestError) {
       notifyError(errorMessage(requestError))
+      return false
     } finally {
       setBulkBusy(false)
     }
@@ -1563,8 +1592,16 @@ export function Dashboard({
             <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ status: 'pending' }, '已批量恢复')}>恢复</Button>
             <Button size="small" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="star" size={16} />} onClick={() => void runBulk({ isStarred: true }, '已批量加星标')}>加星标</Button>
             <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ isStarred: false }, '已批量取消星标')}>取消星标</Button>
-            <Button size="small" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="today" size={16} />} onClick={() => void runBulk({ plannedFor: chinaToday() }, '已加入今日清单')}>加入今日</Button>
-            <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ plannedFor: null }, '已移出今日清单')}>移出今日</Button>
+            <Button
+              size="small"
+              disabled={!selectedIds.size || bulkBusy || !bulkCanSchedule}
+              icon={<AppIcon name="calendar" size={16} />}
+              onClick={(event) => {
+                setBulkScheduleAnchor(event.currentTarget as HTMLElement)
+                setBulkScheduleOpen(true)
+              }}
+            >安排日期</Button>
+            <Button size="small" disabled={!selectedIds.size || bulkBusy || !bulkHasPlanned} onClick={() => void runBulk({ plannedFor: null }, '已批量取消计划')}>取消计划</Button>
             <label className="bulk-category">
               <span className="visually-hidden">批量修改类别</span>
               {theme === 'animal-island' ? (
@@ -1862,10 +1899,20 @@ export function Dashboard({
               <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ status: 'pending' }, '已批量恢复') }}>恢复待处理</Button>
               <Button block disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="star" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulk({ isStarred: true }, '已批量加星标') }}>加星标</Button>
               <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ isStarred: false }, '已批量取消星标') }}>取消星标</Button>
-              <Button block disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="today" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulk({ plannedFor: chinaToday() }, '已安排今天处理') }}>安排今天</Button>
-              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ plannedFor: addChinaDays(1) }, '已安排明天处理') }}>安排明天</Button>
-              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ plannedFor: addChinaDays(7) }, '已安排一周后处理') }}>安排一周后</Button>
-              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ plannedFor: null }, '已清除处理计划') }}>清除计划</Button>
+              <Button
+                block
+                disabled={!selectedIds.size || bulkBusy || !bulkCanSchedule}
+                icon={<AppIcon name="calendar" size={20} />}
+                onClick={(event) => {
+                  setBulkScheduleAnchor(event.currentTarget as HTMLElement)
+                  setBulkScheduleOpen(true)
+                }}
+              >安排日期</Button>
+              <Button block disabled={!selectedIds.size || bulkBusy || !bulkHasPlanned} onClick={() => {
+                void runBulk({ plannedFor: null }, '已批量取消计划').then((saved) => {
+                  if (saved) setBulkPanelOpen(false)
+                })
+              }}>取消计划</Button>
               <label className="field">
                 <span>修改类别</span>
                 <select value={bulkCategoryId} onChange={(event) => setBulkCategoryId(event.target.value)}>
@@ -1879,6 +1926,26 @@ export function Dashboard({
           )}
         </div>
       </MobileActionSheet>
+
+      <SchedulePicker
+        open={bulkScheduleOpen}
+        anchor={bulkScheduleAnchor}
+        value={bulkPlannedFor}
+        title={`为已选 ${selectedIds.size} 条安排日期`}
+        busy={bulkBusy}
+        clearDisabled={!selectedIds.size || !bulkHasPlanned}
+        onSelect={async (date) => {
+          const saved = await runBulk({ plannedFor: date }, `已批量安排 ${plannedDateLabel(date)}处理`)
+          if (saved) setBulkPanelOpen(false)
+          return saved
+        }}
+        onClear={async () => {
+          const saved = await runBulk({ plannedFor: null }, '已批量取消计划')
+          if (saved) setBulkPanelOpen(false)
+          return saved
+        }}
+        onClose={() => setBulkScheduleOpen(false)}
+      />
 
       {undoDelete && (
         <div className="delete-undo-bar" role="status" aria-live="polite">

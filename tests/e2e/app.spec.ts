@@ -21,6 +21,15 @@ async function openDesktopAdd(page: Page, kind: '网页' | '文本' | '图片') 
     .click()
 }
 
+function addDateKey(value: string, days: number) {
+  const date = new Date(value + 'T12:00:00+08:00')
+  date.setUTCDate(date.getUTCDate() + days)
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 test('从首次建号到直接粘贴网页、文字和图片的完整流程', async ({ page, context }) => {
   const pageErrors: string[] = []
   const memoAssetFailures: string[] = []
@@ -259,15 +268,62 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   linkCard = page.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
   await linkCard.getByRole('button', { name: '星标', exact: true }).click()
   await expect(linkCard.getByRole('button', { name: '取消星标', exact: true })).toBeVisible()
+  const yesterdayDate = addDateKey(chinaDate, -1)
+  const tomorrowDate = addDateKey(chinaDate, 1)
+  const futureDate = addDateKey(chinaDate, 10)
   await linkCard.getByRole('button', { name: '安排处理', exact: true }).click()
-  await linkCard.getByRole('menu', { name: '安排处理时间' }).getByRole('button', { name: '今天', exact: true }).click()
+  let scheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
+  await expect(scheduleDialog).toBeVisible()
+  await expect(scheduleDialog).toHaveCSS('border-radius', '0px')
+  await expect(scheduleDialog.locator(`[data-date="${yesterdayDate}"]`)).toBeDisabled()
+  const scheduleBox = await scheduleDialog.boundingBox()
+  expect(scheduleBox?.x).toBeGreaterThanOrEqual(12)
+  expect((scheduleBox?.x || 0) + (scheduleBox?.width || 0)).toBeLessThanOrEqual(1428)
+  expect(scheduleBox?.y).toBeGreaterThanOrEqual(12)
+  expect((scheduleBox?.y || 0) + (scheduleBox?.height || 0)).toBeLessThanOrEqual(888)
+  expect(await scheduleDialog.evaluate((panel) => {
+    const box = panel.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + 24)
+    return Boolean(hit && panel.contains(hit))
+  })).toBe(true)
+  await page.screenshot({ path: 'test-results/flat-schedule-calendar.png', fullPage: true })
+
+  await page.evaluate(() => {
+    const testWindow = window as typeof window & { __scheduleOriginalFetch?: typeof window.fetch }
+    const originalFetch = window.fetch
+    let failNextSchedule = true
+    testWindow.__scheduleOriginalFetch = originalFetch
+    window.fetch = async (input, init) => {
+      const requestUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase()
+      const body = typeof init?.body === 'string' ? init.body : ''
+      if (failNextSchedule && requestUrl.includes('/api/items/') && method === 'PATCH' && body.includes('plannedFor')) {
+        failNextSchedule = false
+        return new Response(JSON.stringify({ error: '测试保存失败' }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      return originalFetch(input, init)
+    }
+  })
+  await scheduleDialog.locator(`[data-date="${futureDate}"]`).click()
+  await expect(scheduleDialog).toBeVisible()
+  await expect(page.locator('.flat-notification')).toContainText('测试保存失败')
+  await page.evaluate(() => {
+    const testWindow = window as typeof window & { __scheduleOriginalFetch?: typeof window.fetch }
+    if (testWindow.__scheduleOriginalFetch) window.fetch = testWindow.__scheduleOriginalFetch
+    delete testWindow.__scheduleOriginalFetch
+  })
+  await scheduleDialog.locator(`[data-date="${chinaDate}"]`).click()
   await expect(linkCard.getByRole('button', { name: '计划 今天', exact: true })).toBeVisible()
   await selectDashboardOption(page, '优先筛选', '今日 / 逾期')
   await expect(page.locator('.item-card')).toHaveCount(1)
   await expect(page.locator('.item-card')).toContainText('公司里待阅读的示例文章（已编辑）')
   await page.getByRole('button', { name: '清除筛选' }).click()
   await linkCard.getByRole('button', { name: '计划 今天', exact: true }).click()
-  await linkCard.getByRole('menu', { name: '安排处理时间' }).getByRole('button', { name: '明天', exact: true }).click()
+  scheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
+  await scheduleDialog.locator(`[data-date="${tomorrowDate}"]`).click()
   await expect(linkCard.getByRole('button', { name: '计划 明天', exact: true })).toBeVisible()
   await selectDashboardOption(page, '排序方式', '计划日期')
   await expect(page.locator('.item-card').first()).toContainText('公司里待阅读的示例文章（已编辑）')
@@ -290,6 +346,12 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(smartLaterGroup.getByRole('heading', { level: 3, name: currentChinaDateLabel })).toBeVisible()
   await expect(smartLaterGroup.locator('.rest-date-group')).toHaveCount(1)
   await expect(smartStarredGroup.locator('.rest-date-heading')).toHaveCount(0)
+
+  linkCard = page.locator('.item-card').filter({ hasText: '公司里待阅读的示例文章（已编辑）' })
+  await linkCard.getByRole('button', { name: '计划 明天', exact: true }).click()
+  scheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
+  await scheduleDialog.getByRole('button', { name: '取消计划' }).click()
+  await expect(linkCard.getByRole('button', { name: '安排处理', exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: '开始处理' }).click()
   const focusDialog = page.getByRole('dialog', { name: '晚间处理模式' })
@@ -349,6 +411,17 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(bulkToolbar).toContainText('已选 1 条')
   await page.screenshot({ path: 'test-results/flat-card-selection-mobile.png', fullPage: true })
   await page.setViewportSize({ width: 1440, height: 900 })
+  await bulkToolbar.getByRole('button', { name: '安排日期' }).click()
+  const bulkScheduleDialog = page.getByRole('dialog', { name: '为已选 1 条安排日期' })
+  await expect(bulkScheduleDialog).toBeVisible()
+  await bulkScheduleDialog.locator(`[data-date="${futureDate}"]`).click()
+  await expect(page.locator('.flat-notification')).toContainText('已批量安排')
+  await expect(bulkToolbar).toContainText('已选 0 条')
+  await bulkToolbar.getByRole('button', { name: '全选当前结果' }).click()
+  await expect(bulkToolbar).toContainText('已选 3 条')
+  await bulkToolbar.getByRole('button', { name: '取消计划' }).click()
+  await expect(page.locator('.flat-notification')).toContainText('已批量取消计划（3 条）')
+  await expect(bulkToolbar).toContainText('已选 0 条')
   await bulkToolbar.getByRole('button', { name: '全选当前结果' }).click()
   await expect(bulkToolbar).toContainText('已选 3 条')
   await bulkToolbar.getByRole('button', { name: '加星标' }).click()
@@ -481,6 +554,17 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await page.screenshot({ path: 'test-results/mobile-home.png', fullPage: true })
   await page.setViewportSize({ width: 430, height: 932 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  const mobileScheduleCard = page.locator('.item-card').filter({ hasText: '回家后整理这段纯文字' })
+  await mobileScheduleCard.getByRole('button', { name: '更多', exact: true }).click()
+  await mobileScheduleCard.getByRole('menu', { name: '更多条目操作' }).getByRole('button', { name: '安排处理' }).click()
+  const mobileScheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
+  await expect(mobileScheduleDialog).toBeVisible()
+  const mobileScheduleBox = await mobileScheduleDialog.boundingBox()
+  expect(Math.abs((mobileScheduleBox?.y || 0) + (mobileScheduleBox?.height || 0) - 932)).toBeLessThanOrEqual(1)
+  expect(mobileScheduleBox?.width).toBe(430)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.screenshot({ path: 'test-results/iphone-15-pro-max-schedule-calendar.png' })
+  await mobileScheduleDialog.getByRole('button', { name: '关闭日历' }).click()
   await page.screenshot({ path: 'test-results/iphone-15-pro-max-home.png', fullPage: true })
 
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -669,10 +753,17 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(memoInspector.getByRole('button', { name: '恢复待处理' })).toBeVisible()
   await memoInspector.getByRole('button', { name: '恢复待处理' }).click()
   await memoInspector.getByRole('button', { name: '安排处理' }).click()
-  await memoInspector.locator('.memo-plan-menu').getByRole('button', { name: '明天' }).click()
+  const memoScheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
+  await expect(memoScheduleDialog).toBeVisible()
+  expect(await memoScheduleDialog.evaluate((panel) => {
+    const box = panel.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + 24)
+    return Boolean(hit && panel.contains(hit))
+  })).toBe(true)
+  await memoScheduleDialog.locator(`[data-date="${tomorrowDate}"]`).click()
   await expect(memoInspector.getByRole('button', { name: '明天' })).toBeVisible()
   await memoInspector.getByRole('button', { name: '明天' }).click()
-  await memoInspector.locator('.memo-plan-menu').getByRole('button', { name: '清除计划' }).click()
+  await page.getByRole('dialog', { name: '安排处理日期' }).getByRole('button', { name: '取消计划' }).click()
 
   await memoInspector.getByRole('button', { name: '编辑标题、网址或图片' }).click()
   const memoEditDialog = page.getByRole('dialog', { name: '编辑条目' })
@@ -1008,9 +1099,23 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await animalSelectionToggle.click()
   await expect(animalSelectionToggle).toHaveAttribute('aria-pressed', 'true')
   await expect(mobileSelectionBar).toContainText('已选 1 条')
-  await page.screenshot({ path: 'test-results/animal-card-selection-mobile.png', fullPage: true })
-  await animalSelectionToggle.click()
+  await mobileSelectionBar.getByRole('button', { name: '更多', exact: true }).click()
+  let mobileBulkSheet = page.getByRole('dialog', { name: '批量操作' })
+  await mobileBulkSheet.getByRole('button', { name: '安排日期' }).click()
+  const mobileBulkScheduleDialog = page.getByRole('dialog', { name: '为已选 1 条安排日期' })
+  await expect(mobileBulkScheduleDialog).toBeVisible()
+  const mobileBulkScheduleBox = await mobileBulkScheduleDialog.boundingBox()
+  expect(Math.abs((mobileBulkScheduleBox?.y || 0) + (mobileBulkScheduleBox?.height || 0) - 932)).toBeLessThanOrEqual(1)
+  await mobileBulkScheduleDialog.locator(`[data-date="${futureDate}"]`).click()
+  await expect(page.locator('.animal-notification-host')).toContainText('已批量安排')
   await expect(animalSelectionToggle).toHaveAttribute('aria-pressed', 'false')
+  await animalSelectionToggle.click()
+  await mobileSelectionBar.getByRole('button', { name: '更多', exact: true }).click()
+  mobileBulkSheet = page.getByRole('dialog', { name: '批量操作' })
+  await mobileBulkSheet.getByRole('button', { name: '取消计划' }).click()
+  await expect(page.locator('.animal-notification-host')).toContainText('已批量取消计划')
+  await expect(animalSelectionToggle).toHaveAttribute('aria-pressed', 'false')
+  await page.screenshot({ path: 'test-results/animal-card-selection-mobile.png', fullPage: true })
   await mobileSelectionBar.getByRole('button', { name: '退出', exact: true }).click()
   await expect(page.locator('.item-card-selection-toggle')).toHaveCount(0)
   await expect(page.locator('.mobile-bottom-nav')).toBeVisible()
@@ -1036,6 +1141,17 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   const animalTextCard = page.locator('.item-card').filter({ hasText: '回家后整理这段纯文字' })
   await animalTextCard.getByRole('button', { name: '星标', exact: true }).click()
   await expect(page.locator('.animal-notification-host')).toContainText('已加星标')
+  await animalTextCard.getByRole('button', { name: '安排处理', exact: true }).click()
+  const animalScheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
+  await expect(animalScheduleDialog).toBeVisible()
+  expect(parseFloat(await animalScheduleDialog.evaluate((element) => getComputedStyle(element).borderRadius))).toBeGreaterThan(0)
+  await page.screenshot({ path: 'test-results/animal-schedule-calendar.png', fullPage: true })
+  await animalScheduleDialog.locator(`[data-date="${futureDate}"]`).click()
+  const animalPlannedButton = animalTextCard.getByRole('button', { name: /^计划 / })
+  await expect(animalPlannedButton).toBeVisible()
+  await animalPlannedButton.click()
+  await page.getByRole('dialog', { name: '安排处理日期' }).getByRole('button', { name: '取消计划' }).click()
+  await expect(animalTextCard.getByRole('button', { name: '安排处理', exact: true })).toBeVisible()
   await openDesktopAdd(page, '网页')
   const animalDialog = page.getByRole('dialog', { name: '添加网页' })
   await expect(animalDialog.locator(':scope > div')).not.toHaveCSS('clip-path', 'none')

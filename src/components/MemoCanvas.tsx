@@ -28,7 +28,7 @@ import type {
 import '@excalidraw/excalidraw/index.css'
 import '../memo-canvas.css'
 import { Button, Card, Input, Select, Tag } from 'animal-island-ui'
-import { addChinaDays, chinaToday, plannedDateLabel } from '../china-date'
+import { plannedDateLabel } from '../china-date'
 import { errorMessage } from '../api'
 import {
   emptyMemoCanvas,
@@ -66,6 +66,7 @@ import type {
   MemoColorMode
 } from '../types'
 import { AppIcon } from './AppIcon'
+import { SchedulePicker } from './SchedulePicker'
 
 const SAVE_DELAY = 900
 const CHANNEL_NAME = 'do-it-laaaaaater.memo-canvas.v1'
@@ -352,6 +353,7 @@ function MemoItemInspector({
 }) {
   const { theme } = useTheme()
   const [planOpen, setPlanOpen] = useState(false)
+  const [planAnchor, setPlanAnchor] = useState<HTMLElement | null>(null)
   if (!item) {
     return (
       <Pane className="memo-inspector-pane">
@@ -448,18 +450,26 @@ function MemoItemInspector({
             >
               {item.isStarred ? '取消星标' : '加星标'}
             </Button>
-            <Button disabled={busy || item.status === 'completed'} icon={<AppIcon name="today" size={18} />} onClick={() => setPlanOpen((open) => !open)}>
+            <Button
+              disabled={busy || item.status === 'completed'}
+              icon={<AppIcon name="calendar" size={18} />}
+              onClick={(event) => {
+                setPlanAnchor(event.currentTarget as HTMLElement)
+                setPlanOpen((open) => !open)
+              }}
+            >
               {item.plannedFor ? plannedDateLabel(item.plannedFor) : '安排处理'}
             </Button>
           </div>
-          {planOpen && (
-            <div className="memo-plan-menu">
-              <button type="button" onClick={() => { setPlanOpen(false); void onPatch(item, { plannedFor: chinaToday() }, '已安排今天处理') }}>今天</button>
-              <button type="button" onClick={() => { setPlanOpen(false); void onPatch(item, { plannedFor: addChinaDays(1) }, '已安排明天处理') }}>明天</button>
-              <button type="button" onClick={() => { setPlanOpen(false); void onPatch(item, { plannedFor: addChinaDays(7) }, '已安排一周后处理') }}>一周后</button>
-              <button type="button" onClick={() => { setPlanOpen(false); void onPatch(item, { plannedFor: null }, '已清除处理计划') }}>清除计划</button>
-            </div>
-          )}
+          <SchedulePicker
+            open={planOpen}
+            anchor={planAnchor}
+            value={item.plannedFor}
+            busy={busy}
+            onSelect={(date) => onPatch(item, { plannedFor: date }, `已安排 ${plannedDateLabel(date)}处理`)}
+            onClear={() => onPatch(item, { plannedFor: null }, '已取消处理计划')}
+            onClose={() => setPlanOpen(false)}
+          />
           <Button block icon={<AppIcon name="edit" size={19} />} onClick={() => onEdit(item)}>编辑标题、网址或图片</Button>
           <Button block danger icon={<AppIcon name="trash" size={19} />} onClick={() => void onDelete(item)}>移到回收站</Button>
         </>
