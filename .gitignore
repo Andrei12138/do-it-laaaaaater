@@ -11,3 +11,4 @@ coverage/
 .vercel/
 .supabase/.temp/
 *.log
+__pycache__/

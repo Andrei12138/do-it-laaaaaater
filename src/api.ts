@@ -99,3 +99,26 @@ export function jsonRequest<T>(path: string, method: string, body?: unknown) {
 export function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : '操作失败，请稍后重试'
 }
+
+// ── AI 辅助（摘要 / 分类 / 处理建议）────────────────────────────
+export interface AiSummaryResult {
+  summary: string
+}
+export interface AiCategorizeResult {
+  category: string
+}
+export interface AiAdviceResult {
+  advice: string
+}
+
+export function aiSummarize(payload: { title?: string; text: string }) {
+  return jsonRequest<AiSummaryResult>('/api/ai/summarize', 'POST', payload)
+}
+
+export function aiCategorize(payload: { text: string; categories?: string[] }) {
+  return jsonRequest<AiCategorizeResult>('/api/ai/categorize', 'POST', payload)
+}
+
+export function aiAdvice(payload: { text: string }) {
+  return jsonRequest<AiAdviceResult>('/api/ai/advice', 'POST', payload)
+}

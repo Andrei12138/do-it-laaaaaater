@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser'
 import express, { type NextFunction, type Request, type Response } from 'express'
 import multer from 'multer'
 import { z } from 'zod'
+import { createAiRouter } from './ai.js'
 import {
   DEFAULT_CATEGORIES,
   createContext,
@@ -498,6 +499,9 @@ export function createApp(context = createContext()) {
     }
     next()
   })
+
+  // AI 辅助：摘要 / 分类 / 处理建议（server/ai.ts）
+  app.use('/api/ai', authRequired(context), createAiRouter(context))
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true })

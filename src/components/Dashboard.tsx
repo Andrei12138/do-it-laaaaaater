@@ -23,7 +23,7 @@ import {
   Title
 } from 'animal-island-ui'
 import islandBag from 'animal-island-ui/items/item-022.png'
-import { ApiRequestError, api, errorMessage, jsonRequest } from '../api'
+import { ApiRequestError, aiSummarize, api, errorMessage, jsonRequest } from '../api'
 import { chinaToday, plannedDateLabel, plannedState } from '../china-date'
 import { smartDashboardGroups, type DashboardGroup } from '../dashboard-groups'
 import { discardDraft, readActiveDraft, type ActiveDraft } from '../draft-store'
@@ -356,6 +356,22 @@ function ItemCard({
   const [planMenuOpen, setPlanMenuOpen] = useState(false)
   const [planAnchor, setPlanAnchor] = useState<HTMLElement | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
+  const [aiSummaries, setAiSummaries] = useState<Record<string, string>>({})
+  const [aiLoading, setAiLoading] = useState<string | null>(null)
+
+  async function handleAiSummary(item: LibraryItem) {
+    if (aiLoading) return
+    setAiLoading(item.id)
+    try {
+      const result = await aiSummarize({ title: item.title, text: item.url || '' })
+      setAiSummaries((prev) => ({ ...prev, [item.id]: result.summary }))
+      notifySuccess('AI 摘要已生成')
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
+    } finally {
+      setAiLoading(null)
+    }
+  }
   const trashDaysLeft = item.trashedAt
     ? Math.max(0, Math.ceil((item.trashedAt + 7 * 24 * 60 * 60 * 1000 - now) / (24 * 60 * 60 * 1000)))
     : 0
@@ -424,6 +440,9 @@ function ItemCard({
               <span>{item.title}</span>
             )}
           </h3>
+          {aiSummaries[item.id] && (
+            <p className="item-ai-summary">✨ {aiSummaries[item.id]}</p>
+          )}
           {item.url && <p className="item-host" title={item.url}>{hostLabel(item.url)}</p>}
           <div className="item-meta">
             <span className="category-color-key" aria-hidden="true" style={{ backgroundColor: item.category?.color || '#95a5a6' }} />
@@ -496,6 +515,15 @@ function ItemCard({
                 </button>
               )}
             </span>
+            <Button
+              size="small"
+              disabled={busy || aiLoading !== null || item.kind === 'image_group'}
+              className="card-action-secondary"
+              icon={<AppIcon name="bookmark" size={17} />}
+              onClick={() => void handleAiSummary(item)}
+            >
+              {aiLoading === item.id ? '摘要中…' : 'AI 摘要'}
+            </Button>
             <Button
               size="small"
               type="primary"
