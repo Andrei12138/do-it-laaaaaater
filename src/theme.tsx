@@ -8,7 +8,7 @@ import {
   type ReactNode
 } from 'react'
 
-export type ThemeId = 'flat-2013' | 'animal-island' | 'calm' | 'pinterest'
+export type ThemeId = 'flat-2013' | 'animal-island'
 
 export interface ThemeDefinition {
   id: ThemeId
@@ -56,34 +56,6 @@ export const THEMES: readonly ThemeDefinition[] = [
     authRecoveryDescription: '为你的稍后处理小岛换一把新钥匙',
     dashboardKicker: 'PRIVATE ISLAND LIST',
     dashboardDescription: '把白天发现的好东西带回自己的小岛'
-  },
-  {
-    id: 'calm',
-    name: 'Calm Night',
-    shortDescription: '雾蓝与暖沙的安宁冥想风，晚间处理护眼',
-    credit: 'Calm 风格参考 · refero.design',
-    license: '原创主题（参考 calm.com 气质）',
-    creditUrl: 'https://refero.design',
-    themeColor: '#7fa8b5',
-    authKicker: 'CALM READING LIST',
-    authLoginDescription: '欢迎回来，安静地处理稍后内容',
-    authRecoveryDescription: '为新的一天重置密码',
-    dashboardKicker: 'CALM NIGHT / 稍后读',
-    dashboardDescription: '柔和低饱和的晚间处理空间'
-  },
-  {
-    id: 'pinterest',
-    name: 'Pinterest Wall',
-    shortDescription: '瀑布流灵感墙，图片优先的采集感',
-    credit: 'Pinterest 风格参考 · refero.design',
-    license: '原创主题（参考 pinterest.com 气质）',
-    creditUrl: 'https://refero.design',
-    themeColor: '#e60023',
-    authKicker: 'PIN YOUR IDEAS',
-    authLoginDescription: '欢迎回来，继续收集灵感',
-    authRecoveryDescription: '重置密码，重新开始采集',
-    dashboardKicker: 'IDEAS WALL / 灵感墙',
-    dashboardDescription: '把灵感像图钉一样钉在墙上'
   }
 ] as const
 
