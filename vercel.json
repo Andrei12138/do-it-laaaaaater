@@ -6,9 +6,6 @@
   "functions": {
     "api/*.ts": {
       "maxDuration": 20
-    },
-    "api/ai/*.ts": {
-      "maxDuration": 30
     }
   }
 }
