@@ -45,6 +45,8 @@ interface MetadataResult {
 }
 
 const DEFAULT_DRAFT_KEY = 'smart-add'
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent)
+const SUBMIT_KBD = IS_MAC ? '⌘↵' : 'Ctrl↵'
 
 export function parseWebUrl(value: string): string {
   let candidate = value
@@ -151,6 +153,7 @@ export function SmartAddModal({
   const catTriggerRef = useRef<HTMLButtonElement>(null)
   const metadataReqRef = useRef(0)
   const lastFetchedUrlRef = useRef('')
+  const pastedUrlRef = useRef(false)
 
   const validDefaultCatId = useMemo(() => {
     if (defaultCategoryId && categories.some((category) => category.id === defaultCategoryId)) {
@@ -263,10 +266,14 @@ export function SmartAddModal({
     return () => window.clearTimeout(timer)
   }, [categoryId, coverUrl, draftKey, draftReady, files, linkTitle, mode, rawInput])
 
-  // Focus input on mount
+  // Focus input on mount (cursor at the end so pasted / restored content can be appended)
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      textareaRef.current?.focus()
+      const textarea = textareaRef.current
+      if (!textarea) return
+      textarea.focus({ preventScroll: true })
+      const end = textarea.value.length
+      textarea.setSelectionRange(end, end)
     }, 30)
     return () => window.clearTimeout(timer)
   }, [])
@@ -307,7 +314,9 @@ export function SmartAddModal({
     if (!titleTouched && extracted.remainder && !linkTitle) {
       setLinkTitle(extracted.remainder)
     }
-    const delay = initial?.url && detectedUrl === parseWebUrl(initial.url) ? 0 : 380
+    const instant = pastedUrlRef.current || Boolean(initial?.url && detectedUrl === parseWebUrl(initial.url))
+    pastedUrlRef.current = false
+    const delay = instant ? 0 : 380
     const timer = window.setTimeout(() => {
       void fetchMetadata(detectedUrl)
     }, delay)
@@ -332,7 +341,11 @@ export function SmartAddModal({
     if (pastedImages.length) {
       event.preventDefault()
       addImages(pastedImages)
+      return
     }
+    // Pasted URL text: skip the typing debounce so metadata loads instantly.
+    const pastedText = event.clipboardData?.getData('text') || ''
+    if (pastedText && extractUrlFromInput(pastedText).url) pastedUrlRef.current = true
   }
 
   function handleDrop(event: ReactDragEvent) {
@@ -410,9 +423,14 @@ export function SmartAddModal({
   }
 
   function handleFormKeyDown(event: ReactKeyboardEvent) {
+    if (event.defaultPrevented || event.nativeEvent.isComposing) return
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault()
       void submit()
+    } else if (event.altKey && !event.metaKey && !event.ctrlKey && event.key.toLowerCase() === 'c') {
+      // Alt+C: jump straight into the category picker without leaving the keyboard.
+      event.preventDefault()
+      setCatPickerOpen((value) => !value)
     }
   }
 
@@ -441,6 +459,7 @@ export function SmartAddModal({
     <Modal title="快速添加" onClose={onClose} wide>
       <form
         className="smart-add-form"
+        aria-busy={fetching || saving}
         onSubmit={submit}
         onPaste={handlePaste}
         onKeyDown={handleFormKeyDown}
@@ -506,8 +525,14 @@ export function SmartAddModal({
                 {forceText ? '按网页链接保存' : '改为纯文本'}
               </button>
             )}
+            {!dragOver && fetching && mode === 'link' && (
+              <span className="smart-add-ai-hint" role="status">
+                <span className="spinner" style={{ width: 11, height: 11, borderWidth: 1.5 }} aria-hidden="true" />
+                正在读取网页信息…
+              </span>
+            )}
             {dragOver && <span className="smart-add-drop-hint">松开以添加图片</span>}
-            {!dragOver && aiCoverAuto && mode !== 'image_group' && !(mode === 'link' && coverUrl && coverVisible) && (
+            {!dragOver && !fetching && aiCoverAuto && mode !== 'image_group' && !(mode === 'link' && coverUrl && coverVisible) && (
               <span className="smart-add-ai-hint">
                 <AppIcon name="sparkles" size={12} />保存后自动生成 AI 封面
               </span>
@@ -582,6 +607,8 @@ export function SmartAddModal({
               type="button"
               className="pill smart-add-cat-btn"
               aria-expanded={catPickerOpen}
+              aria-haspopup="dialog"
+              title="选择类别 (Alt+C)"
               onClick={() => setCatPickerOpen((value) => !value)}
             >
               <span
@@ -616,7 +643,7 @@ export function SmartAddModal({
             </button>
             <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
               <span>{submitLabel}</span>
-              <kbd className="smart-add-kbd">⌘↵</kbd>
+              <kbd className="smart-add-kbd">{SUBMIT_KBD}</kbd>
             </button>
           </div>
         </div>
@@ -629,6 +656,8 @@ export function SmartAddModal({
           onSelect={(nextId) => {
             userPickedCategoryRef.current = true
             setCategoryId(nextId)
+            // Hand focus back to the input so the user can hit Ctrl+Enter immediately.
+            window.setTimeout(() => textareaRef.current?.focus({ preventScroll: true }), 0)
           }}
           onCreateCategory={onCreateCategory}
           onClose={() => setCatPickerOpen(false)}

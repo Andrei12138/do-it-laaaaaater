@@ -48,6 +48,7 @@ import {
 } from './ManagementModals'
 import { EmptyState, Modal } from './Modal'
 import { OfflineManagerModal } from './OfflineManager'
+import { PosterArtwork } from './PosterArtwork'
 import { SchedulePicker } from './SchedulePicker'
 import { SmartAddModal, parseWebUrl, type SmartAddInitial } from './SmartAddModal'
 import { showToast } from './Toast'
@@ -371,6 +372,7 @@ function MobileBottomSheet({
 
 interface ItemEntryProps {
   item: LibraryItem
+  index?: number
   viewMode: 'list' | 'gallery'
   categories: Category[]
   selectionMode: boolean
@@ -393,6 +395,7 @@ interface ItemEntryProps {
 
 function ItemEntry({
   item,
+  index = 0,
   viewMode,
   categories,
   selectionMode,
@@ -659,21 +662,19 @@ function ItemEntry({
               )}
             </button>
           ) : (
-            <div
-              className="fig-gallery-placeholder"
+            <button
+              type="button"
+              className="fig-gallery-cover-btn fig-gallery-poster"
+              style={{ position: 'relative' }}
+              aria-label={item.kind === 'link' && item.url ? `打开 ${item.title}` : `编辑 ${item.title}`}
               onClick={() => {
                 if (selectionMode) return
                 if (item.kind === 'link' && item.url) window.open(item.url, '_blank', 'noopener,noreferrer')
                 else onEdit()
               }}
             >
-              <AppIcon name={kindIcon} size={20} className="fig-gallery-kind-icon" />
-              {item.kind === 'link' && item.url ? (
-                <span className="fig-gallery-placeholder-host">{hostLabel(item.url)}</span>
-              ) : (
-                <p className="fig-gallery-placeholder-text">{item.title}</p>
-              )}
-            </div>
+              <PosterArtwork item={item} index={index} variant="gallery" />
+            </button>
           )}
 
           {selectionMode ? (
@@ -1206,10 +1207,53 @@ export function Dashboard({
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (overlay || focusMode || memoOpen) return
-      if (event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey && !editableTarget(event.target)) {
-        event.preventDefault()
-        searchInputRef.current?.focus()
-        searchInputRef.current?.select()
+      if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return
+      if (editableTarget(event.target)) return
+      // Floating menus / sheets / popovers own Escape and the letter keys while open.
+      if (accountMenuOpen || mobileMoreOpen || bulkScheduleOpen || bulkCatOpen) return
+      if (document.querySelector('.cat-popover, .fig-popover')) return
+
+      if (event.key === 'Escape') {
+        if (filters.q) {
+          setFilters((current) => ({ ...current, q: '' }))
+        } else if (selectionMode) {
+          exitSelection()
+        }
+        return
+      }
+      if (event.repeat) return
+
+      switch (event.key) {
+        case '/':
+          event.preventDefault()
+          searchInputRef.current?.focus()
+          searchInputRef.current?.select()
+          break
+        case 'n':
+        case 'N':
+          event.preventDefault()
+          setOverlay({ type: 'smart-add' })
+          break
+        case '1':
+          event.preventDefault()
+          changeViewMode('list')
+          break
+        case '2':
+          event.preventDefault()
+          changeViewMode('gallery')
+          break
+        case '3':
+          event.preventDefault()
+          changeViewMode('coverflow')
+          break
+        case 'f':
+        case 'F':
+          if (items.length > 0 && filters.trash !== 'only') {
+            event.preventDefault()
+            setFocusMode(true)
+          }
+          break
+        default:
       }
     }
     function handlePaste(event: ClipboardEvent) {
@@ -1263,7 +1307,50 @@ export function Dashboard({
       window.removeEventListener('dragover', handleDragOver)
       window.removeEventListener('drop', handleDrop)
     }
-  }, [focusMode, memoOpen, overlay])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    accountMenuOpen,
+    bulkCatOpen,
+    bulkScheduleOpen,
+    filters.q,
+    filters.trash,
+    focusMode,
+    items.length,
+    memoOpen,
+    mobileMoreOpen,
+    overlay,
+    selectionMode
+  ])
+
+  // Restore the reading position after List <-> Gallery switches (anchored on the first visible group).
+  const viewAnchorRef = useRef<{ key: string; top: number } | null>(null)
+
+  function changeViewMode(next: ViewMode) {
+    if (next === viewMode) return
+    viewAnchorRef.current = null
+    if (next !== 'coverflow' && viewMode !== 'coverflow') {
+      const groupsInView = Array.from(document.querySelectorAll<HTMLElement>('[data-group-key]'))
+      const headerOffset = 72
+      const anchor = groupsInView.find((node) => node.getBoundingClientRect().bottom > headerOffset)
+      if (anchor?.dataset.groupKey) {
+        viewAnchorRef.current = { key: anchor.dataset.groupKey, top: anchor.getBoundingClientRect().top }
+      }
+    }
+    setViewMode(next)
+  }
+
+  useLayoutEffect(() => {
+    const anchor = viewAnchorRef.current
+    viewAnchorRef.current = null
+    if (viewMode === 'coverflow') {
+      window.scrollTo({ top: 0 })
+      return
+    }
+    if (!anchor) return
+    const node = Array.from(document.querySelectorAll<HTMLElement>('[data-group-key]'))
+      .find((entry) => entry.dataset.groupKey === anchor.key)
+    if (node) window.scrollBy({ top: node.getBoundingClientRect().top - anchor.top })
+  }, [viewMode])
 
   const groups = useMemo<DashboardGroup[]>(() => {
     if (filters.trash === 'only') {
@@ -1883,9 +1970,51 @@ export function Dashboard({
         : (offlineState.lastSyncedAt ? '数据已同步' : (syncStatus.message || '数据已就绪'))
 
   const viewTotal = filters.trash === 'only' ? counts.trash : (counts.pending + counts.completed)
-  const hasSecondaryFilters = Boolean(filters.q || filters.kind !== 'all' || filters.date || filters.category || todayOverdueOnly || filters.priority !== 'all')
 
   const aiCoverConfigured = Boolean(preferences.aiImageApiKeySet)
+
+  // Stable poster index per item so generated artwork never reshuffles when groups change.
+  const itemIndexById = useMemo(() => {
+    const map = new Map<string, number>()
+    items.forEach((item, position) => map.set(item.id, position))
+    return map
+  }, [items])
+
+  // Active-filter summary chips (so a narrowed view never feels "lost").
+  const filterChips: Array<{ key: string; label: string; clear: () => void }> = []
+  if (filters.q.trim()) {
+    filterChips.push({ key: 'q', label: `搜索：${filters.q.trim().slice(0, 24)}`, clear: () => setFilters((current) => ({ ...current, q: '' })) })
+  }
+  if (filters.kind !== 'all') {
+    const kindLabel = filters.kind === 'link' ? '网页' : filters.kind === 'text' ? '文本' : '图片'
+    filterChips.push({ key: 'kind', label: `类型：${kindLabel}`, clear: () => setFilters((current) => ({ ...current, kind: 'all' })) })
+  }
+  if (filters.category) {
+    const categoryLabel = filters.category === 'uncategorized'
+      ? '未分类'
+      : (categories.find((category) => category.id === filters.category)?.name || '类别')
+    filterChips.push({ key: 'category', label: `类别：${categoryLabel}`, clear: () => setFilters((current) => ({ ...current, category: '' })) })
+  }
+  if (filters.priority !== 'all') {
+    filterChips.push({
+      key: 'priority',
+      label: filters.priority === 'starred' ? '仅星标' : '仅计划处理',
+      clear: () => setFilters((current) => ({ ...current, priority: 'all' }))
+    })
+  }
+  if (todayOverdueOnly) {
+    filterChips.push({ key: 'today', label: '今日与逾期', clear: () => setTodayOverdueOnly(false) })
+  }
+  if (filters.date) {
+    filterChips.push({ key: 'date', label: `日期：${filters.date}`, clear: () => setFilters((current) => ({ ...current, date: '' })) })
+  }
+  if (filterChips.length && filters.trash === 'active' && filters.status !== 'pending') {
+    filterChips.push({
+      key: 'status',
+      label: filters.status === 'completed' ? '状态：已完成' : '状态：全部',
+      clear: () => setFilters((current) => ({ ...current, status: 'pending' }))
+    })
+  }
 
   const renderItems = (groupItems: LibraryItem[]) => (
     <div className={viewMode === 'gallery' ? 'fig-gallery-grid' : 'fig-list'}>
@@ -1893,6 +2022,7 @@ export function Dashboard({
         <ItemEntry
           key={item.id}
           item={item}
+          index={itemIndexById.get(item.id) ?? 0}
           viewMode={viewMode === 'gallery' ? 'gallery' : 'list'}
           categories={categories}
           selectionMode={selectionMode}
@@ -2001,6 +2131,7 @@ export function Dashboard({
             <button
               type="button"
               className="btn btn-primary fig-add-btn"
+              title="快速添加 (N)"
               onClick={() => setOverlay({ type: 'smart-add' })}
             >
               <AppIcon name="plus" size={15} />
@@ -2338,6 +2469,7 @@ export function Dashboard({
                   <button
                     type="button"
                     className="btn btn-subtle btn-sm fig-desktop-only"
+                    title="专注处理 (F)"
                     onClick={() => setFocusMode(true)}
                   >
                     <AppIcon name="focus" size={14} />
@@ -2363,8 +2495,8 @@ export function Dashboard({
                     className={`fig-view-switch-btn${viewMode === 'list' ? ' is-active' : ''}`}
                     aria-label="精炼列表视图"
                     aria-pressed={viewMode === 'list'}
-                    title="精炼列表"
-                    onClick={() => setViewMode('list')}
+                    title="精炼列表 (1)"
+                    onClick={() => changeViewMode('list')}
                   >
                     <AppIcon name="list" size={15} />
                   </button>
@@ -2373,8 +2505,8 @@ export function Dashboard({
                     className={`fig-view-switch-btn${viewMode === 'gallery' ? ' is-active' : ''}`}
                     aria-label="4列画廊视图"
                     aria-pressed={viewMode === 'gallery'}
-                    title="4列画廊"
-                    onClick={() => setViewMode('gallery')}
+                    title="4列画廊 (2)"
+                    onClick={() => changeViewMode('gallery')}
                   >
                     <AppIcon name="grid" size={15} />
                   </button>
@@ -2383,8 +2515,8 @@ export function Dashboard({
                     className={`fig-view-switch-btn${viewMode === 'coverflow' ? ' is-active' : ''}`}
                     aria-label="专辑封面视图"
                     aria-pressed={viewMode === 'coverflow'}
-                    title="专辑封面"
-                    onClick={() => setViewMode('coverflow')}
+                    title="专辑封面 (3)"
+                    onClick={() => changeViewMode('coverflow')}
                   >
                     <AppIcon name="album" size={15} />
                   </button>
@@ -2446,17 +2578,32 @@ export function Dashboard({
                   <option value="recently_completed">最近完成</option>
                 </select>
 
-                {hasSecondaryFilters && (
-                  <button
-                    type="button"
-                    className="btn btn-text btn-sm"
-                    onClick={() => resetFilters()}
-                  >
-                    重置
-                  </button>
-                )}
               </div>
             </div>
+
+            {filterChips.length > 0 && (
+              <div className="fig-filter-summary" role="status" aria-live="polite" aria-label="当前筛选">
+                {filterChips.map((chip) => (
+                  <span key={chip.key} className="fig-filter-chip">
+                    <span>{chip.label}</span>
+                    <button
+                      type="button"
+                      className="fig-filter-chip-x"
+                      aria-label={`移除筛选：${chip.label}`}
+                      onClick={chip.clear}
+                    >
+                      <AppIcon name="close" size={11} />
+                    </button>
+                  </span>
+                ))}
+                <span className="fig-view-count" aria-hidden="true">
+                  {loading ? '…' : `${items.length} / ${viewTotal} 项`}
+                </span>
+                <button type="button" className="fig-filter-reset" onClick={() => resetFilters()}>
+                  重置筛选
+                </button>
+              </div>
+            )}
           </div>
 
           {activeDraft && (
@@ -2516,6 +2663,7 @@ export function Dashboard({
             )
           )}
 
+          <div className="fig-view-stage" key={viewMode} data-view={viewMode}>
           {items.length > 0 && viewMode === 'coverflow' ? (
             <CoverFlowView
               items={items}
@@ -2554,6 +2702,7 @@ export function Dashboard({
               ))}
             </div>
           )}
+          </div>
         </main>
       </div>
 
@@ -2964,6 +3113,10 @@ export function Dashboard({
           onEdit={(item) => setOverlay({ type: 'edit', item })}
           onDelete={deleteItem}
           onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
+          generatingIds={generatingCoverIds}
+          aiCoverConfigured={aiCoverConfigured}
+          onGenerateCover={(item) => generateItemCover(item)}
+          onOpenAiSettings={() => setOverlay({ type: 'account' })}
         />
       )}
 

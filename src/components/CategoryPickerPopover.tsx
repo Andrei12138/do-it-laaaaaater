@@ -54,6 +54,12 @@ export function CategoryPickerPopover({
   onClose
 }: CategoryPickerPopoverProps) {
   const panelRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const keyboardNavRef = useRef(false)
+  const categoriesRef = useRef(categories)
+  const selectedIdRef = useRef(selectedId)
+  categoriesRef.current = categories
+  selectedIdRef.current = selectedId
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -94,10 +100,15 @@ export function CategoryPickerPopover({
     setQuery('')
     setError('')
     setCreating(false)
-    setActiveIndex(0)
+    // Start on the currently selected category so Enter re-confirms and arrows start nearby.
+    const selectedPos = selectedIdRef.current
+      ? categoriesRef.current.findIndex((category) => category.id === selectedIdRef.current)
+      : -1
+    keyboardNavRef.current = true
+    setActiveIndex(selectedPos >= 0 ? selectedPos + 1 : 0)
     setPosition(null)
     const timer = window.setTimeout(() => {
-      inputRef.current?.focus()
+      inputRef.current?.focus({ preventScroll: true })
     }, 0)
     return () => window.clearTimeout(timer)
   }, [open])
@@ -108,6 +119,18 @@ export function CategoryPickerPopover({
       return Math.min(current, options.length - 1)
     })
   }, [options.length])
+
+  // Keep the active option visible inside the scrollable list (keyboard navigation only).
+  useLayoutEffect(() => {
+    if (!open || !keyboardNavRef.current) return
+    const list = listRef.current
+    const node = list?.querySelector<HTMLElement>('[data-option-index="' + activeIndex + '"]')
+    if (!list || !node) return
+    const listBox = list.getBoundingClientRect()
+    const nodeBox = node.getBoundingClientRect()
+    if (nodeBox.top < listBox.top) list.scrollTop -= listBox.top - nodeBox.top
+    else if (nodeBox.bottom > listBox.bottom) list.scrollTop += nodeBox.bottom - listBox.bottom
+  }, [activeIndex, open, options.length, position])
 
   useLayoutEffect(() => {
     if (!open) return
@@ -215,17 +238,26 @@ export function CategoryPickerPopover({
           disabled={busy || creating}
           onChange={(event) => {
             setQuery(event.target.value)
+            keyboardNavRef.current = true
             setActiveIndex(0)
             setError('')
           }}
           onKeyDown={(event) => {
-            if (event.key === 'ArrowDown') {
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return
+            const count = options.length
+            const move = (updater: (current: number) => number) => {
               event.preventDefault()
-              setActiveIndex((current) => (options.length ? (current + 1) % options.length : 0))
-            } else if (event.key === 'ArrowUp') {
-              event.preventDefault()
-              setActiveIndex((current) => (options.length ? (current - 1 + options.length) % options.length : 0))
-            } else if (event.key === 'Enter' && options[activeIndex]) {
+              keyboardNavRef.current = true
+              setActiveIndex(updater)
+            }
+            if (event.key === 'ArrowDown') move((current) => (count ? (current + 1) % count : 0))
+            else if (event.key === 'ArrowUp') move((current) => (count ? (current - 1 + count) % count : 0))
+            else if (event.key === 'PageDown') move((current) => (count ? Math.min(count - 1, current + 6) : 0))
+            else if (event.key === 'PageUp') move((current) => Math.max(0, current - 6))
+            else if (event.key === 'Home' && !event.currentTarget.value) move(() => 0)
+            else if (event.key === 'End' && !event.currentTarget.value) move(() => Math.max(0, count - 1))
+            else if (event.key === 'Tab' && count) move((current) => (event.shiftKey ? (current - 1 + count) % count : (current + 1) % count))
+            else if (event.key === 'Enter' && options[activeIndex]) {
               event.preventDefault()
               void pick(options[activeIndex])
             }
@@ -235,7 +267,7 @@ export function CategoryPickerPopover({
 
       {error && <div className="cat-popover-error" role="alert">{error}</div>}
 
-      <div className="cat-popover-list" role="listbox" aria-label="类别列表">
+      <div ref={listRef} className="cat-popover-list" role="listbox" aria-label="类别列表" aria-busy={busy || creating}>
         {options.length === 0 ? (
           <div className="cat-popover-empty">没有匹配的类别</div>
         ) : (
@@ -248,10 +280,14 @@ export function CategoryPickerPopover({
                   key="__create__"
                   type="button"
                   role="option"
+                  data-option-index={index}
                   aria-selected={false}
                   disabled={busy || creating}
                   className={`cat-popover-item cat-popover-create${isActive ? ' is-active' : ''}`}
-                  onMouseEnter={() => setActiveIndex(index)}
+                  onMouseMove={() => {
+                    keyboardNavRef.current = false
+                    setActiveIndex(index)
+                  }}
                   onClick={() => void pick(option)}
                 >
                   <span className="cat-dot" style={{ backgroundColor: option.color }} aria-hidden="true" />
@@ -266,10 +302,14 @@ export function CategoryPickerPopover({
                 key={option.id ?? '__uncategorized__'}
                 type="button"
                 role="option"
+                data-option-index={index}
                 aria-selected={isSelected}
                 disabled={busy || creating}
                 className={`cat-popover-item${isSelected ? ' is-selected' : ''}${isActive ? ' is-active' : ''}`}
-                onMouseEnter={() => setActiveIndex(index)}
+                onMouseMove={() => {
+                    keyboardNavRef.current = false
+                    setActiveIndex(index)
+                  }}
                 onClick={() => void pick(option)}
               >
                 <span className="cat-dot" style={{ backgroundColor: option.color }} aria-hidden="true" />
