@@ -1,4 +1,4 @@
-import { generateAiPosterCover, maskApiKey } from './ai-cover'
+import { generateAiPosterCover, listAiModels, maskApiKey } from './ai-cover'
 import { detectImageMime, fetchImage, fetchPageMetadata, normalizeUrl } from './metadata'
 import {
   buildClearSessionCookie,
@@ -856,6 +856,18 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       if (!result.meta.changes) throw new ApiError(404, '类别不存在')
       return json({ ok: true })
     }
+  }
+
+  // --- AI MODELS ---
+  if (path === '/api/ai/models' && method === 'POST') {
+    const body = await readJson(request)
+    const prefs = await env.DB.prepare(
+      'SELECT ai_image_api_url, ai_image_api_key FROM user_preferences WHERE user_id = ?'
+    ).bind(user.id).first<Row>()
+    const apiUrl = String(body.apiUrl || '').trim() || (prefs?.ai_image_api_url ? String(prefs.ai_image_api_url) : '')
+    const apiKey = String(body.apiKey || '').trim() || (prefs?.ai_image_api_key ? String(prefs.ai_image_api_key) : '')
+    const models = await listAiModels(apiUrl, apiKey)
+    return json({ models })
   }
 
   // --- PREFERENCES ---

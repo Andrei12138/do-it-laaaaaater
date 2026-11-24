@@ -4389,6 +4389,86 @@ img {
    Responsive Breakpoints
    ========================================================================== */
 
+.ai-model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.ai-model-picker-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-model-search {
+  flex: 1;
+  min-width: 160px;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+  background: var(--bg-canvas);
+}
+
+.ai-model-list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px;
+}
+
+.ai-model-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--bg-canvas);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.ai-model-option:hover {
+  border-color: var(--border-strong);
+}
+
+.ai-model-option.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ai-model-id {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-model-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.ai-model-empty {
+  padding: 12px 8px;
+  text-align: center;
+}
+
 @media (max-width: 1180px) {
   .fig-gallery-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));

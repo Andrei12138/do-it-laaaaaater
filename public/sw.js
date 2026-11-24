@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'do-it-laaaaaater-shell-'
-const CACHE_NAME = CACHE_PREFIX + '2026-11-24-figma-v6'
+const CACHE_NAME = CACHE_PREFIX + '2026-11-24-figma-v7'
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

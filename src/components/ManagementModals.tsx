@@ -230,6 +230,11 @@ export function AccountManager({
   const [aiCoverAuto, setAiCoverAuto] = useState(false)
   const [aiCoverStyle, setAiCoverStyle] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [availableModels, setAvailableModels] = useState<Array<{ id: string; isImageLikely: boolean }>>([])
+  const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [modelSearch, setModelSearch] = useState('')
+  const [onlyImageModels, setOnlyImageModels] = useState(false)
   const [showInstallGuide, setShowInstallGuide] = useState(false)
   const [shortcutCopied, setShortcutCopied] = useState(false)
   const installMode = usePwaInstall()
@@ -292,6 +297,42 @@ export function AccountManager({
       setPreferenceBusy(false)
     }
   }
+
+  async function fetchAiModels() {
+    setModelsLoading(true)
+    setError('')
+    setSuccess('')
+    try {
+      const result = await jsonRequest<{ models: Array<{ id: string; isImageLikely: boolean }> }>(
+        '/api/ai/models',
+        'POST',
+        {
+          apiUrl: aiImageApiUrl.trim() || undefined,
+          apiKey: aiImageApiKey.trim() || undefined
+        }
+      )
+      const list = result.models || []
+      setAvailableModels(list)
+      setModelPickerOpen(true)
+      const imageCount = list.filter((m) => m.isImageLikely).length
+      setOnlyImageModels(imageCount > 0)
+      if (!list.length) {
+        showToast('info', '接口连接成功，但未返回任何模型')
+      } else {
+        showToast('success', `已获取 ${list.length} 个模型（其中生图相关 ${imageCount} 个）`)
+      }
+    } catch (requestError) {
+      setError(errorMessage(requestError))
+    } finally {
+      setModelsLoading(false)
+    }
+  }
+
+  const filteredModels = availableModels.filter((model) => {
+    if (onlyImageModels && !model.isImageLikely) return false
+    const needle = modelSearch.trim().toLowerCase()
+    return !needle || model.id.toLowerCase().includes(needle)
+  })
 
   async function saveAiCoverSettings(event: FormEvent) {
     event.preventDefault()
@@ -424,17 +465,88 @@ export function AccountManager({
                 onChange={(event) => setAiImageApiUrl(event.target.value)}
               />
             </label>
-            <label className="field">
-              <span className="field-label">模型名称</span>
+            <div className="field">
+              <div className="field-label-row">
+                <label className="field-label" htmlFor="ai-image-model-input">模型名称</label>
+                <button
+                  type="button"
+                  className="btn btn-subtle btn-sm"
+                  disabled={modelsLoading || aiBusy}
+                  onClick={() => void fetchAiModels()}
+                >
+                  <AppIcon name="sync" size={13} />
+                  {modelsLoading ? '获取中…' : '获取模型列表'}
+                </button>
+              </div>
               <input
+                id="ai-image-model-input"
                 className="input"
                 maxLength={120}
                 placeholder="gpt-image-1"
                 value={aiImageModel}
                 onChange={(event) => setAiImageModel(event.target.value)}
               />
-            </label>
+            </div>
           </div>
+
+          {modelPickerOpen && availableModels.length > 0 && (
+            <div className="ai-model-picker">
+              <div className="ai-model-picker-bar">
+                <input
+                  className="input ai-model-search"
+                  placeholder="搜索模型名称…"
+                  value={modelSearch}
+                  onChange={(event) => setModelSearch(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className={onlyImageModels ? 'pill is-active' : 'pill'}
+                  onClick={() => setOnlyImageModels((v) => !v)}
+                >
+                  仅看生图 ({availableModels.filter((m) => m.isImageLikely).length})
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-icon btn-sm"
+                  aria-label="收起模型列表"
+                  onClick={() => setModelPickerOpen(false)}
+                >
+                  <AppIcon name="close" size={14} />
+                </button>
+              </div>
+              <div className="ai-model-list" role="listbox" aria-label="可用模型列表">
+                {filteredModels.length === 0 ? (
+                  <p className="field-hint ai-model-empty">
+                    没有匹配的模型{onlyImageModels ? '，试试关闭「仅看生图」查看全部' : ''}
+                  </p>
+                ) : (
+                  filteredModels.slice(0, 120).map((model) => {
+                    const selected = aiImageModel.trim() === model.id
+                    return (
+                      <button
+                        key={model.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={selected ? 'ai-model-option is-selected' : 'ai-model-option'}
+                        onClick={() => {
+                          setAiImageModel(model.id)
+                          setModelPickerOpen(false)
+                          showToast('info', `已选择模型：${model.id}，记得点击下方保存`)
+                        }}
+                      >
+                        <span className="mono ai-model-id">{model.id}</span>
+                        <span className="ai-model-badges">
+                          {model.isImageLikely && <span className="badge badge-indigo">生图</span>}
+                          {selected && <AppIcon name="check" size={14} />}
+                        </span>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="field">
             <span className="field-label">API Key</span>
@@ -442,7 +554,8 @@ export function AccountManager({
               <input
                 className="input"
                 type="password"
-                autoComplete="off"
+                name="ai-image-api-key"
+                autoComplete="new-password"
                 maxLength={500}
                 aria-label="生图 API Key"
                 placeholder={
