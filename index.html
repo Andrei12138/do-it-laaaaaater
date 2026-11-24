@@ -4,30 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#34495e" />
+    <meta name="theme-color" content="#ffffff" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Laaaaaater" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/app-icon-180.png" />
-    <script>
-      (() => {
-        const key = 'do-it-laaaaaater.theme.v1'
-        const allowed = ['flat-2013', 'animal-island']
-        let theme = 'flat-2013'
-        try {
-          const stored = window.localStorage.getItem(key)
-          if (stored && allowed.includes(stored)) theme = stored
-        } catch {
-          // Storage can be disabled; Flat Design 2013 remains the default.
-        }
-        document.documentElement.dataset.theme = theme
-      })()
-    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Nunito:wght@500;700;900&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <title>Do It Laaaaaater</title>

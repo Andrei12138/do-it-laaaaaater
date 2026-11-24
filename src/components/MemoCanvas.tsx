@@ -6,8 +6,7 @@ import {
   useRef,
   useState,
   type DragEvent,
-  type CSSProperties,
-  type ReactNode
+  type CSSProperties
 } from 'react'
 import {
   CaptureUpdateAction,
@@ -27,7 +26,6 @@ import type {
 } from '@excalidraw/excalidraw/types'
 import '@excalidraw/excalidraw/index.css'
 import '../memo-canvas.css'
-import { Button, Card, Input, Select, Tag } from 'animal-island-ui'
 import { plannedDateLabel } from '../china-date'
 import { errorMessage } from '../api'
 import {
@@ -55,7 +53,6 @@ import {
 } from '../memo-scene'
 import { clearMemoDraft, readMemoDraft, writeMemoDraft, type MemoDraft } from '../memo-store'
 import { filterLibraryItems } from '../offline-query'
-import { useTheme } from '../theme'
 import type {
   BulkItemChanges,
   Category,
@@ -126,6 +123,88 @@ function memoChangeSignature(
   })
 }
 
+function MemoChromeIcon({
+  kind,
+  size = 15
+}: {
+  kind: 'solid' | 'dots' | 'lines' | 'moon' | 'sun' | 'fullscreen' | 'fullscreenExit' | 'alert'
+  size?: number
+}) {
+  const shared = {
+    width: size,
+    height: size,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.7,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true as const,
+    className: 'app-icon'
+  }
+  switch (kind) {
+    case 'solid':
+      return <svg {...shared}><rect x="4" y="4" width="16" height="16" rx="3" /></svg>
+    case 'dots':
+      return (
+        <svg {...shared}>
+          <circle cx="6" cy="6" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="6" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="18" cy="6" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="6" cy="12" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="18" cy="12" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="6" cy="18" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="18" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="18" cy="18" r="1.2" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'lines':
+      return (
+        <svg {...shared}>
+          <line x1="4" y1="7" x2="20" y2="7" />
+          <line x1="4" y1="12" x2="20" y2="12" />
+          <line x1="4" y1="17" x2="20" y2="17" />
+        </svg>
+      )
+    case 'moon':
+      return <svg {...shared}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>
+    case 'sun':
+      return (
+        <svg {...shared}>
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+        </svg>
+      )
+    case 'fullscreen':
+      return (
+        <svg {...shared}>
+          <polyline points="15 3 21 3 21 9" />
+          <polyline points="9 21 3 21 3 15" />
+          <line x1="21" y1="3" x2="14" y2="10" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </svg>
+      )
+    case 'fullscreenExit':
+      return (
+        <svg {...shared}>
+          <polyline points="4 14 10 14 10 20" />
+          <polyline points="20 10 14 10 14 4" />
+          <line x1="14" y1="10" x2="21" y2="3" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </svg>
+      )
+    case 'alert':
+      return (
+        <svg {...shared}>
+          <circle cx="12" cy="12" r="9" />
+          <line x1="12" y1="8" x2="12" y2="12.5" />
+          <circle cx="12" cy="16" r="0.8" fill="currentColor" stroke="none" />
+        </svg>
+      )
+  }
+}
+
 function MemoReferenceCard({
   element,
   item,
@@ -158,7 +237,7 @@ function MemoReferenceCard({
   const cover = itemCover(item)
   const categoryStyle = {
     ...scaleStyle,
-    '--memo-category-color': item.category?.color || '#95a5a6'
+    '--memo-category-color': item.category?.color || '#595959'
   } as CSSProperties
   return (
     <div
@@ -191,18 +270,6 @@ function MemoReferenceCard({
   )
 }
 
-function Pane({
-  className,
-  children
-}: {
-  className: string
-  children: ReactNode
-}) {
-  const { theme } = useTheme()
-  if (theme === 'animal-island') return <Card className={className} pattern="default">{children}</Card>
-  return <section className={className}>{children}</section>
-}
-
 function MemoLibrary({
   items,
   categories,
@@ -218,72 +285,111 @@ function MemoLibrary({
   onAdd: (itemId: string) => void
   onClose: () => void
 }) {
-  const { theme } = useTheme()
   const filtered = useMemo(() => filterLibraryItems(items, filters), [filters, items])
   const update = <K extends keyof ItemFilters>(key: K, value: ItemFilters[K]) => onFilters({ ...filters, [key]: value })
-  const select = (
-    label: string,
-    value: string,
-    options: Array<{ key: string; label: string }>,
-    onChange: (value: string) => void
-  ) => theme === 'animal-island' ? (
-    <Select aria-label={label} value={value} options={options} onChange={onChange} />
-  ) : (
-    <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)}>
-      {options.map((option) => <option key={option.key || '__all__'} value={option.key}>{option.label}</option>)}
-    </select>
-  )
 
   return (
-    <Pane className="memo-library-pane">
+    <section className="memo-library-pane" aria-label="资料库">
       <header>
-        <div><AppIcon name="library" size={25} /><h2>资料库</h2></div>
-        <button type="button" aria-label="收起资料库" onClick={onClose}><AppIcon name="close" size={20} /></button>
+        <div>
+          <AppIcon name="folder" size={18} />
+          <h2>资料库</h2>
+        </div>
+        <button type="button" className="btn btn-icon btn-sm" aria-label="收起资料库" onClick={onClose}>
+          <AppIcon name="close" size={16} />
+        </button>
       </header>
+
       <label className="memo-library-search">
         <span className="visually-hidden">搜索资料库</span>
-        <Input
-          type="search"
-          size="large"
-          allowClear
-          prefix={<AppIcon name="search" size={19} />}
-          placeholder="搜索稍后再看的内容"
-          value={filters.q}
-          onChange={(event) => update('q', event.target.value)}
-          onClear={() => update('q', '')}
-        />
+        <div className="memo-search-box">
+          <AppIcon name="search" size={15} />
+          <input
+            type="search"
+            className="input memo-search-input"
+            placeholder="搜索稍后再看的内容"
+            value={filters.q}
+            onChange={(event) => update('q', event.target.value)}
+          />
+          {filters.q && (
+            <button
+              type="button"
+              className="btn btn-icon btn-sm memo-search-clear"
+              aria-label="清除搜索"
+              onClick={() => update('q', '')}
+            >
+              <AppIcon name="close" size={13} />
+            </button>
+          )}
+        </div>
       </label>
+
       <div className="memo-library-filters">
-        {select('状态', filters.status, [
-          { key: 'pending', label: '待处理' },
-          { key: 'completed', label: '已完成' },
-          { key: 'all', label: '全部状态' }
-        ], (value) => update('status', value as ItemFilters['status']))}
-        {select('类型', filters.kind, [
-          { key: 'all', label: '全部类型' },
-          { key: 'link', label: '网页' },
-          { key: 'text', label: '文本' },
-          { key: 'image_group', label: '图片' }
-        ], (value) => update('kind', value as ItemFilters['kind']))}
-        {select('类别', filters.category, [
-          { key: '', label: '全部类别' },
-          { key: 'uncategorized', label: '未分类' },
-          ...categories.map((category) => ({ key: category.id, label: category.name }))
-        ], (value) => update('category', value))}
-        {select('优先级', filters.priority, [
-          { key: 'all', label: '全部优先级' },
-          { key: 'planned', label: '计划处理' },
-          { key: 'starred', label: '星标' }
-        ], (value) => update('priority', value as ItemFilters['priority']))}
-        <label>
-          <span>保存日期</span>
-          <input type="date" value={filters.date} onChange={(event) => update('date', event.target.value)} />
+        <select
+          className="select"
+          aria-label="状态"
+          value={filters.status}
+          onChange={(event) => update('status', event.target.value as ItemFilters['status'])}
+        >
+          <option value="pending">待处理</option>
+          <option value="completed">已完成</option>
+          <option value="all">全部状态</option>
+        </select>
+
+        <select
+          className="select"
+          aria-label="类型"
+          value={filters.kind}
+          onChange={(event) => update('kind', event.target.value as ItemFilters['kind'])}
+        >
+          <option value="all">全部类型</option>
+          <option value="link">网页</option>
+          <option value="text">文本</option>
+          <option value="image_group">图片</option>
+        </select>
+
+        <select
+          className="select"
+          aria-label="类别"
+          value={filters.category}
+          onChange={(event) => update('category', event.target.value)}
+        >
+          <option value="">全部类别</option>
+          <option value="uncategorized">未分类</option>
+          {categories.map((category) => (
+            <option key={category.id} value={category.id}>{category.name}</option>
+          ))}
+        </select>
+
+        <select
+          className="select"
+          aria-label="优先级"
+          value={filters.priority}
+          onChange={(event) => update('priority', event.target.value as ItemFilters['priority'])}
+        >
+          <option value="all">全部优先级</option>
+          <option value="planned">计划处理</option>
+          <option value="starred">星标</option>
+        </select>
+
+        <label className="field">
+          <span className="field-label">保存日期</span>
+          <input
+            type="date"
+            className="input"
+            value={filters.date}
+            onChange={(event) => update('date', event.target.value)}
+          />
         </label>
       </div>
+
       <div className="memo-library-result-heading">
         <span>{filtered.length} 条内容</span>
-        <button type="button" onClick={() => onFilters({ ...DEFAULT_FILTERS })}>清除筛选</button>
+        <button type="button" className="btn btn-text btn-sm" onClick={() => onFilters({ ...DEFAULT_FILTERS })}>
+          清除筛选
+        </button>
       </div>
+
       <div className="memo-library-results">
         {filtered.map((item) => {
           const cover = itemCover(item)
@@ -305,12 +411,12 @@ function MemoLibrary({
               </div>
               <button
                 type="button"
-                className="memo-library-add"
+                className="btn btn-icon btn-sm memo-library-add"
                 aria-label="放到画布"
                 title={`放到画布：${item.title}`}
                 onClick={() => onAdd(item.id)}
               >
-                <AppIcon name="add" size={17} />
+                <AppIcon name="plus" size={15} />
               </button>
             </article>
           )
@@ -318,7 +424,7 @@ function MemoLibrary({
         {!filtered.length && <p className="memo-library-empty">没有符合当前筛选的内容。</p>}
       </div>
       <p className="memo-library-tip">电脑可直接拖到画布；手机点右侧的添加图标。同一条内容只会放入一次。</p>
-    </Pane>
+    </section>
   )
 }
 
@@ -351,46 +457,42 @@ function MemoItemInspector({
   onPermanentDelete: (item: LibraryItem) => Promise<boolean>
   onPreview: (assets: ImageAsset[], index: number) => void
 }) {
-  const { theme } = useTheme()
   const [planOpen, setPlanOpen] = useState(false)
   const [planAnchor, setPlanAnchor] = useState<HTMLElement | null>(null)
+
   if (!item) {
     return (
-      <Pane className="memo-inspector-pane">
-        <header><h2>条目已删除</h2><button type="button" aria-label="关闭编辑面板" onClick={onClose}><AppIcon name="close" size={20} /></button></header>
-        <p>原资料库条目已经被彻底删除，这里只剩一个空引用。</p>
-        <Button danger icon={<AppIcon name="delete" size={18} />} onClick={() => onRemoveReference(elementId)}>从画布移除</Button>
-      </Pane>
+      <section className="memo-inspector-pane" aria-label="编辑条目">
+        <header>
+          <h2>条目已删除</h2>
+          <button type="button" className="btn btn-icon btn-sm" aria-label="关闭编辑面板" onClick={onClose}>
+            <AppIcon name="close" size={16} />
+          </button>
+        </header>
+        <p className="memo-inspector-empty-copy">原资料库条目已经被彻底删除，这里只剩一个空引用。</p>
+        <button type="button" className="btn btn-danger btn-sm" onClick={() => onRemoveReference(elementId)}>
+          <AppIcon name="trash" size={15} />
+          从画布移除
+        </button>
+      </section>
     )
   }
+
   const manual = manualAssets(item)
   const cover = itemCover(item)
-  const categoryControl = theme === 'animal-island' ? (
-    <Select
-      aria-label="修改类别"
-      value={item.category?.id || ''}
-      disabled={busy}
-      options={[{ key: '', label: '未分类' }, ...categories.map((category) => ({ key: category.id, label: category.name }))]}
-      onChange={(value) => void onPatch(item, { categoryId: value || null }, '类别已更新')}
-    />
-  ) : (
-    <select
-      aria-label="修改类别"
-      value={item.category?.id || ''}
-      disabled={busy}
-      onChange={(event) => void onPatch(item, { categoryId: event.target.value || null }, '类别已更新')}
-    >
-      <option value="">未分类</option>
-      {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-    </select>
-  )
 
   return (
-    <Pane className="memo-inspector-pane">
+    <section className="memo-inspector-pane" aria-label="编辑条目">
       <header>
-        <div><AppIcon name="edit" size={24} /><h2>编辑条目</h2></div>
-        <button type="button" aria-label="关闭编辑面板" onClick={onClose}><AppIcon name="close" size={20} /></button>
+        <div>
+          <AppIcon name="edit" size={18} />
+          <h2>编辑条目</h2>
+        </div>
+        <button type="button" className="btn btn-icon btn-sm" aria-label="关闭编辑面板" onClick={onClose}>
+          <AppIcon name="close" size={16} />
+        </button>
       </header>
+
       {cover && (
         <button
           type="button"
@@ -403,64 +505,95 @@ function MemoItemInspector({
           <img src={cover.thumbUrl} alt="" />
         </button>
       )}
+
       <div className="memo-inspector-title">
         <div>
-          <Tag size="small" color={item.status === 'pending' ? 'app-yellow' : 'app-green'}>{item.status === 'pending' ? '待处理' : '已完成'}</Tag>
-          <Tag size="small" color="app-teal" variant="outlined">{kindLabel(item)}</Tag>
-          {item.trashedAt && <Tag size="small" color="app-red">回收站</Tag>}
+          <span className={item.status === 'pending' ? 'badge badge-indigo' : 'badge badge-muted'}>
+            {item.status === 'pending' ? '待处理' : '已完成'}
+          </span>
+          <span className="badge badge-muted">{kindLabel(item)}</span>
+          {item.trashedAt && <span className="badge badge-danger">回收站</span>}
         </div>
         <h3>{item.title}</h3>
         {item.url && <a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}
       </div>
-      <Button
-        block
-        icon={<AppIcon name="focus" size={18} />}
+
+      <button
+        type="button"
+        className="btn btn-ghost btn-block btn-sm"
         onClick={() => onSelectForAdjustment(elementId)}
       >
+        <AppIcon name="focus" size={15} />
         选中卡片并调整位置、大小或角度
-      </Button>
+      </button>
+
       {!item.trashedAt && (
         <>
-          <label className="field">
-            <span>类别</span>
-            {categoryControl}
+          <label className="field memo-inspector-field">
+            <span className="field-label">类别</span>
+            <select
+              className="select"
+              aria-label="修改类别"
+              value={item.category?.id || ''}
+              disabled={busy}
+              onChange={(event) => void onPatch(item, { categoryId: event.target.value || null }, '类别已更新')}
+            >
+              <option value="">未分类</option>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>{category.name}</option>
+              ))}
+            </select>
           </label>
+
           <div className="memo-inspector-actions">
             {item.kind === 'link' && item.url && (
-              <a className="button button-primary" href={item.url} target="_blank" rel="noreferrer"><AppIcon name="open" size={18} />打开网页</a>
+              <a className="btn btn-primary btn-sm" href={item.url} target="_blank" rel="noreferrer">
+                <AppIcon name="external" size={14} />
+                打开网页
+              </a>
             )}
             {item.kind === 'image_group' && manual.length > 0 && (
-              <Button type="primary" icon={<AppIcon name="image" size={18} />} onClick={() => onPreview(manual, 0)}>查看图片</Button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => onPreview(manual, 0)}>
+                <AppIcon name="image" size={14} />
+                查看图片
+              </button>
             )}
-            <Button
+            <button
+              type="button"
+              className="btn btn-subtle btn-sm"
               disabled={busy}
-              icon={<AppIcon name={item.status === 'pending' ? 'complete' : 'restore'} size={18} />}
               onClick={() => void onPatch(
                 item,
                 { status: item.status === 'pending' ? 'completed' : 'pending' },
                 item.status === 'pending' ? '已标记完成' : '已恢复待处理'
               )}
             >
+              <AppIcon name={item.status === 'pending' ? 'check' : 'restore'} size={14} />
               {item.status === 'pending' ? '已完成' : '恢复待处理'}
-            </Button>
-            <Button
+            </button>
+            <button
+              type="button"
+              className={`btn btn-subtle btn-sm${item.isStarred ? ' is-active' : ''}`}
               disabled={busy}
-              icon={<AppIcon name="star" size={18} />}
               onClick={() => void onPatch(item, { isStarred: !item.isStarred }, item.isStarred ? '已取消星标' : '已加星标')}
             >
+              <AppIcon name={item.isStarred ? 'starFilled' : 'star'} size={14} />
               {item.isStarred ? '取消星标' : '加星标'}
-            </Button>
-            <Button
+            </button>
+            <button
+              type="button"
+              className="btn btn-subtle btn-sm"
               disabled={busy || item.status === 'completed'}
-              icon={<AppIcon name="calendar" size={18} />}
               onClick={(event) => {
                 setPlanAnchor(event.currentTarget as HTMLElement)
                 setPlanOpen((open) => !open)
               }}
             >
+              <AppIcon name="calendar" size={14} />
               {item.plannedFor ? plannedDateLabel(item.plannedFor) : '安排处理'}
-            </Button>
+            </button>
           </div>
+
           <SchedulePicker
             open={planOpen}
             anchor={planAnchor}
@@ -470,22 +603,42 @@ function MemoItemInspector({
             onClear={() => onPatch(item, { plannedFor: null }, '已取消处理计划')}
             onClose={() => setPlanOpen(false)}
           />
-          <Button block icon={<AppIcon name="edit" size={19} />} onClick={() => onEdit(item)}>编辑标题、网址或图片</Button>
-          <Button block danger icon={<AppIcon name="trash" size={19} />} onClick={() => void onDelete(item)}>移到回收站</Button>
+
+          <div className="memo-inspector-stack">
+            <button type="button" className="btn btn-ghost btn-block btn-sm" onClick={() => onEdit(item)}>
+              <AppIcon name="edit" size={14} />
+              编辑标题、网址或图片
+            </button>
+            <button type="button" className="btn btn-danger btn-block btn-sm" disabled={busy} onClick={() => void onDelete(item)}>
+              <AppIcon name="trash" size={14} />
+              移到回收站
+            </button>
+          </div>
         </>
       )}
+
       {item.trashedAt && (
         <div className="memo-inspector-actions">
-          <Button type="primary" disabled={busy} icon={<AppIcon name="restore" size={18} />} onClick={() => void onRestore(item)}>恢复条目</Button>
-          <Button danger disabled={busy} icon={<AppIcon name="delete" size={18} />} onClick={() => void onPermanentDelete(item)}>彻底删除</Button>
+          <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void onRestore(item)}>
+            <AppIcon name="restore" size={14} />
+            恢复条目
+          </button>
+          <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void onPermanentDelete(item)}>
+            <AppIcon name="trash" size={14} />
+            彻底删除
+          </button>
         </div>
       )}
+
       <div className="memo-reference-danger-zone">
         <strong>只处理画布引用</strong>
         <p>“从画布移除”不会删除资料库中的原条目。</p>
-        <Button icon={<AppIcon name="remove" size={18} />} onClick={() => onRemoveReference(elementId)}>从画布移除</Button>
+        <button type="button" className="btn btn-subtle btn-sm" onClick={() => onRemoveReference(elementId)}>
+          <AppIcon name="close" size={14} />
+          从画布移除
+        </button>
       </div>
-    </Pane>
+    </section>
   )
 }
 
@@ -512,7 +665,6 @@ export function MemoCanvas({
   onPreview: (assets: ImageAsset[], index: number) => void
   onRefresh: () => Promise<void>
 }) {
-  const { theme } = useTheme()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
@@ -1065,11 +1217,13 @@ export function MemoCanvas({
     return (
       <div className="memo-canvas-overlay">
         <div className="memo-load-error">
-          <AppIcon name="warning" size={34} />
+          <MemoChromeIcon kind="alert" size={28} />
           <h2>备忘录画布暂时无法打开</h2>
           <p>{loadError}</p>
-          <Button type="primary" onClick={() => void loadCanvas()}>重试</Button>
-          <Button onClick={onClose}>返回清单</Button>
+          <div className="memo-load-error-actions">
+            <button type="button" className="btn btn-primary" onClick={() => void loadCanvas()}>重试</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>返回清单</button>
+          </div>
         </div>
       </div>
     )
@@ -1078,24 +1232,31 @@ export function MemoCanvas({
   return (
     <div
       ref={rootRef}
-      className={`memo-canvas-overlay memo-site-${theme} memo-mode-${colorMode}`}
+      className={`memo-canvas-overlay memo-mode-${colorMode}`}
       role="dialog"
       aria-modal="true"
       aria-label="备忘录无限画布"
     >
       <header className="memo-canvas-header">
         <div className="memo-canvas-brand">
-          <AppIcon name="memo" size={28} />
-          <div><h1>备忘录</h1><span>唯一画布 · 自动保存</span></div>
+          <AppIcon name="memo" size={20} />
+          <div>
+            <h1>备忘录</h1>
+            <span>唯一画布 · 自动保存</span>
+          </div>
         </div>
+
         <div className="memo-canvas-controls">
-          <Button
-            type={libraryOpen ? 'primary' : 'default'}
-            icon={<AppIcon name="library" size={20} />}
+          <button
+            type="button"
+            className={libraryOpen ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm'}
+            aria-pressed={libraryOpen}
             onClick={() => setLibraryOpen((open) => !open)}
           >
+            <AppIcon name="folder" size={15} />
             资料库
-          </Button>
+          </button>
+
           <div className="memo-background-switcher" role="group" aria-label="画布背景">
             {([
               ['solid', '纯色'],
@@ -1106,39 +1267,63 @@ export function MemoCanvas({
               <button
                 key={value}
                 type="button"
-                className={background === value ? 'is-active' : ''}
+                className={`pill${background === value ? ' is-active' : ''}`}
                 aria-pressed={background === value}
                 onClick={() => changeBackground(value)}
               >
-                <AppIcon name={value === 'solid' ? 'background' : value} size={17} />{label}
+                {value === 'grid' ? (
+                  <AppIcon name="grid" size={14} />
+                ) : (
+                  <MemoChromeIcon kind={value} size={14} />
+                )}
+                {label}
               </button>
             ))}
           </div>
+
           <button
             type="button"
-            className="memo-mode-toggle"
+            className="btn btn-subtle btn-sm memo-mode-toggle"
             aria-label={colorMode === 'light' ? '切换到夜间画布' : '切换到昼间画布'}
             aria-pressed={colorMode === 'dark'}
             onClick={() => changeMode(colorMode === 'light' ? 'dark' : 'light')}
           >
-            <AppIcon name={colorMode === 'light' ? 'moon' : 'sun'} size={19} />
+            <MemoChromeIcon kind={colorMode === 'light' ? 'moon' : 'sun'} size={15} />
             {colorMode === 'light' ? '夜间' : '昼间'}
           </button>
+
           {fullscreenSupported && (
-            <button type="button" className="memo-icon-button" aria-label={isBrowserFullscreen ? '退出浏览器全屏' : '浏览器全屏'} onClick={() => void toggleBrowserFullscreen()}>
-              <AppIcon name={isBrowserFullscreen ? 'fullscreenExit' : 'fullscreen'} size={21} />
+            <button
+              type="button"
+              className="btn btn-icon btn-sm memo-icon-button"
+              aria-label={isBrowserFullscreen ? '退出浏览器全屏' : '浏览器全屏'}
+              onClick={() => void toggleBrowserFullscreen()}
+            >
+              <MemoChromeIcon kind={isBrowserFullscreen ? 'fullscreenExit' : 'fullscreen'} size={16} />
             </button>
           )}
-          <button type="button" className="memo-icon-button memo-close-button" aria-label="关闭备忘录" onClick={() => void closeCanvas()}>
-            <AppIcon name="close" size={22} />
+
+          <button
+            type="button"
+            className="btn btn-icon btn-sm memo-icon-button memo-close-button"
+            aria-label="关闭备忘录"
+            onClick={() => void closeCanvas()}
+          >
+            <AppIcon name="close" size={17} />
           </button>
         </div>
+
         <div className={`memo-save-state is-${savePhase}`} role="status" aria-live="polite">
-          <i />
+          <i aria-hidden="true" />
           <span>{saveMessage}</span>
-          {savePhase === 'error' && <button type="button" onClick={() => void persistNow()}>重试</button>}
+          {savePhase === 'error' && (
+            <button type="button" className="btn btn-text btn-sm" onClick={() => void persistNow()}>
+              重试
+            </button>
+          )}
         </div>
       </header>
+
       <div className="memo-canvas-workspace">
         {libraryOpen && (
           <MemoLibrary

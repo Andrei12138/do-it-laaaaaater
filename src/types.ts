@@ -15,6 +15,7 @@ export interface Category {
   name: string
   color: string
   sort_order?: number
+  coverPrompt?: string
 }
 
 export interface ImageAsset {
@@ -59,6 +60,12 @@ export interface ItemFilters {
 
 export interface AppPreferences {
   quickSaveCategoryId: string | null
+  aiImageApiUrl?: string
+  aiImageApiKeySet?: boolean
+  aiImageApiKeyHint?: string
+  aiImageModel?: string
+  aiCoverAuto?: boolean
+  aiCoverStyle?: string
 }
 
 export type SyncPhase = 'idle' | 'saving' | 'syncing' | 'queued' | 'saved' | 'offline' | 'error'

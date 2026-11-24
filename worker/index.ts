@@ -1,3 +1,4 @@
+import { generateAiPosterCover, maskApiKey } from './ai-cover'
 import { detectImageMime, fetchImage, fetchPageMetadata, normalizeUrl } from './metadata'
 import {
   buildClearSessionCookie,
@@ -778,30 +779,45 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
   // --- CATEGORIES ---
   if (path === '/api/categories' && method === 'GET') {
     const res = await env.DB.prepare(
-      'SELECT id, name, color, sort_order FROM categories WHERE user_id = ? ORDER BY sort_order, name COLLATE NOCASE'
+      'SELECT id, name, color, sort_order, cover_prompt FROM categories WHERE user_id = ? ORDER BY sort_order, name COLLATE NOCASE'
     ).bind(user.id).all<Row>()
-    return json(res.results)
+    return json(res.results.map((r) => ({
+      id: String(r.id),
+      name: String(r.name),
+      color: String(r.color),
+      sort_order: Number(r.sort_order || 0),
+      coverPrompt: r.cover_prompt ? String(r.cover_prompt) : ''
+    })))
   }
 
   if (path === '/api/categories' && method === 'POST') {
     const body = await readJson(request)
     const name = requiredTitle(body.name).slice(0, 40)
     const color = categoryColor(body.color || '#64748b')
+    const coverPrompt = String(body.coverPrompt || '').trim().slice(0, 600) || null
     const id = clientUuid(body.id)
-    const existing = await env.DB.prepare('SELECT id, name, color, sort_order FROM categories WHERE id = ? AND user_id = ?')
+    const existing = await env.DB.prepare('SELECT id, name, color, sort_order, cover_prompt FROM categories WHERE id = ? AND user_id = ?')
       .bind(id, user.id).first<Row>()
-    if (existing) return json(existing)
+    if (existing) {
+      return json({
+        id: String(existing.id),
+        name: String(existing.name),
+        color: String(existing.color),
+        sort_order: Number(existing.sort_order || 0),
+        coverPrompt: existing.cover_prompt ? String(existing.cover_prompt) : ''
+      })
+    }
     const maxRow = await env.DB.prepare('SELECT COALESCE(MAX(sort_order), -1) AS value FROM categories WHERE user_id = ?')
       .bind(user.id).first<Row>()
     const nextSortOrder = Number(maxRow?.value ?? -1) + 1
     try {
       await env.DB.prepare(
-        'INSERT INTO categories (id, user_id, name, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-      ).bind(id, user.id, name, color, nextSortOrder, Date.now()).run()
+        'INSERT INTO categories (id, user_id, name, color, sort_order, cover_prompt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).bind(id, user.id, name, color, nextSortOrder, coverPrompt, Date.now()).run()
     } catch {
       throw new ApiError(409, '已经存在同名类别')
     }
-    return json({ id, name, color, sort_order: nextSortOrder }, 201)
+    return json({ id, name, color, sort_order: nextSortOrder, coverPrompt: coverPrompt || '' }, 201)
   }
 
   const categoryMatch = path.match(/^\/api\/categories\/([^/]+)$/)
@@ -811,17 +827,28 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       const body = await readJson(request)
       const name = requiredTitle(body.name).slice(0, 40)
       const color = categoryColor(body.color)
+      const hasPrompt = hasOwn(body, 'coverPrompt')
+      const coverPrompt = hasPrompt ? (String(body.coverPrompt || '').trim().slice(0, 600) || null) : undefined
       try {
-        const result = await env.DB.prepare('UPDATE categories SET name = ?, color = ? WHERE id = ? AND user_id = ?')
-          .bind(name, color, catId, user.id).run()
+        const result = hasPrompt
+          ? await env.DB.prepare('UPDATE categories SET name = ?, color = ?, cover_prompt = ? WHERE id = ? AND user_id = ?')
+              .bind(name, color, coverPrompt, catId, user.id).run()
+          : await env.DB.prepare('UPDATE categories SET name = ?, color = ? WHERE id = ? AND user_id = ?')
+              .bind(name, color, catId, user.id).run()
         if (!result.meta.changes) throw new ApiError(404, '类别不存在')
       } catch (error) {
         if (error instanceof ApiError) throw error
         throw new ApiError(409, '已经存在同名类别')
       }
-      const updatedCat = await env.DB.prepare('SELECT id, name, color, sort_order FROM categories WHERE id = ? AND user_id = ?')
+      const updatedCat = await env.DB.prepare('SELECT id, name, color, sort_order, cover_prompt FROM categories WHERE id = ? AND user_id = ?')
         .bind(catId, user.id).first<Row>()
-      return json(updatedCat || { id: catId, name, color })
+      return json(updatedCat ? {
+        id: String(updatedCat.id),
+        name: String(updatedCat.name),
+        color: String(updatedCat.color),
+        sort_order: Number(updatedCat.sort_order || 0),
+        coverPrompt: updatedCat.cover_prompt ? String(updatedCat.cover_prompt) : ''
+      } : { id: catId, name, color })
     }
     if (method === 'DELETE') {
       const result = await env.DB.prepare('DELETE FROM categories WHERE id = ? AND user_id = ?')
@@ -833,19 +860,76 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
 
   // --- PREFERENCES ---
   if (path === '/api/preferences' && method === 'GET') {
-    const row = await env.DB.prepare('SELECT quick_save_category_id FROM user_preferences WHERE user_id = ?')
-      .bind(user.id).first<Row>()
-    return json({ quickSaveCategoryId: row?.quick_save_category_id ? String(row.quick_save_category_id) : null })
+    const row = await env.DB.prepare(
+      'SELECT quick_save_category_id, ai_image_api_url, ai_image_api_key, ai_image_model, ai_cover_auto, ai_cover_style FROM user_preferences WHERE user_id = ?'
+    ).bind(user.id).first<Row>()
+    const rawKey = row?.ai_image_api_key ? String(row.ai_image_api_key) : ''
+    return json({
+      quickSaveCategoryId: row?.quick_save_category_id ? String(row.quick_save_category_id) : null,
+      aiImageApiUrl: row?.ai_image_api_url ? String(row.ai_image_api_url) : '',
+      aiImageApiKeySet: Boolean(rawKey),
+      aiImageApiKeyHint: maskApiKey(rawKey),
+      aiImageModel: row?.ai_image_model ? String(row.ai_image_model) : '',
+      aiCoverAuto: Boolean(Number(row?.ai_cover_auto || 0)),
+      aiCoverStyle: row?.ai_cover_style ? String(row.ai_cover_style) : ''
+    })
   }
 
   if (path === '/api/preferences' && method === 'PATCH') {
     const body = await readJson(request)
-    const categoryId = await ensureCategory(env, user.id, optionalCategory(body.quickSaveCategoryId))
+    const current = await env.DB.prepare(
+      'SELECT quick_save_category_id, ai_image_api_url, ai_image_api_key, ai_image_model, ai_cover_auto, ai_cover_style FROM user_preferences WHERE user_id = ?'
+    ).bind(user.id).first<Row>()
+
+    const categoryId = hasOwn(body, 'quickSaveCategoryId')
+      ? await ensureCategory(env, user.id, optionalCategory(body.quickSaveCategoryId))
+      : (current?.quick_save_category_id ? String(current.quick_save_category_id) : null)
+
+    const aiImageApiUrl = hasOwn(body, 'aiImageApiUrl')
+      ? String(body.aiImageApiUrl || '').trim().slice(0, 500) || null
+      : (current?.ai_image_api_url ? String(current.ai_image_api_url) : null)
+
+    let aiImageApiKey = current?.ai_image_api_key ? String(current.ai_image_api_key) : null
+    if (body.clearAiImageApiKey === true) {
+      aiImageApiKey = null
+    } else if (hasOwn(body, 'aiImageApiKey') && String(body.aiImageApiKey || '').trim()) {
+      aiImageApiKey = String(body.aiImageApiKey).trim().slice(0, 500)
+    }
+
+    const aiImageModel = hasOwn(body, 'aiImageModel')
+      ? String(body.aiImageModel || '').trim().slice(0, 120) || null
+      : (current?.ai_image_model ? String(current.ai_image_model) : null)
+
+    const aiCoverAuto = hasOwn(body, 'aiCoverAuto')
+      ? (body.aiCoverAuto ? 1 : 0)
+      : Number(current?.ai_cover_auto || 0)
+
+    const aiCoverStyle = hasOwn(body, 'aiCoverStyle')
+      ? String(body.aiCoverStyle || '').trim().slice(0, 1000) || null
+      : (current?.ai_cover_style ? String(current.ai_cover_style) : null)
+
     await env.DB.prepare(
-      'INSERT INTO user_preferences (user_id, quick_save_category_id, updated_at) VALUES (?, ?, ?) ' +
-      'ON CONFLICT(user_id) DO UPDATE SET quick_save_category_id = excluded.quick_save_category_id, updated_at = excluded.updated_at'
-    ).bind(user.id, categoryId, Date.now()).run()
-    return json({ quickSaveCategoryId: categoryId })
+      'INSERT INTO user_preferences (user_id, quick_save_category_id, ai_image_api_url, ai_image_api_key, ai_image_model, ai_cover_auto, ai_cover_style, updated_at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
+      'ON CONFLICT(user_id) DO UPDATE SET ' +
+      'quick_save_category_id = excluded.quick_save_category_id, ' +
+      'ai_image_api_url = excluded.ai_image_api_url, ' +
+      'ai_image_api_key = excluded.ai_image_api_key, ' +
+      'ai_image_model = excluded.ai_image_model, ' +
+      'ai_cover_auto = excluded.ai_cover_auto, ' +
+      'ai_cover_style = excluded.ai_cover_style, ' +
+      'updated_at = excluded.updated_at'
+    ).bind(user.id, categoryId, aiImageApiUrl, aiImageApiKey, aiImageModel, aiCoverAuto, aiCoverStyle, Date.now()).run()
+
+    return json({
+      quickSaveCategoryId: categoryId,
+      aiImageApiUrl: aiImageApiUrl || '',
+      aiImageApiKeySet: Boolean(aiImageApiKey),
+      aiImageApiKeyHint: maskApiKey(aiImageApiKey),
+      aiImageModel: aiImageModel || '',
+      aiCoverAuto: Boolean(aiCoverAuto),
+      aiCoverStyle: aiCoverStyle || ''
+    })
   }
 
   // --- MEMO CANVAS ---
@@ -1367,6 +1451,73 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     assertItemVersion(raw, await readJson(request))
     await permanentlyDeleteItems(env, user.id, [itemId])
     return json({ ok: true })
+  }
+
+  const generateCoverMatch = path.match(/^\/api\/items\/([^/]+)\/generate-cover$/)
+  if (generateCoverMatch && method === 'POST') {
+    const itemId = decodeURIComponent(generateCoverMatch[1])
+    const [raw, prefs] = await Promise.all([
+      env.DB.prepare('SELECT * FROM items WHERE id = ? AND user_id = ?').bind(itemId, user.id).first<Row>(),
+      env.DB.prepare(
+        'SELECT ai_image_api_url, ai_image_api_key, ai_image_model, ai_cover_style FROM user_preferences WHERE user_id = ?'
+      ).bind(user.id).first<Row>()
+    ])
+    if (!raw) throw new ApiError(404, '条目不存在')
+    const apiUrl = prefs?.ai_image_api_url ? String(prefs.ai_image_api_url) : ''
+    const apiKey = prefs?.ai_image_api_key ? String(prefs.ai_image_api_key) : ''
+    const model = prefs?.ai_image_model ? String(prefs.ai_image_model) : ''
+    const style = prefs?.ai_cover_style ? String(prefs.ai_cover_style) : ''
+    if (!apiUrl || !apiKey) {
+      throw new ApiError(400, '请先在账号设置中配置生图 API 地址与 API Key')
+    }
+    let categoryName: string | null = null
+    let categoryPrompt: string | null = null
+    if (raw.category_id) {
+      const catRow = await env.DB.prepare('SELECT name, cover_prompt FROM categories WHERE id = ? AND user_id = ?')
+        .bind(String(raw.category_id), user.id).first<Row>()
+      categoryName = catRow?.name ? String(catRow.name) : null
+      categoryPrompt = catRow?.cover_prompt ? String(catRow.cover_prompt) : null
+    }
+    const generated = await generateAiPosterCover(
+      { apiUrl, apiKey, model, style },
+      { title: String(raw.title), url: raw.url ? String(raw.url) : null, categoryName, categoryPrompt }
+    )
+    const previous = await env.DB.prepare(
+      "SELECT original_key, thumb_key FROM assets WHERE item_id = ? AND user_id = ? AND role = 'web_cover'"
+    ).bind(itemId, user.id).all<Row>()
+    const coverAssetId = crypto.randomUUID()
+    const coverKey = `library/${user.id}/${coverAssetId}/original.${extensionFor(generated.mimeType)}`
+    await env.IMAGES.put(coverKey, generated.bytes, {
+      httpMetadata: { contentType: generated.mimeType, cacheControl: 'private, max-age=31536000, immutable' }
+    })
+    const record: StoredAssetRecord = {
+      id: coverAssetId,
+      itemId,
+      userId: user.id,
+      role: 'web_cover',
+      originalName: 'ai-poster-cover',
+      originalKey: coverKey,
+      thumbKey: coverKey,
+      mimeType: generated.mimeType,
+      thumbMimeType: generated.mimeType,
+      size: generated.bytes.byteLength,
+      width: null,
+      height: null,
+      sortOrder: 0,
+      createdAt: Date.now()
+    }
+    try {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM assets WHERE item_id = ? AND user_id = ? AND role = 'web_cover'").bind(itemId, user.id),
+        insertAssetStatement(env, record),
+        env.DB.prepare('UPDATE items SET updated_at = ? WHERE id = ? AND user_id = ?').bind(Date.now(), itemId, user.id)
+      ])
+    } catch (error) {
+      await deleteR2Keys(env, [coverKey])
+      throw error
+    }
+    ctx.waitUntil(deleteR2Keys(env, previous.results.flatMap((a) => [String(a.original_key || ''), String(a.thumb_key || '')])))
+    return json(await getItem(env, user.id, itemId))
   }
 
   const coverMatch = path.match(/^\/api\/items\/([^/]+)\/cover$/)

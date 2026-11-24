@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
-    "animal-island-ui": "1.2.2",
     "classnames": "2.5.1",
     "fflate": "^0.8.2",
     "react": "^19.1.1",

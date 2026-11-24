@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Card, Progress } from 'animal-island-ui'
 import { ApiRequestError, api, errorMessage, jsonRequest } from '../api'
-import { useTheme } from '../theme'
 import type { AppPreferences, Category, LibraryItem } from '../types'
-import { AppIcon } from './AppIcon'
-import { ThemeControl } from './ThemeControl'
+import { AppIcon, BrandMark } from './AppIcon'
 
 interface MetadataResult {
   coverUrl: string
@@ -28,8 +25,28 @@ function fallbackTitle(url: string) {
   }
 }
 
+function AlertCircleIcon({ size = 22 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="app-icon"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <line x1="12" y1="8" x2="12" y2="12.5" />
+      <circle cx="12" cy="16" r="0.8" fill="currentColor" />
+    </svg>
+  )
+}
+
 export function QuickCapture() {
-  const { theme } = useTheme()
   const input = useMemo(captureInput, [])
   const started = useRef(false)
   const [phase, setPhase] = useState<CapturePhase>('loading')
@@ -139,41 +156,74 @@ export function QuickCapture() {
     else window.location.href = target
   }
 
+  const progressPercent = phase === 'loading' ? 20 : phase === 'saving' ? 55 : 85
+  const inProgress = phase === 'loading' || phase === 'saving' || phase === 'cover'
+
   return (
     <div className="quick-capture-shell">
-      <div className="quick-capture-theme"><ThemeControl placement="auth" /></div>
-      <Card className="quick-capture-card" pattern="default">
-        <div className={`quick-capture-mark quick-capture-mark-${phase}`} aria-hidden="true">
-          <AppIcon
-            name={phase === 'duplicate' ? 'bookmark' : phase === 'error' ? 'warning' : phase === 'done' ? 'complete' : 'sync'}
-            size={34}
-          />
+      <section className="quick-capture-card" aria-live="polite">
+        <div className="quick-capture-brand">
+          <BrandMark size={24} />
+          <span className="quick-capture-kicker">QUICK SAVE</span>
         </div>
-        <span className="brand-kicker">QUICK SAVE</span>
-        <h1>稍后保存</h1>
+
+        <div className={`quick-capture-mark quick-capture-mark-${phase}`} aria-hidden="true">
+          {phase === 'error' ? (
+            <AlertCircleIcon size={24} />
+          ) : (
+            <AppIcon
+              name={phase === 'duplicate' ? 'bookmark' : phase === 'done' ? 'checkCircle' : 'sync'}
+              size={24}
+              className={inProgress ? 'is-spinning' : undefined}
+            />
+          )}
+        </div>
+
+        <h1 className="quick-capture-title">稍后保存</h1>
         <p className="quick-capture-message" role="status">{message}</p>
-        {warning && <div className="notice notice-warning">{warning}</div>}
-        {(phase === 'loading' || phase === 'saving' || phase === 'cover') && (
-          theme === 'animal-island'
-            ? <Progress percent={phase === 'loading' ? 20 : phase === 'saving' ? 55 : 85} showInfo={false} />
-            : <div className="quick-capture-progress"><i style={{ width: phase === 'loading' ? '20%' : phase === 'saving' ? '55%' : '85%' }} /></div>
+
+        {warning && <div className="notice notice-info">{warning}</div>}
+
+        {inProgress && (
+          <div
+            className="progress-bar quick-capture-progress"
+            role="progressbar"
+            aria-valuenow={progressPercent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
+          </div>
         )}
+
         {item && (
           <div className="quick-capture-summary">
             <strong>{item.title}</strong>
-            {item.url && <span>{item.url}</span>}
-            <small>{item.category?.name || '未分类'}</small>
+            {item.url && <span className="quick-capture-url">{item.url}</span>}
+            <small className="quick-capture-cat">
+              <span
+                className="cat-dot"
+                style={{ backgroundColor: item.category?.color || '#a3a3a3' }}
+                aria-hidden="true"
+              />
+              {item.category?.name || '未分类'}
+            </small>
           </div>
         )}
+
         <div className="quick-capture-actions">
           {phase === 'duplicate' && item && (
-            <Button type="primary" onClick={viewExisting}>{duplicateTrashed ? '前往回收站' : '查看已有条目'}</Button>
+            <button type="button" className="btn btn-primary" onClick={viewExisting}>
+              {duplicateTrashed ? '前往回收站' : '查看已有条目'}
+            </button>
           )}
           {(phase === 'done' || phase === 'error' || phase === 'duplicate') && (
-            <Button onClick={() => window.close()}>关闭窗口</Button>
+            <button type="button" className="btn btn-ghost" onClick={() => window.close()}>
+              关闭窗口
+            </button>
           )}
         </div>
-      </Card>
+      </section>
     </div>
   )
 }

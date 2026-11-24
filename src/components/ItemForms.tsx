@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiRequestError, api, errorMessage, jsonRequest } from '../api'
 import { discardDraft, loadDraft, saveDraft } from '../draft-store'
 import type { Category, ImageAsset, LibraryItem } from '../types'
+import { AppIcon } from './AppIcon'
 import { CategoryField, ImageInput } from './FormFields'
-import { ErrorNotice } from './Modal'
 
 interface BaseFormProps {
   categories: Category[]
@@ -14,6 +14,12 @@ interface BaseFormProps {
 
 function defaultCategory(categories: Category[]) {
   return categories.find((category) => category.name === '其他')?.id || categories[0]?.id || ''
+}
+
+function isConflictError(error: unknown) {
+  if (!(error instanceof ApiRequestError) || error.status !== 409) return false
+  const details = error.details as { conflict?: boolean } | undefined
+  return Boolean(details?.conflict)
 }
 
 interface MetadataResult {
@@ -143,23 +149,30 @@ export function LinkForm({
 
   return (
     <form className="stack" onSubmit={submit}>
-      <ErrorNotice message={error} />
+      {error && <div className="notice notice-error" role="alert">{error}</div>}
       {duplicateId && (
-        <div className="duplicate-notice" role="status">
-          <strong>已经保存过了</strong>
-          <span>原条目没有被修改，录入时间也保持不变。</span>
-          <button type="button" className="button button-small" onClick={() => {
-            setDraftReady(false)
-            void discardDraft(draftKey).then(() => onDuplicate(duplicateId))
-          }}>
+        <div className="notice notice-info duplicate-notice" role="status">
+          <div>
+            <strong>已经保存过了</strong>
+            <p className="field-hint">原条目没有被修改，录入时间也保持不变。</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              setDraftReady(false)
+              void discardDraft(draftKey).then(() => onDuplicate(duplicateId))
+            }}
+          >
             查看已有条目
           </button>
         </div>
       )}
       <label className="field">
-        <span>网页地址</span>
+        <span className="field-label">网页地址</span>
         <div className="inline-field">
           <input
+            className="input"
             type="url"
             aria-label="网页地址"
             required
@@ -174,19 +187,30 @@ export function LinkForm({
             placeholder="https://example.com/article"
             autoFocus
           />
-          <button type="button" className="button" onClick={() => void readMetadata()} disabled={fetching || !url}>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => void readMetadata()}
+            disabled={fetching || !url}
+          >
             {fetching ? '获取中…' : '获取标题'}
           </button>
         </div>
       </label>
       <label className="field">
-        <span>标题</span>
-        <input required maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} />
+        <span className="field-label">标题</span>
+        <input
+          className="input"
+          required
+          maxLength={300}
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+        />
       </label>
       {coverUrl && coverVisible && (
         <div className="cover-preview">
           <img src={coverUrl} alt="网页封面预览" onError={() => setCoverVisible(false)} />
-          <span>保存时会把这张网页封面下载到本机</span>
+          <span className="field-hint">保存时会同步转存这张网页封面</span>
         </div>
       )}
       <CategoryField
@@ -196,12 +220,12 @@ export function LinkForm({
         onCreateCategory={onCreateCategory}
       />
       <div className="field">
-        <span>相关截图（可选）</span>
+        <span className="field-label">相关截图（可选）</span>
         <ImageInput files={files} onChange={setFiles} onError={setError} collapsible />
       </div>
       <div className="form-actions">
-        <button type="button" className="button" onClick={discardAndClose}>取消</button>
-        <button className="button button-primary" disabled={saving}>
+        <button type="button" className="btn btn-ghost" onClick={discardAndClose}>取消</button>
+        <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? '保存中…' : '保存网页'}
         </button>
       </div>
@@ -273,10 +297,11 @@ export function TextItemForm({
 
   return (
     <form className="stack" onSubmit={submit}>
-      <ErrorNotice message={error} />
+      {error && <div className="notice notice-error" role="alert">{error}</div>}
       <label className="field">
-        <span>标题</span>
+        <span className="field-label">标题</span>
         <input
+          className="input"
           required
           maxLength={300}
           value={title}
@@ -291,8 +316,8 @@ export function TextItemForm({
         onCreateCategory={onCreateCategory}
       />
       <div className="form-actions">
-        <button type="button" className="button" onClick={discardAndClose}>取消</button>
-        <button className="button button-primary" disabled={saving}>
+        <button type="button" className="btn btn-ghost" onClick={discardAndClose}>取消</button>
+        <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? '保存中…' : '保存文本'}
         </button>
       </div>
@@ -383,10 +408,17 @@ export function ImageGroupForm({
 
   return (
     <form className="stack" onSubmit={submit}>
-      <ErrorNotice message={error} />
+      {error && <div className="notice notice-error" role="alert">{error}</div>}
       <label className="field">
-        <span>图片组标题</span>
-        <input required maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
+        <span className="field-label">图片组标题</span>
+        <input
+          className="input"
+          required
+          maxLength={300}
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          autoFocus
+        />
       </label>
       <CategoryField
         categories={categories}
@@ -396,8 +428,8 @@ export function ImageGroupForm({
       />
       <ImageInput files={files} onChange={setFiles} onError={setError} compact />
       <div className="form-actions">
-        <button type="button" className="button" onClick={discardAndClose}>取消</button>
-        <button className="button button-primary" disabled={saving}>
+        <button type="button" className="btn btn-ghost" onClick={discardAndClose}>取消</button>
+        <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? '保存中…' : '保存图片组'}
         </button>
       </div>
@@ -427,6 +459,8 @@ export function EditItemForm({
   const [status, setStatus] = useState(initialItem.status)
   const [files, setFiles] = useState<File[]>([])
   const [error, setError] = useState('')
+  const [conflict, setConflict] = useState(false)
+  const [reloading, setReloading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [draftReady, setDraftReady] = useState(false)
   const [isStarred, setIsStarred] = useState(initialItem.isStarred)
@@ -454,12 +488,12 @@ export function EditItemForm({
 
   useEffect(() => {
     if (!draftReady) return
-    const hasChanges = title !== initialItem.title ||
-      url !== (initialItem.url || '') ||
-      categoryId !== (initialItem.category?.id || '') ||
-      status !== initialItem.status ||
-      isStarred !== initialItem.isStarred ||
-      plannedFor !== (initialItem.plannedFor || '') ||
+    const hasChanges = title !== item.title ||
+      url !== (item.url || '') ||
+      categoryId !== (item.category?.id || '') ||
+      status !== item.status ||
+      isStarred !== item.isStarred ||
+      plannedFor !== (item.plannedFor || '') ||
       files.length > 0
     if (!hasChanges) {
       void discardDraft(draftKey)
@@ -475,28 +509,53 @@ export function EditItemForm({
       })
     }, 350)
     return () => window.clearTimeout(timer)
-  }, [categoryId, draftKey, draftReady, files, initialItem, isStarred, item.id, plannedFor, status, title, url])
+  }, [categoryId, draftKey, draftReady, files, isStarred, item, plannedFor, status, title, url])
 
   function discardAndClose() {
     void discardDraft(draftKey)
     onClose()
   }
 
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    setSaving(true)
+  async function reloadLatestFromCloud() {
+    setReloading(true)
     setError('')
     try {
-      let updated = await jsonRequest<LibraryItem>('/api/items/' + item.id, 'PUT', {
+      const latest = await api<LibraryItem>('/api/items/' + item.id)
+      setItem(latest)
+      setTitle(latest.title)
+      setUrl(latest.url || '')
+      setCategoryId(latest.category?.id || '')
+      setStatus(latest.status)
+      setIsStarred(latest.isStarred)
+      setPlannedFor(latest.plannedFor || '')
+      setFiles([])
+      setConflict(false)
+      await discardDraft(draftKey)
+    } catch (requestError) {
+      setError(errorMessage(requestError))
+    } finally {
+      setReloading(false)
+    }
+  }
+
+  async function performSave(forceOverwrite = false) {
+    setSaving(true)
+    setError('')
+    setConflict(false)
+    try {
+      const payload: Record<string, unknown> = {
         title,
         url,
         categoryId,
         status,
         isStarred,
         plannedFor: status === 'completed' ? null : (plannedFor || null)
-      })
+      }
+      if (!forceOverwrite) payload.baseUpdatedAt = item.updatedAt
+      let updated = await jsonRequest<LibraryItem>('/api/items/' + item.id, 'PUT', payload)
       if (files.length) {
         const form = new FormData()
+        if (!forceOverwrite) form.set('baseUpdatedAt', String(updated.updatedAt))
         files.forEach((file) => form.append('images', file))
         updated = await api<LibraryItem>('/api/items/' + item.id + '/assets', {
           method: 'POST',
@@ -507,10 +566,18 @@ export function EditItemForm({
       await discardDraft(draftKey)
       onSaved(updated)
     } catch (requestError) {
+      if (isConflictError(requestError)) {
+        setConflict(true)
+      }
       setError(errorMessage(requestError))
     } finally {
       setSaving(false)
     }
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    await performSave(false)
   }
 
   async function reorder(index: number, direction: -1 | 1) {
@@ -520,39 +587,82 @@ export function EditItemForm({
     const temporary = reordered[index]
     reordered[index] = reordered[nextIndex]
     reordered[nextIndex] = temporary
+    setError('')
+    setConflict(false)
     try {
       const updated = await jsonRequest<LibraryItem>(
         '/api/items/' + item.id + '/assets/order',
         'PUT',
-        { ids: reordered.map((asset) => asset.id) }
+        { ids: reordered.map((asset) => asset.id), baseUpdatedAt: item.updatedAt }
       )
       setItem(updated)
     } catch (requestError) {
+      if (isConflictError(requestError)) setConflict(true)
       setError(errorMessage(requestError))
     }
   }
 
   async function removeAsset(asset: ImageAsset) {
     if (!window.confirm('确定删除这张图片吗？')) return
+    setError('')
+    setConflict(false)
     try {
-      const updated = await api<LibraryItem>('/api/assets/' + asset.id, { method: 'DELETE' })
+      const updated = await api<LibraryItem>('/api/assets/' + asset.id, {
+        method: 'DELETE',
+        body: JSON.stringify({ baseUpdatedAt: item.updatedAt })
+      })
       setItem(updated)
     } catch (requestError) {
+      if (isConflictError(requestError)) setConflict(true)
       setError(errorMessage(requestError))
     }
   }
 
   return (
     <form className="stack" onSubmit={submit}>
-      <ErrorNotice message={error} />
+      {error && (
+        <div className="notice notice-error" role="alert">
+          <div>{error}</div>
+          {conflict && (
+            <div className="conflict-actions">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={reloading || saving}
+                onClick={() => void reloadLatestFromCloud()}
+              >
+                {reloading ? '读取中…' : '读取云端最新版本'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                disabled={reloading || saving}
+                onClick={() => void performSave(true)}
+              >
+                使用本机版本覆盖
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <div className="form-grid">
         <label className="field">
-          <span>标题</span>
-          <input required maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} />
+          <span className="field-label">标题</span>
+          <input
+            className="input"
+            required
+            maxLength={300}
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+          />
         </label>
         <label className="field">
-          <span>状态</span>
-          <select value={status} onChange={(event) => setStatus(event.target.value as 'pending' | 'completed')}>
+          <span className="field-label">状态</span>
+          <select
+            className="select"
+            value={status}
+            onChange={(event) => setStatus(event.target.value as 'pending' | 'completed')}
+          >
             <option value="pending">待处理</option>
             <option value="completed">已完成</option>
           </select>
@@ -560,8 +670,14 @@ export function EditItemForm({
       </div>
       {item.kind === 'link' && (
         <label className="field">
-          <span>网页地址</span>
-          <input type="url" required value={url} onChange={(event) => setUrl(event.target.value)} />
+          <span className="field-label">网页地址</span>
+          <input
+            className="input"
+            type="url"
+            required
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+          />
         </label>
       )}
       <CategoryField
@@ -571,16 +687,22 @@ export function EditItemForm({
         onCreateCategory={onCreateCategory}
       />
       <div className="form-grid item-priority-fields">
-        <label className="field checkbox-field">
-          <span>长期优先</span>
-          <span className="inline-check">
-            <input type="checkbox" checked={isStarred} onChange={(event) => setIsStarred(event.target.checked)} />
-            星标条目
-          </span>
-        </label>
+        <div className="field">
+          <span className="field-label">长期优先</span>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={isStarred}
+              onChange={(event) => setIsStarred(event.target.checked)}
+            />
+            <AppIcon name={isStarred ? 'starFilled' : 'star'} size={15} />
+            <span>星标条目</span>
+          </label>
+        </div>
         <label className="field">
-          <span>计划处理日期</span>
+          <span className="field-label">计划处理日期</span>
           <input
+            className="input"
             type="date"
             disabled={status === 'completed'}
             value={status === 'completed' ? '' : plannedFor}
@@ -590,53 +712,65 @@ export function EditItemForm({
       </div>
       {webCover && (
         <div className="saved-cover">
-          <span>网页封面</span>
-          <button type="button" className="image-button" onClick={() => onPreview([webCover], 0)}>
+          <span className="field-label">网页封面</span>
+          <button type="button" className="asset-thumb-btn" onClick={() => onPreview([webCover], 0)}>
             <img src={webCover.thumbUrl} alt="网页封面" />
           </button>
         </div>
       )}
-      {item.kind !== 'text' && <div className="field">
-        <span>{item.kind === 'link' ? '相关截图' : '图片组内容'}</span>
-        {assets.length > 0 && (
-          <ul className="asset-editor">
-            {assets.map((asset, index) => (
-              <li key={asset.id}>
-                <button type="button" className="image-button" onClick={() => onPreview(assets, index)}>
-                  <img src={asset.thumbUrl} alt={asset.originalName} />
-                </button>
-                <span title={asset.originalName}>{asset.originalName}</span>
-                <div className="asset-actions">
-                  <button type="button" className="small-button" disabled={index === 0} onClick={() => void reorder(index, -1)}>
-                    前移
+      {item.kind !== 'text' && (
+        <div className="field">
+          <span className="field-label">{item.kind === 'link' ? '相关截图' : '图片组内容'}</span>
+          {assets.length > 0 && (
+            <ul className="asset-editor">
+              {assets.map((asset, index) => (
+                <li key={asset.id} className="asset-editor-item">
+                  <button type="button" className="asset-thumb-btn" onClick={() => onPreview(assets, index)}>
+                    <img src={asset.thumbUrl} alt={asset.originalName} />
                   </button>
-                  <button
-                    type="button"
-                    className="small-button"
-                    disabled={index === assets.length - 1}
-                    onClick={() => void reorder(index, 1)}
-                  >
-                    后移
-                  </button>
-                  <button type="button" className="small-button danger-text" onClick={() => void removeAsset(asset)}>
-                    删除
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-        <ImageInput
-          files={files}
-          onChange={setFiles}
-          onError={setError}
-          existingCount={assets.length}
-          compact
-        />
-      </div>}
+                  <span className="asset-name" title={asset.originalName}>{asset.originalName}</span>
+                  <div className="asset-actions">
+                    <button
+                      type="button"
+                      className="btn btn-subtle btn-sm"
+                      disabled={index === 0}
+                      onClick={() => void reorder(index, -1)}
+                    >
+                      前移
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-subtle btn-sm"
+                      disabled={index === assets.length - 1}
+                      onClick={() => void reorder(index, 1)}
+                    >
+                      后移
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={() => void removeAsset(asset)}
+                    >
+                      <AppIcon name="trash" size={14} />
+                      删除
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <ImageInput
+            files={files}
+            onChange={setFiles}
+            onError={setError}
+            existingCount={assets.length}
+            compact
+          />
+        </div>
+      )}
       <div className="form-actions">
-        <button type="button" className="button" onClick={discardAndClose}>取消</button>
-        <button className="button button-primary" disabled={saving}>
+        <button type="button" className="btn btn-ghost" onClick={discardAndClose}>取消</button>
+        <button type="submit" className="btn btn-primary" disabled={saving || reloading}>
           {saving ? '保存中…' : '保存修改'}
         </button>
       </div>

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { Button } from 'animal-island-ui'
 import {
   clearOfflineImages,
   discardFailedOfflineQueue,
@@ -110,104 +109,180 @@ export function OfflineStatusContent({ onChanged }: { onChanged?: () => Promise<
   }
 
   const waiting = state.pendingCount + state.failedCount
+  const cacheDone = Math.min(state.cacheCompleted, state.cacheTotal)
+  const cachePercent = state.cacheTotal > 0 ? Math.round((cacheDone / state.cacheTotal) * 100) : 0
+  const storagePercent = state.storageQuota > 0
+    ? Math.max(1, Math.min(100, Math.round((state.storageUsage / state.storageQuota) * 100)))
+    : 0
+
   return (
     <div className="offline-manager stack">
       <div className="account-section-heading">
-        <AppIcon name={state.online ? 'sync' : 'warning'} size={24} />
+        <AppIcon name={state.online ? 'sync' : 'offline'} size={20} />
         <div>
           <h3>离线与缓存</h3>
-          <p>
+          <p className="field-hint">
             {state.online ? '当前已联网。' : '当前处于离线模式。'}
-            {waiting ? `还有 ${waiting} 项本地修改。` : '所有修改均已同步。'}
+            {waiting ? `还有 ${waiting} 项本地修改待处理。` : '所有修改均已同步。'}
           </p>
         </div>
       </div>
 
       <div className="offline-stats" role="status" aria-live="polite">
-        <span><strong>{state.pendingCount}</strong> 等待同步</span>
-        <span><strong>{state.failedCount}</strong> 同步失败</span>
-        <span><strong>{formatBytes(state.storageBytes)}</strong> 图片缓存</span>
+        <div className="offline-stat">
+          <strong className="mono">{state.pendingCount}</strong>
+          <span>等待同步</span>
+        </div>
+        <div className="offline-stat">
+          <strong className="mono">{state.failedCount}</strong>
+          <span>同步失败</span>
+        </div>
+        <div className="offline-stat">
+          <strong className="mono">{formatBytes(state.storageBytes)}</strong>
+          <span>图片缓存</span>
+        </div>
       </div>
 
       <div className="offline-cache-progress" role="status" aria-live="polite">
-        <div>
+        <div className="offline-cache-header">
           <strong>原图后台缓存</strong>
-          <span>
-            {state.cachePhase === 'running' && '正在依次下载，不影响首页使用'}
+          <span className="field-hint">
+            {state.cachePhase === 'running' && '正在依次下载，不影响使用'}
             {state.cachePhase === 'paused' && '已暂停'}
             {state.cachePhase === 'error' && `有 ${state.cacheFailed} 个文件等待重试`}
             {state.cachePhase === 'idle' && (state.cacheTotal ? '本轮缓存已完成' : '联网刷新清单后自动开始')}
           </span>
         </div>
+
         {state.cacheTotal > 0 && (
-          <>
-            <progress max={state.cacheTotal} value={Math.min(state.cacheCompleted, state.cacheTotal)} />
-            <span>{Math.min(state.cacheCompleted, state.cacheTotal)} / {state.cacheTotal}</span>
-          </>
+          <div className="offline-progress-row">
+            <div className="progress-bar" aria-hidden="true">
+              <div className="progress-fill" style={{ width: cachePercent + '%' }} />
+            </div>
+            <span className="mono">{cacheDone} / {state.cacheTotal}</span>
+          </div>
         )}
+
         {state.storageQuota > 0 && (
-          <small>浏览器空间：已用 {formatBytes(state.storageUsage)} / 可用总额 {formatBytes(state.storageQuota)}</small>
+          <div className="offline-storage-row">
+            <div className="offline-storage-meta">
+              <span className="field-hint">浏览器存储空间</span>
+              <span className="mono">{formatBytes(state.storageUsage)} / {formatBytes(state.storageQuota)}</span>
+            </div>
+            <div className="progress-bar" aria-hidden="true">
+              <div className="progress-fill" style={{ width: storagePercent + '%' }} />
+            </div>
+          </div>
         )}
-        <div className="offline-cache-actions">
-          {state.cachePhase === 'running' && <Button size="small" onClick={pauseOfflineImageCache}>暂停缓存</Button>}
-          {state.cachePhase === 'paused' && <Button size="small" type="primary" onClick={resumeOfflineImageCache}>继续缓存</Button>}
-          {state.cacheFailed > 0 && <Button size="small" icon={<AppIcon name="retry" size={17} />} onClick={retryOfflineImageCache}>重试失败图片</Button>}
-        </div>
+
+        {(state.cachePhase === 'running' || state.cachePhase === 'paused' || state.cacheFailed > 0) && (
+          <div className="offline-cache-actions">
+            {state.cachePhase === 'running' && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={pauseOfflineImageCache}>
+                暂停缓存
+              </button>
+            )}
+            {state.cachePhase === 'paused' && (
+              <button type="button" className="btn btn-primary btn-sm" onClick={resumeOfflineImageCache}>
+                继续缓存
+              </button>
+            )}
+            {state.cacheFailed > 0 && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={retryOfflineImageCache}>
+                <AppIcon name="sync" size={14} />
+                重试失败图片
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {entries.length > 0 && (
         <ul className="offline-queue-list">
           {entries.map((entry) => (
-            <li key={entry.id} className={entry.state === 'failed' ? 'is-failed' : ''}>
-              <div>
+            <li key={entry.id} className={`offline-queue-item${entry.state === 'failed' ? ' is-failed' : ''}`}>
+              <div className="offline-queue-head">
                 <strong>{entry.label}</strong>
-                <time>{timeLabel(entry.createdAt)}</time>
+                <time className="mono">{timeLabel(entry.createdAt)}</time>
               </div>
-              <span>{entry.state === 'failed' ? entry.lastError || '需要手动重试' : '等待联网后自动同步'}</span>
+              <span className="field-hint">
+                {entry.state === 'failed' ? entry.lastError || '需要手动重试' : '等待联网后自动同步'}
+              </span>
               {entry.conflict && (
-                <Button size="small" disabled={busy || !state.online} onClick={() => void forceLocal(entry)}>
-                  使用本机版本
-                </Button>
+                <div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={busy || !state.online}
+                    onClick={() => void forceLocal(entry)}
+                  >
+                    使用本机版本
+                  </button>
+                </div>
               )}
             </li>
           ))}
         </ul>
       )}
 
-      {state.warning && <div className="notice notice-warning">{state.warning}</div>}
-      {!state.online && <div className="notice notice-warning">断网期间可以继续使用；恢复联网后会自动按保存顺序同步。</div>}
-      {message && <div className="notice notice-success">{message}</div>}
+      {state.warning && <div className="notice notice-error" role="alert">{state.warning}</div>}
+      {!state.online && (
+        <div className="notice notice-info">断网期间可以继续使用；恢复联网后会自动按保存顺序同步。</div>
+      )}
+      {message && <div className="notice notice-success" role="status">{message}</div>}
 
       <div className="offline-actions">
-        <Button
-          type="primary"
-          size="small"
-          loading={busy || state.syncing}
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
           disabled={busy || state.syncing || !state.online || !waiting}
-          icon={<AppIcon name="sync" size={17} />}
           onClick={() => void syncNow()}
         >
-          立即同步
-        </Button>
+          <AppIcon name="sync" size={14} />
+          {busy || state.syncing ? '同步中…' : '立即同步'}
+        </button>
         {state.failedCount > 0 && (
-          <Button size="small" disabled={busy || !state.online} icon={<AppIcon name="retry" size={17} />} onClick={() => void retryFailed()}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={busy || !state.online}
+            onClick={() => void retryFailed()}
+          >
+            <AppIcon name="sync" size={14} />
             重试失败任务
-          </Button>
+          </button>
         )}
         {state.failedCount > 0 && (
-          <Button size="small" danger disabled={busy || !state.online} onClick={() => void discardFailed()}>
+          <button
+            type="button"
+            className="btn btn-danger btn-sm"
+            disabled={busy || !state.online}
+            onClick={() => void discardFailed()}
+          >
             放弃失败修改
-          </Button>
+          </button>
         )}
-        <Button size="small" disabled={busy || state.storageBytes === 0} onClick={() => void clearImages()}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={busy || state.storageBytes === 0}
+          onClick={() => void clearImages()}
+        >
+          <AppIcon name="trash" size={14} />
           清除图片缓存
-        </Button>
+        </button>
       </div>
     </div>
   )
 }
 
-export function OfflineManagerModal({ onChanged, onClose }: { onChanged: () => Promise<void>; onClose: () => void }) {
+export function OfflineManagerModal({
+  onChanged,
+  onClose
+}: {
+  onChanged: () => Promise<void>
+  onClose: () => void
+}) {
   return (
     <Modal title="离线与同步" onClose={onClose} wide>
       <OfflineStatusContent onChanged={onChanged} />

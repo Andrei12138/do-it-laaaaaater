@@ -1,28 +1,18 @@
 import {
+  Component,
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
-  lazy,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  Suspense,
   type CSSProperties,
   type DragEvent as ReactDragEvent,
   type ReactNode
 } from 'react'
-import {
-  Button,
-  Card,
-  Divider,
-  Drawer,
-  Footer,
-  Input,
-  Select,
-  Tabs,
-  Tag,
-  Title
-} from 'animal-island-ui'
-import islandBag from 'animal-island-ui/items/item-022.png'
+import { createPortal } from 'react-dom'
 import { ApiRequestError, api, errorMessage, jsonRequest, readCachedSnapshot } from '../api'
 import { chinaToday, plannedDateLabel, plannedState } from '../china-date'
 import { smartDashboardGroups, type DashboardGroup } from '../dashboard-groups'
@@ -35,19 +25,21 @@ import {
   useOfflineRuntime
 } from '../offline-store'
 import { useSyncStatus } from '../sync-status'
-import { getThemeDefinition, useTheme, type ThemeId } from '../theme'
 import type {
-  Category,
   AppPreferences,
   BulkItemChanges,
+  Category,
   ImageAsset,
   ItemFilters,
   LibraryItem
 } from '../types'
-import { validateImageFiles } from './FormFields'
+import { AppIcon, BrandMark, type AppIconName } from './AppIcon'
+import { BackupManager } from './BackupManager'
+import { CategoryPickerPopover } from './CategoryPickerPopover'
+import { CoverFlowView } from './CoverFlowView'
 import { FocusMode } from './FocusMode'
-import { AppIcon, type AppIconName } from './AppIcon'
-import { EditItemForm, ImageGroupForm, LinkForm, TextItemForm } from './ItemForms'
+import { validateImageFiles } from './FormFields'
+import { EditItemForm } from './ItemForms'
 import {
   AccountManager,
   BookmarkletHelp,
@@ -55,75 +47,30 @@ import {
   Lightbox
 } from './ManagementModals'
 import { EmptyState, Modal } from './Modal'
-import { ThemeControl } from './ThemeControl'
-import { showThemeNotification } from './ThemeNotification'
 import { OfflineManagerModal } from './OfflineManager'
 import { SchedulePicker } from './SchedulePicker'
+import { SmartAddModal, parseWebUrl, type SmartAddInitial } from './SmartAddModal'
+import { showToast } from './Toast'
 
 const MemoCanvas = lazy(() => import('./MemoCanvas').then((module) => ({ default: module.MemoCanvas })))
 
+type ViewMode = 'list' | 'gallery' | 'coverflow'
+
 type Overlay =
-  | { type: 'link'; initial?: { url?: string; title?: string } }
-  | { type: 'text'; initialText: string }
-  | { type: 'images'; files: File[] }
+  | { type: 'smart-add'; initial?: SmartAddInitial }
   | { type: 'edit'; item: LibraryItem }
   | { type: 'categories' }
   | { type: 'account' }
+  | { type: 'backup' }
   | { type: 'bookmarklet' }
   | { type: 'sync' }
   | { type: 'lightbox'; assets: ImageAsset[]; index: number }
   | null
 
-type MobilePanel = 'filters' | 'add' | 'more' | null
-
-function MobileActionSheet({
-  open,
-  title,
-  onClose,
-  children
-}: {
-  open: boolean
-  title: string
-  onClose: () => void
-  children: ReactNode
-}) {
-  const { theme } = useTheme()
-
-  useEffect(() => {
-    if (!open || theme === 'animal-island') return
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [onClose, open, theme])
-
-  if (theme === 'animal-island') {
-    return (
-      <Drawer
-        open={open}
-        title={title}
-        placement="bottom"
-        height="min(78dvh, 620px)"
-        pushBackground={false}
-        className="mobile-action-drawer"
-        onClose={onClose}
-      >
-        {children}
-      </Drawer>
-    )
-  }
-  if (!open) return null
-  return (
-    <div className="flat-mobile-sheet" role="presentation">
-      <button type="button" className="flat-mobile-sheet-mask" aria-label="关闭" onClick={onClose} />
-      <section role="dialog" aria-modal="true" aria-label={title} className="flat-mobile-sheet-panel">
-        <header><h2>{title}</h2><button type="button" aria-label="关闭" onClick={onClose}>×</button></header>
-        {children}
-      </section>
-    </div>
-  )
-}
+const SORT_STORAGE_KEY = 'do-it-laaaaaater.item-sort.v1'
+const VIEW_MODE_STORAGE_KEY = 'do-it-laaaaaater.view-mode.v1'
+const SIDEBAR_STORAGE_KEY = 'do-it-laaaaaater.sidebar-collapsed.v1'
+const NEW_CATEGORY_COLORS = ['#4d49fc', '#00b6ff', '#24cb71', '#ff7237', '#8b5cf6', '#ec4899', '#f59e0b', '#14b8a6']
 
 const defaultFilters: ItemFilters = {
   status: 'pending',
@@ -136,8 +83,6 @@ const defaultFilters: ItemFilters = {
   trash: 'active'
 }
 
-const SORT_STORAGE_KEY = 'do-it-laaaaaater.item-sort.v1'
-
 function initialFilters(): ItemFilters {
   try {
     const saved = localStorage.getItem(SORT_STORAGE_KEY)
@@ -145,9 +90,27 @@ function initialFilters(): ItemFilters {
       return { ...defaultFilters, sort: saved }
     }
   } catch {
-    // Smart sorting remains the safe default when browser storage is disabled.
+    // Fallback to default smart sort.
   }
   return { ...defaultFilters }
+}
+
+function initialViewMode(): ViewMode {
+  try {
+    const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY)
+    if (saved === 'list' || saved === 'gallery' || saved === 'coverflow') return saved
+  } catch {
+    // Fallback to list view.
+  }
+  return 'list'
+}
+
+function initialSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
 }
 
 function dayKey(timestamp: number) {
@@ -174,39 +137,12 @@ function dayLabel(key: string) {
   }).format(date)
 }
 
-function timeLabel(timestamp: number) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  }).format(new Date(timestamp))
-}
-
 function hostLabel(url: string | null) {
   if (!url) return ''
   try {
-    return new URL(url).hostname
+    return new URL(url).hostname.replace(/^www\./i, '')
   } catch {
     return url
-  }
-}
-
-function asWebUrl(value: string) {
-  let candidate = value.trim().replace(/^[<（(【[]+/, '').replace(/[>）)】\],，。.!！?？;；:：]+$/, '')
-  if (/^www\./i.test(candidate)) candidate = 'https://' + candidate
-  if (!/^https?:\/\//i.test(candidate)) {
-    if (/^[a-z\d](?:[a-z\d-]*[a-z\d])?(?:\.[a-z\d](?:[a-z\d-]*[a-z\d])?)+(?:[/:?#].*)?$/i.test(candidate)) {
-      candidate = 'https://' + candidate
-    } else {
-      return ''
-    }
-  }
-  try {
-    const parsed = new URL(candidate)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : ''
-  } catch {
-    return ''
   }
 }
 
@@ -214,7 +150,7 @@ function shortPastedTitle(value: string) {
   return value.replace(/\s+/g, ' ').trim().slice(0, 300)
 }
 
-function overlayFromTextTransfer(data: DataTransfer): Overlay {
+function smartInitialFromTransfer(data: DataTransfer): SmartAddInitial | null {
   const plain = data.getData('text/plain').trim()
   const uriList = data.getData('text/uri-list')
     .split(/\r?\n/)
@@ -226,27 +162,27 @@ function overlayFromTextTransfer(data: DataTransfer): Overlay {
   const html = data.getData('text/html')
   if (html) {
     try {
-      const document = new DOMParser().parseFromString(html, 'text/html')
-      const anchor = document.querySelector<HTMLAnchorElement>('a[href]')
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const anchor = doc.querySelector<HTMLAnchorElement>('a[href]')
       if (anchor) {
         htmlUrl = anchor.getAttribute('href') || ''
         htmlTitle = shortPastedTitle(anchor.textContent || '')
       }
     } catch {
-      // Fall back to the plain-text clipboard value.
+      // Ignore malformed HTML clipboard payloads.
     }
   }
 
   const embedded = plain.match(/https?:\/\/[^\s<>"']+/i)?.[0] || ''
-  const url = asWebUrl(uriList) || asWebUrl(htmlUrl) || asWebUrl(plain) || asWebUrl(embedded)
+  const url = parseWebUrl(uriList) || parseWebUrl(htmlUrl) || parseWebUrl(plain) || parseWebUrl(embedded)
   if (url) {
     let title = htmlTitle
-    if (!title && plain && !asWebUrl(plain)) {
+    if (!title && plain && !parseWebUrl(plain)) {
       title = shortPastedTitle(embedded ? plain.replace(embedded, ' ') : plain)
     }
-    return { type: 'link', initial: { url, title } }
+    return { url, title }
   }
-  return plain ? { type: 'text', initialText: plain } : null
+  return plain ? { text: plain } : null
 }
 
 function itemManualAssets(item: LibraryItem) {
@@ -254,336 +190,762 @@ function itemManualAssets(item: LibraryItem) {
 }
 
 function notifySuccess(message: string) {
-  showThemeNotification('success', message)
+  showToast('success', message)
 }
 
 function notifyError(message: string) {
-  showThemeNotification('error', message)
+  showToast('error', message)
 }
 
-interface FilterOption {
-  key: string
-  label: string
-}
+class MemoErrorBoundary extends Component<
+  { onClose: () => void; children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
 
-function ThemeFilterSelect({
-  theme,
-  ariaLabel,
-  value,
-  options,
-  onChange
-}: {
-  theme: ThemeId
-  ariaLabel: string
-  value: string
-  options: FilterOption[]
-  onChange: (value: string) => void
-}) {
-  if (theme === 'flat-2013') {
-    return (
-      <select
-        className="flat-filter-select"
-        aria-label={ariaLabel}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {options.map((option) => (
-          <option key={option.key || '__all__'} value={option.key}>{option.label}</option>
-        ))}
-      </select>
-    )
+  static getDerivedStateFromError() {
+    return { hasError: true }
   }
 
-  return (
-    <Select
-      aria-label={ariaLabel}
-      value={value}
-      options={options}
-      onChange={onChange}
-    />
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="memo-canvas-overlay">
+          <div className="fig-card fig-memo-error">
+            <h2>备忘录画布加载失败</h2>
+            <p>应用可能刚刚更新或网络连接中断，刷新页面即可恢复画布。</p>
+            <div className="fig-memo-error-actions">
+              <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
+                重新加载页面
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={this.props.onClose}>
+                返回清单
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+function AnchoredMenu({
+  open,
+  anchor,
+  align = 'right',
+  className = '',
+  label,
+  onClose,
+  children
+}: {
+  open: boolean
+  anchor: HTMLElement | null
+  align?: 'left' | 'right'
+  className?: string
+  label: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const el = menuRef.current
+    if (!el) return
+    const update = () => {
+      const box = el.getBoundingClientRect()
+      const vw = document.documentElement.clientWidth
+      const vh = window.visualViewport?.height || window.innerHeight
+      const ab = anchor?.isConnected ? anchor.getBoundingClientRect() : null
+      let left = ab
+        ? (align === 'right' ? ab.right - box.width : ab.left)
+        : (vw - box.width) / 2
+      left = Math.max(12, Math.min(left, vw - box.width - 12))
+      let top = ab ? ab.bottom + 6 : 72
+      if (ab && top + box.height > vh - 12) {
+        const above = ab.top - box.height - 6
+        top = above >= 12 ? above : vh - box.height - 12
+      }
+      top = Math.max(12, Math.min(top, vh - box.height - 12))
+      setPos({ top, left })
+    }
+    const frame = window.requestAnimationFrame(update)
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [align, anchor, open])
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      if (menuRef.current?.contains(target)) return
+      if (anchor?.contains(target)) return
+      onClose()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [anchor, onClose, open])
+
+  if (!open) return null
+
+  const style: CSSProperties = pos
+    ? { position: 'fixed', top: `${pos.top}px`, left: `${pos.left}px`, visibility: 'visible' }
+    : { position: 'fixed', top: 0, left: 0, visibility: 'hidden' }
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-label={label}
+      className={`fig-popover fig-menu ${className}`.trim()}
+      style={style}
+      onClick={(event) => event.stopPropagation()}
+    >
+      {children}
+    </div>,
+    document.body
   )
 }
 
-function ItemCard({
-  item,
-  categories,
-  selectionMode,
-  trashMode,
-  selected,
-  busy,
-  retry,
-  onEdit,
-  onPatch,
-  onSelect,
-  onDelete,
-  onRestore,
-  onPermanentDelete,
-  onPreview,
-  now
+function MobileBottomSheet({
+  open,
+  title,
+  onClose,
+  children
 }: {
+  open: boolean
+  title: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [onClose, open])
+
+  if (!open) return null
+  return createPortal(
+    <div
+      className="fig-sheet-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <section role="dialog" aria-modal="true" aria-label={title} className="fig-sheet">
+        <div className="fig-sheet-handle" aria-hidden="true" />
+        <header className="fig-sheet-header">
+          <h2>{title}</h2>
+          <button type="button" className="btn btn-icon" aria-label="关闭" onClick={onClose}>
+            <AppIcon name="close" size={18} />
+          </button>
+        </header>
+        <div className="fig-sheet-body">{children}</div>
+      </section>
+    </div>,
+    document.body
+  )
+}
+
+interface ItemEntryProps {
   item: LibraryItem
+  viewMode: 'list' | 'gallery'
   categories: Category[]
   selectionMode: boolean
   trashMode: boolean
   selected: boolean
   busy: boolean
+  generatingCover: boolean
   retry?: { changes: BulkItemChanges; label: string }
+  now: number
   onEdit: () => void
   onPatch: (changes: BulkItemChanges, label: string) => Promise<boolean>
+  onCreateCategory: (name: string, color: string) => Promise<Category>
   onSelect: (selected: boolean) => void
   onDelete: () => Promise<boolean>
   onRestore: () => Promise<boolean>
   onPermanentDelete: () => Promise<boolean>
+  onGenerateCover: () => void
   onPreview: (assets: ImageAsset[], index: number) => void
-  now: number
-}) {
-  const { theme } = useTheme()
+}
+
+function ItemEntry({
+  item,
+  viewMode,
+  categories,
+  selectionMode,
+  trashMode,
+  selected,
+  busy,
+  generatingCover,
+  retry,
+  now,
+  onEdit,
+  onPatch,
+  onCreateCategory,
+  onSelect,
+  onDelete,
+  onRestore,
+  onPermanentDelete,
+  onGenerateCover,
+  onPreview
+}: ItemEntryProps) {
   const webCover = item.assets.find((asset) => asset.role === 'web_cover')
   const manual = itemManualAssets(item)
   const cover = item.kind === 'link'
     ? (webCover || manual[0])
     : item.kind === 'image_group'
-      ? manual[0]
-      : undefined
+      ? (webCover || manual[0])
+      : webCover
   const previewAssets = item.kind === 'link'
-    ? (webCover ? [webCover] : manual)
+    ? (webCover ? [webCover, ...manual] : manual)
     : item.kind === 'image_group'
-      ? manual
-      : []
-  const kindLabel = item.kind === 'link' ? '网页' : item.kind === 'text' ? '文本' : '图片'
-  const kindIcon: AppIconName = item.kind === 'link' ? 'link' : item.kind === 'text' ? 'text' : 'image'
+      ? (webCover ? [webCover, ...manual] : manual)
+      : (webCover ? [webCover] : [])
+
   const plan = plannedState(item.plannedFor)
-  const [planMenuOpen, setPlanMenuOpen] = useState(false)
-  const [planAnchor, setPlanAnchor] = useState<HTMLElement | null>(null)
-  const [moreOpen, setMoreOpen] = useState(false)
+  const kindIcon: AppIconName = item.kind === 'link' ? 'link' : item.kind === 'text' ? 'text' : 'image'
   const trashDaysLeft = item.trashedAt
     ? Math.max(0, Math.ceil((item.trashedAt + 7 * 24 * 60 * 60 * 1000 - now) / (24 * 60 * 60 * 1000)))
     : 0
-  const categoryStyle = {
-    '--category-color': item.category?.color || 'transparent'
-  } as CSSProperties
 
-  return (
-    <article
-      className={`item-card-shell${selectionMode ? ' is-selection-mode' : ''}${selected ? ' is-selected' : ''}${trashMode ? ' is-trash-item' : ''}`}
-      style={categoryStyle}
+  const [catOpen, setCatOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [planOpen, setPlanOpen] = useState(false)
+  const catBtnRef = useRef<HTMLButtonElement>(null)
+  const moreBtnRef = useRef<HTMLButtonElement>(null)
+
+  const toggleComplete = () => {
+    void onPatch(
+      { status: item.status === 'pending' ? 'completed' : 'pending' },
+      item.status === 'pending' ? '已标记完成' : '已恢复待处理'
+    )
+  }
+
+  const toggleStar = () => {
+    void onPatch({ isStarred: !item.isStarred }, item.isStarred ? '已取消星标' : '已加星标')
+  }
+
+  const planBadge = plan === 'overdue' ? (
+    <span className="badge badge-danger">{plannedDateLabel(item.plannedFor)}</span>
+  ) : plan === 'today' ? (
+    <span className="badge badge-indigo">今天</span>
+  ) : plan === 'future' ? (
+    <span className="badge badge-muted">{plannedDateLabel(item.plannedFor)}</span>
+  ) : null
+
+  const categoryChip = (
+    <button
+      ref={catBtnRef}
+      type="button"
+      className="fig-cat-chip"
+      disabled={busy || trashMode || selectionMode}
+      aria-label={`修改“${item.title}”的类别`}
+      aria-expanded={catOpen}
+      onClick={(event) => {
+        event.stopPropagation()
+        setCatOpen((value) => !value)
+      }}
     >
-      <Card
-        className={cover ? 'item-card has-cover' : 'item-card'}
-        pattern="default"
-        inert={selectionMode}
+      <span
+        className="cat-dot"
+        style={{ backgroundColor: item.category?.color || '#b5b5b5' }}
+        aria-hidden="true"
+      />
+      <span>{item.category?.name || '未分类'}</span>
+    </button>
+  )
+
+  const cardMenu = (
+    <AnchoredMenu
+      open={menuOpen}
+      anchor={moreBtnRef.current}
+      label="条目操作"
+      className="fig-card-menu"
+      onClose={() => setMenuOpen(false)}
+    >
+      {item.kind === 'link' && item.url && (
+        <a
+          role="menuitem"
+          className="fig-menu-item"
+          href={item.url}
+          target="_blank"
+          rel="noreferrer"
+          onClick={() => setMenuOpen(false)}
+        >
+          <AppIcon name="external" size={15} />
+          <span>打开原网页</span>
+        </a>
+      )}
+      {previewAssets.length > 0 && (
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item"
+          onClick={() => {
+            setMenuOpen(false)
+            onPreview(previewAssets, 0)
+          }}
+        >
+          <AppIcon name="image" size={15} />
+          <span>查看图片 ({previewAssets.length})</span>
+        </button>
+      )}
+      <button
+        type="button"
+        role="menuitem"
+        className="fig-menu-item"
+        disabled={item.status === 'completed'}
+        onClick={() => {
+          setMenuOpen(false)
+          setPlanOpen(true)
+        }}
       >
-        {cover && (
-          <button
-            type="button"
-            className="card-cover"
-            onClick={() => onPreview(previewAssets, 0)}
-            aria-label={'查看' + item.title + '的图片'}
-          >
-            <img src={cover.thumbUrl} alt="" loading="lazy" />
-            {item.kind === 'image_group' && manual.length > 1 && (
-              <span className="image-count">{manual.length} 张</span>
-            )}
-          </button>
-        )}
-        <div className="item-content">
-          <div className="item-heading">
-            <Tag
-              size="small"
-              color={item.status === 'pending' ? 'app-yellow' : 'app-green'}
-              className="status-tag"
-            >
-              {item.status === 'pending' ? '待处理' : '已完成'}
-            </Tag>
-            <Tag size="small" color="app-teal" variant="outlined" className="kind-tag">
-              <AppIcon name={kindIcon} size={18} />
-              <span className="kind-tag-label">{kindLabel}</span>
-            </Tag>
-            {item.isStarred && (
-              <Tag size="small" color="app-yellow" className="priority-tag">
-                <AppIcon name="star" size={15} />星标
-              </Tag>
-            )}
-            {plan === 'overdue' && <Tag size="small" color="app-red" className="priority-tag">逾期</Tag>}
-            {plan === 'today' && <Tag size="small" color="app-teal" className="priority-tag">今天</Tag>}
-            {plan === 'future' && <Tag size="small" color="app-teal" variant="outlined" className="priority-tag">{plannedDateLabel(item.plannedFor)}</Tag>}
-            {trashMode && <Tag size="small" color="app-red" variant="outlined" className="priority-tag">还可恢复 {trashDaysLeft} 天</Tag>}
-            <span className={`item-age item-age-${item.status}`}>{itemAgeLabel(item, now)}</span>
-            <time>{timeLabel(item.createdAt)}</time>
-          </div>
-          <h3>
-            {item.kind === 'link' && item.url ? (
-              <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
-            ) : item.kind === 'image_group' ? (
-              <button type="button" className="title-button" onClick={() => {
-                if (manual.length) onPreview(manual, 0)
-              }}>
-                {item.title}
-              </button>
-            ) : (
-              <span>{item.title}</span>
-            )}
-          </h3>
-          {item.url && <p className="item-host" title={item.url}>{hostLabel(item.url)}</p>}
-          <div className="item-meta">
-            <span className="category-color-key" aria-hidden="true" style={{ backgroundColor: item.category?.color || '#95a5a6' }} />
-            <label className="card-category-field">
-              <span className="visually-hidden">修改类别</span>
-              {theme === 'animal-island' ? (
-                <Select
-                  aria-label={'修改“' + item.title + '”的类别'}
-                  value={item.category?.id || ''}
-                  disabled={busy}
-                  options={[
-                    { key: '', label: '未分类' },
-                    ...categories.map((category) => ({ key: category.id, label: category.name }))
-                  ]}
-                  onChange={(value) => void onPatch({ categoryId: value || null }, '类别已更新')}
-                />
-              ) : (
-                <select
-                  aria-label={'修改“' + item.title + '”的类别'}
-                  value={item.category?.id || ''}
-                  disabled={busy}
-                  onChange={(event) => void onPatch({ categoryId: event.target.value || null }, '类别已更新')}
-                >
-                  <option value="">未分类</option>
-                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-                </select>
-              )}
-            </label>
-            {item.kind === 'link' && manual.length > 0 && (
-              <button type="button" className="text-button" onClick={() => onPreview(manual, 0)}>
-                {manual.length} 张截图
-              </button>
-            )}
-          </div>
-          <div className="item-actions">
-            {trashMode ? (
-              <>
-                <Button
-                  size="small"
-                  type="primary"
-                  disabled={busy}
-                  icon={<AppIcon name="restore" size={17} />}
-                  onClick={() => void onRestore()}
-                >
-                  恢复
-                </Button>
-                <Button
-                  size="small"
-                  danger
-                  disabled={busy}
-                  icon={<AppIcon name="delete" size={17} />}
-                  onClick={() => void onPermanentDelete()}
-                >
-                  彻底删除
-                </Button>
-              </>
-            ) : (
-              <>
-            <span className="card-action-mobile">
-              {item.kind === 'link' && item.url ? (
-                <a className="button button-primary button-small" href={item.url} target="_blank" rel="noreferrer">
-                  <AppIcon name="open" size={17} />打开
-                </a>
-              ) : (
-                <button type="button" className="button button-primary button-small" onClick={() => {
-                  if (item.kind === 'image_group' && manual.length) onPreview(manual, 0)
-                  else onEdit()
-                }}>
-                  <AppIcon name={item.kind === 'image_group' ? 'image' : 'open'} size={17} />查看
-                </button>
-              )}
-            </span>
-            <Button
-              size="small"
-              type="primary"
-              disabled={busy}
-              icon={<AppIcon name={item.status === 'pending' ? 'complete' : 'restore'} size={17} />}
-              onClick={() => void onPatch(
-                { status: item.status === 'pending' ? 'completed' : 'pending' },
-                item.status === 'pending' ? '已标记完成' : '已恢复待处理'
-              )}
-            >
-              {item.status === 'pending' ? '标记完成' : '恢复待处理'}
-            </Button>
-            <Button
-              size="small"
-              disabled={busy}
-              className={`card-action-secondary${item.isStarred ? ' is-active' : ''}`}
-              icon={<AppIcon name="star" size={17} />}
-              onClick={() => void onPatch({ isStarred: !item.isStarred }, item.isStarred ? '已取消星标' : '已加星标')}
-            >
-              {item.isStarred ? '取消星标' : '星标'}
-            </Button>
-            <Button
-              size="small"
-              disabled={busy || item.status === 'completed'}
-              className={`card-action-secondary${item.plannedFor ? ' is-active' : ''}`}
-              icon={<AppIcon name="today" size={17} />}
-              onClick={(event) => {
-                setMoreOpen(false)
-                setPlanAnchor(event.currentTarget as HTMLElement)
-                setPlanMenuOpen((value) => !value)
-              }}
-            >
-              {item.plannedFor ? '计划 ' + plannedDateLabel(item.plannedFor) : '安排处理'}
-            </Button>
-            <Button className="card-action-secondary" size="small" disabled={busy} icon={<AppIcon name="edit" size={17} />} onClick={onEdit}>编辑</Button>
-            <Button className="card-action-secondary" size="small" disabled={busy} danger icon={<AppIcon name="delete" size={17} />} onClick={() => void onDelete()}>删除</Button>
-            <Button
-              className="card-action-mobile card-more-trigger"
-              size="small"
-              disabled={busy}
-              icon={<AppIcon name="more" size={18} />}
-              onClick={() => setMoreOpen((value) => !value)}
-            >更多</Button>
-            {moreOpen && (
-              <div className="card-more-menu" role="menu" aria-label="更多条目操作">
-                <button type="button" onClick={() => { setMoreOpen(false); void onPatch({ isStarred: !item.isStarred }, item.isStarred ? '已取消星标' : '已加星标') }}>{item.isStarred ? '取消星标' : '加星标'}</button>
-                <button type="button" disabled={item.status === 'completed'} onClick={(event) => {
-                  setMoreOpen(false)
-                  setPlanAnchor(event.currentTarget)
-                  setPlanMenuOpen(true)
-                }}>安排处理</button>
-                <button type="button" onClick={() => { setMoreOpen(false); onEdit() }}>编辑</button>
-                <button type="button" className="danger-text" onClick={() => { setMoreOpen(false); void onDelete() }}>移到回收站</button>
-              </div>
-            )}
-              </>
-            )}
-          </div>
-          {retry && (
-            <div className="card-retry" role="alert">
-              <span>刚才的修改没有保存。</span>
-              <button type="button" className="small-button" disabled={busy} onClick={() => void onPatch(retry.changes, retry.label)}>
-                <AppIcon name="retry" size={16} />重试
-              </button>
-            </div>
-          )}
-        </div>
-      </Card>
+        <AppIcon name="calendar" size={15} />
+        <span>{item.plannedFor ? `计划：${plannedDateLabel(item.plannedFor)}` : '安排日期'}</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="fig-menu-item"
+        disabled={generatingCover}
+        onClick={() => {
+          setMenuOpen(false)
+          onGenerateCover()
+        }}
+      >
+        <AppIcon name="sparkles" size={15} />
+        <span>{generatingCover ? '生成封面中…' : (webCover ? '重新生成封面' : '生成 AI 封面')}</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="fig-menu-item"
+        onClick={() => {
+          setMenuOpen(false)
+          onEdit()
+        }}
+      >
+        <AppIcon name="edit" size={15} />
+        <span>编辑详情</span>
+      </button>
+      <div className="fig-menu-divider" />
+      <button
+        type="button"
+        role="menuitem"
+        className="fig-menu-item is-danger"
+        onClick={() => {
+          setMenuOpen(false)
+          void onDelete()
+        }}
+      >
+        <AppIcon name="trash" size={15} />
+        <span>移到回收站</span>
+      </button>
+    </AnchoredMenu>
+  )
+
+  const popovers = (
+    <>
+      <CategoryPickerPopover
+        open={catOpen}
+        anchor={catBtnRef.current}
+        categories={categories}
+        selectedId={item.category?.id || null}
+        busy={busy}
+        onSelect={(categoryId) => onPatch({ categoryId }, '类别已更新')}
+        onCreateCategory={onCreateCategory}
+        onClose={() => setCatOpen(false)}
+      />
       <SchedulePicker
-        open={planMenuOpen}
-        anchor={planAnchor}
+        open={planOpen}
+        anchor={moreBtnRef.current}
         value={item.plannedFor}
         busy={busy}
         onSelect={(date) => onPatch({ plannedFor: date }, `已安排 ${plannedDateLabel(date)}处理`)}
         onClear={() => onPatch({ plannedFor: null }, '已取消处理计划')}
-        onClose={() => setPlanMenuOpen(false)}
+        onClose={() => setPlanOpen(false)}
       />
-      {selectionMode && (
+      {cardMenu}
+    </>
+  )
+
+  const titleElement = item.kind === 'link' && item.url ? (
+    <a
+      href={item.url}
+      target="_blank"
+      rel="noreferrer"
+      className="fig-item-link"
+      onClick={(event) => {
+        if (selectionMode) {
+          event.preventDefault()
+          onSelect(!selected)
+        }
+      }}
+    >
+      {item.title}
+    </a>
+  ) : item.kind === 'image_group' ? (
+    <button
+      type="button"
+      className="fig-item-link"
+      onClick={() => {
+        if (selectionMode) {
+          onSelect(!selected)
+          return
+        }
+        if (manual.length) onPreview(manual, 0)
+        else onEdit()
+      }}
+    >
+      {item.title}
+    </button>
+  ) : (
+    <button
+      type="button"
+      className="fig-item-link"
+      onClick={() => {
+        if (selectionMode) onSelect(!selected)
+        else onEdit()
+      }}
+    >
+      {item.title}
+    </button>
+  )
+
+  if (viewMode === 'gallery') {
+    return (
+      <article
+        className={`fig-card fig-gallery-card${item.status === 'completed' ? ' is-completed' : ''}${selected ? ' is-selected' : ''}${selectionMode ? ' is-selectable' : ''}`}
+        onClick={selectionMode ? () => onSelect(!selected) : undefined}
+      >
+        <div className="fig-gallery-cover">
+          {cover ? (
+            <button
+              type="button"
+              className="fig-gallery-cover-btn"
+              aria-label={`查看 ${item.title} 的图片`}
+              onClick={(event) => {
+                if (selectionMode) return
+                event.stopPropagation()
+                onPreview(previewAssets, 0)
+              }}
+            >
+              <img src={cover.thumbUrl} alt="" loading="lazy" />
+              {item.kind === 'image_group' && manual.length > 1 && (
+                <span className="fig-gallery-count">{manual.length} 张</span>
+              )}
+            </button>
+          ) : (
+            <div
+              className="fig-gallery-placeholder"
+              onClick={() => {
+                if (selectionMode) return
+                if (item.kind === 'link' && item.url) window.open(item.url, '_blank', 'noopener,noreferrer')
+                else onEdit()
+              }}
+            >
+              <AppIcon name={kindIcon} size={20} className="fig-gallery-kind-icon" />
+              {item.kind === 'link' && item.url ? (
+                <span className="fig-gallery-placeholder-host">{hostLabel(item.url)}</span>
+              ) : (
+                <p className="fig-gallery-placeholder-text">{item.title}</p>
+              )}
+            </div>
+          )}
+
+          {selectionMode ? (
+            <span
+              className={`fig-check-circle fig-gallery-check${selected ? ' is-selected' : ''}`}
+              aria-hidden="true"
+            >
+              {selected && <AppIcon name="check" size={12} />}
+            </span>
+          ) : !trashMode ? (
+            <button
+              type="button"
+              className={`fig-check-circle fig-gallery-check${item.status === 'completed' ? ' is-completed' : ''}`}
+              disabled={busy}
+              aria-label={item.status === 'pending' ? '标记完成' : '恢复待处理'}
+              onClick={(event) => {
+                event.stopPropagation()
+                toggleComplete()
+              }}
+            >
+              {item.status === 'completed' && <AppIcon name="check" size={12} />}
+            </button>
+          ) : null}
+
+          {!trashMode && !selectionMode && (
+            <button
+              type="button"
+              className={`fig-gallery-star${item.isStarred ? ' is-starred' : ''}`}
+              disabled={busy}
+              aria-label={item.isStarred ? '取消星标' : '加星标'}
+              onClick={(event) => {
+                event.stopPropagation()
+                toggleStar()
+              }}
+            >
+              <AppIcon name={item.isStarred ? 'starFilled' : 'star'} size={14} />
+            </button>
+          )}
+        </div>
+
+        <div className="fig-gallery-body">
+          <h3 className="fig-gallery-title">{titleElement}</h3>
+          <div className="fig-gallery-sub">
+            {item.url ? (
+              <span className="fig-mono fig-domain" title={item.url}>{hostLabel(item.url)}</span>
+            ) : (
+              <span className="fig-mono fig-domain">
+                {item.kind === 'image_group' ? `${manual.length} 张图片` : '文字备忘'}
+              </span>
+            )}
+            <span className="fig-mono fig-age">{itemAgeLabel(item, now)}</span>
+          </div>
+
+          <div className="fig-gallery-foot">
+            <div className="fig-gallery-foot-left">
+              {categoryChip}
+              {planBadge}
+              {generatingCover && (
+                <span className="badge badge-indigo fig-generating-badge">
+                  <AppIcon name="sparkles" size={11} />生成封面中…
+                </span>
+              )}
+              {trashMode && <span className="badge badge-danger">剩 {trashDaysLeft} 天</span>}
+            </div>
+            <div className="fig-gallery-foot-right">
+              {trashMode ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-icon btn-sm"
+                    disabled={busy}
+                    title="恢复"
+                    aria-label="恢复"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void onRestore()
+                    }}
+                  >
+                    <AppIcon name="restore" size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-icon btn-sm fig-danger-icon"
+                    disabled={busy}
+                    title="彻底删除"
+                    aria-label="彻底删除"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void onPermanentDelete()
+                    }}
+                  >
+                    <AppIcon name="trash" size={14} />
+                  </button>
+                </>
+              ) : !selectionMode ? (
+                <button
+                  ref={moreBtnRef}
+                  type="button"
+                  className="btn btn-icon btn-sm fig-more-btn"
+                  disabled={busy}
+                  aria-label="更多操作"
+                  aria-expanded={menuOpen}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setMenuOpen((value) => !value)
+                  }}
+                >
+                  <AppIcon name="more" size={15} />
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {retry && (
+            <div className="fig-row-retry" role="alert">
+              <span>保存失败</span>
+              <button
+                type="button"
+                className="btn btn-text btn-sm"
+                disabled={busy}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void onPatch(retry.changes, retry.label)
+                }}
+              >
+                重试
+              </button>
+            </div>
+          )}
+        </div>
+        {popovers}
+      </article>
+    )
+  }
+
+  return (
+    <article
+      className={`fig-row${item.status === 'completed' ? ' is-completed' : ''}${selected ? ' is-selected' : ''}${selectionMode ? ' is-selectable' : ''}`}
+      onClick={selectionMode ? () => onSelect(!selected) : undefined}
+    >
+      <div className="fig-row-lead">
+        {selectionMode ? (
+          <button
+            type="button"
+            className={`fig-check-circle${selected ? ' is-selected' : ''}`}
+            aria-label={selected ? `取消选择 ${item.title}` : `选择 ${item.title}`}
+            aria-pressed={selected}
+            onClick={(event) => {
+              event.stopPropagation()
+              onSelect(!selected)
+            }}
+          >
+            {selected && <AppIcon name="check" size={12} />}
+          </button>
+        ) : !trashMode ? (
+          <button
+            type="button"
+            className={`fig-check-circle${item.status === 'completed' ? ' is-completed' : ''}`}
+            disabled={busy}
+            aria-label={item.status === 'pending' ? '标记完成' : '恢复待处理'}
+            onClick={toggleComplete}
+          >
+            {item.status === 'completed' && <AppIcon name="check" size={12} />}
+          </button>
+        ) : (
+          <span className="fig-row-kind-dot" aria-hidden="true">
+            <AppIcon name={kindIcon} size={15} />
+          </span>
+        )}
+      </div>
+
+      {cover && (
         <button
           type="button"
-          className="item-card-selection-toggle"
-          aria-label={(selected ? '取消选择“' : '选择“') + item.title + '”'}
-          aria-pressed={selected}
-          onClick={() => onSelect(!selected)}
+          className="fig-row-thumb"
+          aria-label={`查看 ${item.title} 的图片`}
+          onClick={(event) => {
+            if (selectionMode) return
+            event.stopPropagation()
+            onPreview(previewAssets, 0)
+          }}
         >
-          <span className="visually-hidden">{selected ? '再次点击取消选择' : '点击整张卡片选择'}</span>
+          <img src={cover.thumbUrl} alt="" loading="lazy" />
+          {item.kind === 'image_group' && manual.length > 1 && (
+            <span className="fig-row-thumb-count">{manual.length}</span>
+          )}
         </button>
       )}
+
+      <div className="fig-row-main">
+        <div className="fig-row-title-line">
+          <h3 className="fig-row-title">{titleElement}</h3>
+          {planBadge}
+          {generatingCover && (
+            <span className="badge badge-indigo fig-generating-badge">
+              <AppIcon name="sparkles" size={11} />生成封面中…
+            </span>
+          )}
+          {trashMode && <span className="badge badge-danger">还可恢复 {trashDaysLeft} 天</span>}
+        </div>
+        <div className="fig-row-meta">
+          <span className="fig-row-kind" title={item.kind === 'link' ? '网页' : item.kind === 'image_group' ? '图片' : '文本'}>
+            <AppIcon name={kindIcon} size={12} />
+          </span>
+          {item.url && <span className="fig-mono fig-domain" title={item.url}>{hostLabel(item.url)}</span>}
+          {categoryChip}
+          {item.kind === 'link' && manual.length > 0 && (
+            <button
+              type="button"
+              className="fig-meta-btn"
+              onClick={(event) => {
+                if (selectionMode) return
+                event.stopPropagation()
+                onPreview(manual, 0)
+              }}
+            >
+              {manual.length} 张附图
+            </button>
+          )}
+          <span className="fig-mono fig-age">{itemAgeLabel(item, now)}</span>
+        </div>
+        {retry && (
+          <div className="fig-row-retry" role="alert">
+            <span>刚才的修改没有保存</span>
+            <button
+              type="button"
+              className="btn btn-text btn-sm"
+              disabled={busy}
+              onClick={() => void onPatch(retry.changes, retry.label)}
+            >
+              重试
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="fig-row-actions">
+        {trashMode ? (
+          <>
+            <button type="button" className="btn btn-subtle btn-sm" disabled={busy} onClick={() => void onRestore()}>
+              <AppIcon name="restore" size={14} />恢复
+            </button>
+            <button type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={() => void onPermanentDelete()}>
+              彻底删除
+            </button>
+          </>
+        ) : !selectionMode ? (
+          <>
+            <button
+              type="button"
+              className={`btn btn-icon fig-star-btn${item.isStarred ? ' is-starred' : ''}`}
+              disabled={busy}
+              aria-label={item.isStarred ? '取消星标' : '加星标'}
+              onClick={toggleStar}
+            >
+              <AppIcon name={item.isStarred ? 'starFilled' : 'star'} size={15} />
+            </button>
+            <button
+              ref={moreBtnRef}
+              type="button"
+              className="btn btn-icon fig-more-btn"
+              disabled={busy}
+              aria-label="更多操作"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((value) => !value)}
+            >
+              <AppIcon name="more" size={16} />
+            </button>
+          </>
+        ) : null}
+      </div>
+      {popovers}
     </article>
   )
 }
@@ -595,45 +957,100 @@ export function Dashboard({
   userEmail: string
   onSessionChange: () => Promise<void>
 }) {
-  const { theme } = useTheme()
-  const themeDefinition = getThemeDefinition(theme)
   const [categories, setCategories] = useState<Category[]>([])
   const [allItems, setAllItems] = useState<LibraryItem[]>([])
   const [preferences, setPreferences] = useState<AppPreferences>({ quickSaveCategoryId: null })
   const [filters, setFilters] = useState<ItemFilters>(initialFilters)
-  const items = useMemo(() => filterLibraryItems(allItems, filters), [allItems, filters])
+  const [todayOverdueOnly, setTodayOverdueOnly] = useState(false)
+  const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(initialSidebarCollapsed)
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [now, setNow] = useState(Date.now)
+
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
-  const [bulkCategoryId, setBulkCategoryId] = useState('')
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkScheduleOpen, setBulkScheduleOpen] = useState(false)
   const [bulkScheduleAnchor, setBulkScheduleAnchor] = useState<HTMLElement | null>(null)
+  const [bulkCatOpen, setBulkCatOpen] = useState(false)
+  const [bulkCatAnchor, setBulkCatAnchor] = useState<HTMLElement | null>(null)
+
   const [busyItems, setBusyItems] = useState<Set<string>>(() => new Set())
+  const [generatingCoverIds, setGeneratingCoverIds] = useState<Set<string>>(() => new Set())
+  const generatingCoverRef = useRef<Set<string>>(new Set())
+  const preferencesRef = useRef<AppPreferences>(preferences)
+  preferencesRef.current = preferences
   const [retryItems, setRetryItems] = useState<Record<string, { changes: BulkItemChanges; label: string }>>({})
   const [focusMode, setFocusMode] = useState(false)
   const [memoOpen, setMemoOpen] = useState(false)
-  const [desktopAddOpen, setDesktopAddOpen] = useState(false)
-  const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null)
-  const [bulkPanelOpen, setBulkPanelOpen] = useState(false)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   const [undoDelete, setUndoDelete] = useState<{ ids: string[]; label: string } | null>(null)
   const [activeDraft, setActiveDraft] = useState<ActiveDraft | null>(() => readActiveDraft())
+
+  const [sidebarAddingCat, setSidebarAddingCat] = useState(false)
+  const [sidebarNewCatName, setSidebarNewCatName] = useState('')
+  const [sidebarCreatingCat, setSidebarCreatingCat] = useState(false)
+
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const accountBtnRef = useRef<HTMLButtonElement>(null)
+  const requestNumber = useRef(0)
+
   const syncStatus = useSyncStatus()
   const offlineState = useOfflineRuntime()
-  const requestNumber = useRef(0)
+
+  const items = useMemo(() => {
+    const base = filterLibraryItems(allItems, filters)
+    if (!todayOverdueOnly) return base
+    const today = chinaToday()
+    return base.filter((item) => Boolean(item.plannedFor && item.plannedFor <= today))
+  }, [allItems, filters, todayOverdueOnly])
+
+  const counts = useMemo(() => {
+    const today = chinaToday()
+    let pending = 0
+    let todayOverdue = 0
+    let starred = 0
+    let completed = 0
+    let trash = 0
+    let uncategorized = 0
+    const byCategory = new Map<string, number>()
+
+    for (const item of allItems) {
+      if (item.trashedAt) {
+        trash++
+        continue
+      }
+      if (item.isStarred) starred++
+      if (item.status === 'completed') {
+        completed++
+      } else {
+        pending++
+        if (item.plannedFor && item.plannedFor <= today) todayOverdue++
+        if (item.category) {
+          byCategory.set(item.category.id, (byCategory.get(item.category.id) || 0) + 1)
+        } else {
+          uncategorized++
+        }
+      }
+    }
+    return { pending, todayOverdue, starred, completed, trash, uncategorized, byCategory }
+  }, [allItems])
+
   const bulkPlannedFor = useMemo(() => {
     const selected = allItems.filter((item) => selectedIds.has(item.id))
     if (!selected.length) return null
     const first = selected[0].plannedFor
     return selected.every((item) => item.plannedFor === first) ? first : null
   }, [allItems, selectedIds])
+
   const bulkHasPlanned = useMemo(
     () => allItems.some((item) => selectedIds.has(item.id) && Boolean(item.plannedFor)),
     [allItems, selectedIds]
   )
+
   const bulkCanSchedule = useMemo(
     () => allItems.some((item) => selectedIds.has(item.id) && item.status === 'pending'),
     [allItems, selectedIds]
@@ -671,6 +1088,7 @@ export function Dashboard({
     }
   }, [])
 
+  // SWR instant-open hydration from IndexedDB snapshot + live refresh
   useEffect(() => {
     let active = true
     let itemsSettled = false
@@ -694,9 +1112,7 @@ export function Dashboard({
       .then(() => { refsSettled = true })
       .catch((requestError) => setError(errorMessage(requestError)))
     void refreshItems(true).finally(() => { itemsSettled = true })
-    return () => {
-      active = false
-    }
+    return () => { active = false }
   }, [refreshItems, refreshReferences])
 
   useEffect(() => {
@@ -711,7 +1127,7 @@ export function Dashboard({
 
   useEffect(() => {
     const synced = () => {
-      void Promise.all([refreshReferences(), refreshItems()])
+      void Promise.all([refreshReferences(), refreshItems(true)])
     }
     window.addEventListener('offline-sync-complete', synced)
     return () => window.removeEventListener('offline-sync-complete', synced)
@@ -725,12 +1141,16 @@ export function Dashboard({
   }, [categories, filters.category])
 
   useEffect(() => {
-    try {
-      localStorage.setItem(SORT_STORAGE_KEY, filters.sort)
-    } catch {
-      // Sorting still works for the current tab.
-    }
+    try { localStorage.setItem(SORT_STORAGE_KEY, filters.sort) } catch { /* ignore */ }
   }, [filters.sort])
+
+  useEffect(() => {
+    try { localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode) } catch { /* ignore */ }
+  }, [viewMode])
+
+  useEffect(() => {
+    try { localStorage.setItem(SIDEBAR_STORAGE_KEY, sidebarCollapsed ? '1' : '0') } catch { /* ignore */ }
+  }, [sidebarCollapsed])
 
   useEffect(() => {
     setSelectedIds((current) => new Set([...current].filter((id) => items.some((item) => item.id === id))))
@@ -742,28 +1162,12 @@ export function Dashboard({
     return () => window.clearTimeout(timer)
   }, [undoDelete])
 
-  useEffect(() => {
-    if (!desktopAddOpen) return
-    const close = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null
-      if (!target?.closest('.header-add-button, .desktop-add-menu')) setDesktopAddOpen(false)
-    }
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setDesktopAddOpen(false)
-    }
-    document.addEventListener('pointerdown', close)
-    document.addEventListener('keydown', escape)
-    return () => {
-      document.removeEventListener('pointerdown', close)
-      document.removeEventListener('keydown', escape)
-    }
-  }, [desktopAddOpen])
-
+  // URL query ?add=link, ?open=, and #quick-clipboard
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get('add') === 'link' && params.get('url')) {
       setOverlay({
-        type: 'link',
+        type: 'smart-add',
         initial: {
           url: params.get('url') || '',
           title: params.get('title') || ''
@@ -776,7 +1180,8 @@ export function Dashboard({
     if (openId) {
       void api<LibraryItem>('/api/items/' + encodeURIComponent(openId)).then((item) => {
         if (item.trashedAt) {
-          setFilters((current) => ({ ...current, trash: 'only', status: 'all' }))
+          setTodayOverdueOnly(false)
+          setFilters((current) => ({ ...current, trash: 'only', status: 'all', priority: 'all', category: '' }))
           notifyError('这个条目在回收站中，可先恢复')
         } else {
           setOverlay({ type: 'edit', item })
@@ -790,61 +1195,75 @@ export function Dashboard({
       window.history.replaceState({}, '', window.location.pathname + window.location.search)
       void quickSaveClipboard(clipboardValue)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Global "/" search focus + global paste/drag-drop to open SmartAddModal
   useEffect(() => {
     function editableTarget(target: EventTarget | null) {
       const element = target as HTMLElement | null
       return Boolean(element?.closest('input, textarea, select, [contenteditable="true"]'))
     }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (overlay || focusMode || memoOpen) return
+      if (event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey && !editableTarget(event.target)) {
+        event.preventDefault()
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select()
+      }
+    }
     function handlePaste(event: ClipboardEvent) {
-      if (overlay || editableTarget(event.target)) return
+      if (overlay || focusMode || memoOpen || editableTarget(event.target)) return
       const files = Array.from(event.clipboardData?.files || []).filter((file) => file.type.startsWith('image/'))
       if (files.length) {
         event.preventDefault()
         const result = validateImageFiles(files)
         if (result.error) notifyError(result.error)
-        if (result.accepted.length) setOverlay({ type: 'images', files: result.accepted })
+        if (result.accepted.length) setOverlay({ type: 'smart-add', initial: { files: result.accepted } })
         return
       }
       if (!event.clipboardData) return
-      const nextOverlay = overlayFromTextTransfer(event.clipboardData)
-      if (nextOverlay) {
+      const initial = smartInitialFromTransfer(event.clipboardData)
+      if (initial) {
         event.preventDefault()
-        setOverlay(nextOverlay)
+        setOverlay({ type: 'smart-add', initial })
       }
     }
     function handleDragOver(event: DragEvent) {
-      if (!overlay && event.dataTransfer?.types.some((type) => (
+      if (!overlay && !focusMode && !memoOpen && event.dataTransfer?.types.some((type) => (
         type === 'Files' || type === 'text/plain' || type === 'text/uri-list'
-      ))) event.preventDefault()
+      ))) {
+        event.preventDefault()
+      }
     }
     function handleDrop(event: DragEvent) {
-      if (overlay) return
+      if (overlay || focusMode || memoOpen) return
       const files = Array.from(event.dataTransfer?.files || [])
       if (files.length) {
         event.preventDefault()
         const result = validateImageFiles(files)
         if (result.error) notifyError(result.error)
-        if (result.accepted.length) setOverlay({ type: 'images', files: result.accepted })
+        if (result.accepted.length) setOverlay({ type: 'smart-add', initial: { files: result.accepted } })
         return
       }
       if (!event.dataTransfer) return
-      const nextOverlay = overlayFromTextTransfer(event.dataTransfer)
-      if (nextOverlay) {
+      const initial = smartInitialFromTransfer(event.dataTransfer)
+      if (initial) {
         event.preventDefault()
-        setOverlay(nextOverlay)
+        setOverlay({ type: 'smart-add', initial })
       }
     }
+    document.addEventListener('keydown', handleKeyDown)
     document.addEventListener('paste', handlePaste)
     window.addEventListener('dragover', handleDragOver)
     window.addEventListener('drop', handleDrop)
     return () => {
+      document.removeEventListener('keydown', handleKeyDown)
       document.removeEventListener('paste', handlePaste)
       window.removeEventListener('dragover', handleDragOver)
       window.removeEventListener('drop', handleDrop)
     }
-  }, [overlay])
+  }, [focusMode, memoOpen, overlay])
 
   const groups = useMemo<DashboardGroup[]>(() => {
     if (filters.trash === 'only') {
@@ -863,9 +1282,32 @@ export function Dashboard({
     if (filters.sort === 'smart') {
       return smartDashboardGroups(items, chinaToday())
     }
+    if (filters.sort === 'planned_date') {
+      const planned = new Map<string, LibraryItem[]>()
+      const unplanned: LibraryItem[] = []
+      const today = chinaToday()
+      items.forEach((item) => {
+        if (item.plannedFor) {
+          planned.set(item.plannedFor, [...(planned.get(item.plannedFor) || []), item])
+        } else {
+          unplanned.push(item)
+        }
+      })
+      const list: DashboardGroup[] = Array.from(planned.entries()).map(([key, groupItems]) => ({
+        key: 'plan-' + key,
+        label: plannedDateLabel(key, today),
+        date: key,
+        items: groupItems
+      }))
+      if (unplanned.length) {
+        list.push({ key: 'plan-none', label: '未安排日期', date: '', items: unplanned })
+      }
+      return list
+    }
     const result = new Map<string, LibraryItem[]>()
     items.forEach((item) => {
-      const key = dayKey(item.createdAt)
+      const ts = filters.sort === 'recently_completed' ? (item.completedAt || item.createdAt) : item.createdAt
+      const key = dayKey(ts)
       result.set(key, [...(result.get(key) || []), item])
     })
     return Array.from(result.entries()).map(([key, groupItems]) => ({
@@ -877,14 +1319,54 @@ export function Dashboard({
   }, [filters.sort, filters.trash, items])
 
   async function reloadAll() {
-    await Promise.all([refreshReferences(), refreshItems()])
+    await Promise.all([refreshReferences(), refreshItems(true)])
   }
 
-  async function itemSaved() {
+  function shouldAutoGenerateCover(item: LibraryItem, prefs: AppPreferences) {
+    if (!prefs.aiCoverAuto || !prefs.aiImageApiKeySet) return false
+    if (item.kind !== 'link' && item.kind !== 'text') return false
+    return !item.assets.some((asset) => asset.role === 'web_cover' || asset.role === 'gallery')
+  }
+
+  const generateItemCover = useCallback(async (
+    item: LibraryItem,
+    options?: { auto?: boolean; configuredOverride?: boolean }
+  ) => {
+    if (generatingCoverRef.current.has(item.id)) return
+    const configured = options?.configuredOverride ?? Boolean(preferencesRef.current.aiImageApiKeySet)
+    if (!configured) {
+      if (!options?.auto) {
+        notifyError('请先在「账号设置」中配置 AI 生图 API Key')
+        setOverlay({ type: 'account' })
+      }
+      return
+    }
+    generatingCoverRef.current.add(item.id)
+    setGeneratingCoverIds(new Set(generatingCoverRef.current))
+    if (!options?.auto) showToast('info', '正在生成 AI 封面…')
+    try {
+      const updated = await jsonRequest<LibraryItem>(`/api/items/${item.id}/generate-cover`, 'POST', {})
+      setAllItems((current) => current.map((entry) => entry.id === item.id ? updated : entry))
+      notifySuccess('AI 封面已生成')
+    } catch (requestError) {
+      if (!options?.auto) notifyError(errorMessage(requestError))
+    } finally {
+      generatingCoverRef.current.delete(item.id)
+      setGeneratingCoverIds(new Set(generatingCoverRef.current))
+    }
+  }, [])
+
+  async function itemSaved(saved?: LibraryItem, triggerAutoCover = false) {
     setOverlay(null)
     setActiveDraft(null)
+    if (saved) {
+      setAllItems((current) => [saved, ...current.filter((entry) => entry.id !== saved.id)])
+    }
     await reloadAll()
     notifySuccess('已保存')
+    if (triggerAutoCover && saved && shouldAutoGenerateCover(saved, preferencesRef.current)) {
+      void generateItemCover(saved, { auto: true })
+    }
   }
 
   async function quickSaveClipboard(rawValue: string) {
@@ -903,7 +1385,8 @@ export function Dashboard({
       const categoryId = latestCategories.some((category) => category.id === latestPreferences.quickSaveCategoryId)
         ? latestPreferences.quickSaveCategoryId
         : null
-      const webUrl = asWebUrl(value)
+      const webUrl = parseWebUrl(value)
+      let saved: LibraryItem
       if (webUrl) {
         let title = hostLabel(webUrl)
         let coverUrl = ''
@@ -912,27 +1395,33 @@ export function Dashboard({
           title = metadata.title || title
           coverUrl = metadata.coverUrl || ''
         } catch {
-          // A readable title is helpful but never blocks one-tap saving.
+          // Never block quick clipboard save when metadata fails.
         }
         const form = new FormData()
         form.set('url', webUrl)
         form.set('title', title)
         form.set('categoryId', categoryId || '')
         form.set('coverUrl', coverUrl)
-        await api<LibraryItem>('/api/items/link', { method: 'POST', body: form })
+        saved = await api<LibraryItem>('/api/items/link', { method: 'POST', body: form })
       } else {
-        await jsonRequest<LibraryItem>('/api/items/text', 'POST', {
+        saved = await jsonRequest<LibraryItem>('/api/items/text', 'POST', {
           title: shortPastedTitle(value),
           categoryId
         })
       }
       await reloadAll()
       notifySuccess(webUrl ? '剪贴板网址已保存' : '剪贴板文字已保存')
+      if (shouldAutoGenerateCover(saved, latestPreferences)) {
+        void generateItemCover(saved, {
+          auto: true,
+          configuredOverride: Boolean(latestPreferences.aiImageApiKeySet)
+        })
+      }
     } catch (requestError) {
       if (requestError instanceof ApiRequestError && requestError.status === 409) {
         const details = requestError.details as { existingId?: string; trashed?: boolean } | undefined
         notifyError(details?.trashed ? '这个网址已在回收站中，可先恢复原条目' : '这个网址已经保存过了')
-        if (details?.trashed) setFilters((current) => ({ ...current, trash: 'only', status: 'all' }))
+        if (details?.trashed) selectQuickView('trash')
         return
       }
       notifyError(errorMessage(requestError))
@@ -940,12 +1429,12 @@ export function Dashboard({
   }
 
   async function readClipboardAndSave() {
-    setMobilePanel(null)
+    setMobileMoreOpen(false)
     try {
       if (!navigator.clipboard?.readText) throw new Error('当前浏览器不允许读取剪贴板')
       await quickSaveClipboard(await navigator.clipboard.readText())
     } catch (requestError) {
-      notifyError(errorMessage(requestError) + '。请允许剪贴板权限，或在首页空白处直接粘贴。')
+      notifyError(errorMessage(requestError) + '。请允许剪贴板权限，或在页面空白处直接粘贴。')
     }
   }
 
@@ -1008,7 +1497,7 @@ export function Dashboard({
       if (res?.item) {
         setAllItems((current) => current.map((entry) => entry.id === item.id ? res.item! : entry))
       }
-      setUndoDelete({ ids: [item.id], label: '“' + item.title + '”已移到回收站' })
+      setUndoDelete({ ids: [item.id], label: `“${item.title}”已移到回收站` })
       return true
     } catch (requestError) {
       setAllItems((current) => current.map((entry) => entry.id === item.id ? previous : entry))
@@ -1034,7 +1523,7 @@ export function Dashboard({
   }
 
   async function permanentDeleteItem(item: LibraryItem) {
-    if (!window.confirm('确定彻底删除“' + item.title + '”吗？相关图片也会永久删除，无法撤销。')) return false
+    if (!window.confirm(`确定彻底删除“${item.title}”吗？相关图片也会永久删除，无法撤销。`)) return false
     const previous = item
     setAllItems((current) => current.filter((entry) => entry.id !== item.id))
     try {
@@ -1084,8 +1573,8 @@ export function Dashboard({
       const failedIds = new Set((result.failed || []).map((entry) => entry.id))
       setSelectedIds(failedIds)
       await reloadAll()
-      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条没有处理成功，已保留选择，可再次重试。')
-      else notifySuccess(label + '（' + result.updated + ' 条）')
+      if (failedIds.size) notifyError(`有 ${failedIds.size} 条未能处理，已保留选择。`)
+      else notifySuccess(`${label}（${result.updated} 条）`)
       return failedIds.size === 0
     } catch (requestError) {
       notifyError(errorMessage(requestError))
@@ -1101,7 +1590,6 @@ export function Dashboard({
     setBulkBusy(true)
     try {
       const result = await jsonRequest<{
-        updated: number
         deleted: number
         succeededIds?: string[]
         failed?: Array<{ id: string; error: string }>
@@ -1109,8 +1597,8 @@ export function Dashboard({
       const failedIds = new Set((result.failed || []).map((entry) => entry.id))
       setSelectedIds(failedIds)
       await reloadAll()
-      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条未能移入回收站，已保留选择。')
-      else setUndoDelete({ ids: result.succeededIds || ids, label: '已将 ' + result.deleted + ' 条移到回收站' })
+      if (failedIds.size) notifyError(`有 ${failedIds.size} 条未能移入回收站，已保留选择。`)
+      else setUndoDelete({ ids: result.succeededIds || ids, label: `已将 ${result.deleted} 条移到回收站` })
     } catch (requestError) {
       notifyError(errorMessage(requestError))
     } finally {
@@ -1123,14 +1611,14 @@ export function Dashboard({
     if (!ids.length || bulkBusy) return
     setBulkBusy(true)
     try {
-      const result = await jsonRequest<{ updated: number; succeededIds?: string[]; failed?: Array<{ id: string; error: string }> }>(
+      const result = await jsonRequest<{ updated: number; failed?: Array<{ id: string; error: string }> }>(
         '/api/items/bulk', 'POST', { ids, restore: true }
       )
       const failedIds = new Set((result.failed || []).map((entry) => entry.id))
       setSelectedIds(failedIds)
       await reloadAll()
-      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条未能恢复，已保留选择。')
-      else notifySuccess('已恢复 ' + result.updated + ' 条')
+      if (failedIds.size) notifyError(`有 ${failedIds.size} 条未能恢复，已保留选择。`)
+      else notifySuccess(`已恢复 ${result.updated} 条`)
     } catch (requestError) {
       notifyError(errorMessage(requestError))
     } finally {
@@ -1141,17 +1629,17 @@ export function Dashboard({
   async function runBulkPermanentDelete() {
     const ids = [...selectedIds]
     if (!ids.length || bulkBusy) return
-    if (!window.confirm('确定彻底删除选中的 ' + ids.length + ' 条内容吗？相关图片也会永久删除，无法撤销。')) return
+    if (!window.confirm(`确定彻底删除选中的 ${ids.length} 条内容吗？相关图片也会永久删除，无法撤销。`)) return
     setBulkBusy(true)
     try {
-      const result = await jsonRequest<{ deleted: number; succeededIds?: string[]; failed?: Array<{ id: string; error: string }> }>(
+      const result = await jsonRequest<{ deleted: number; failed?: Array<{ id: string; error: string }> }>(
         '/api/items/bulk', 'POST', { ids, permanentDelete: true }
       )
       const failedIds = new Set((result.failed || []).map((entry) => entry.id))
       setSelectedIds(failedIds)
       await reloadAll()
-      if (failedIds.size) notifyError('有 ' + failedIds.size + ' 条未能彻底删除，已保留选择。')
-      else notifySuccess('已彻底删除 ' + result.deleted + ' 条')
+      if (failedIds.size) notifyError(`有 ${failedIds.size} 条未能彻底删除，已保留选择。`)
+      else notifySuccess(`已彻底删除 ${result.deleted} 条`)
     } catch (requestError) {
       notifyError(errorMessage(requestError))
     } finally {
@@ -1160,8 +1648,7 @@ export function Dashboard({
   }
 
   async function emptyTrash() {
-    const count = allItems.filter((item) => item.trashedAt).length
-    if (!count || !window.confirm('确定清空回收站中的 ' + count + ' 条内容吗？相关图片也会永久删除，无法撤销。')) return
+    if (!counts.trash || !window.confirm(`确定清空回收站中的 ${counts.trash} 条内容吗？相关图片也会永久删除，无法撤销。`)) return
     try {
       await jsonRequest('/api/items/trash/empty', 'POST', { confirmed: true })
       await reloadAll()
@@ -1173,9 +1660,6 @@ export function Dashboard({
 
   async function restoreActiveDraft() {
     if (!activeDraft) return
-    if (activeDraft.type === 'link') setOverlay({ type: 'link' })
-    if (activeDraft.type === 'text') setOverlay({ type: 'text', initialText: '' })
-    if (activeDraft.type === 'images') setOverlay({ type: 'images', files: [] })
     if (activeDraft.type === 'edit' && activeDraft.itemId) {
       try {
         const item = await api<LibraryItem>('/api/items/' + activeDraft.itemId)
@@ -1183,7 +1667,9 @@ export function Dashboard({
       } catch (requestError) {
         notifyError(errorMessage(requestError))
       }
+      return
     }
+    setOverlay({ type: 'smart-add', initial: { draftKey: activeDraft.key } })
   }
 
   async function discardActiveDraft() {
@@ -1198,12 +1684,12 @@ export function Dashboard({
       setActiveDraft(null)
       if (item.trashedAt) {
         setOverlay(null)
-        setFilters((current) => ({ ...current, trash: 'only', status: 'all' }))
+        selectQuickView('trash')
         notifyError('这个网址在回收站中，可先恢复原条目')
       } else {
         setOverlay({ type: 'edit', item })
       }
-      await discardDraft('new-link')
+      await discardDraft('smart-add')
     } catch (requestError) {
       notifyError(errorMessage(requestError))
     }
@@ -1225,6 +1711,24 @@ export function Dashboard({
     }
   }
 
+  async function submitSidebarCategory() {
+    const name = sidebarNewCatName.trim()
+    if (!name || sidebarCreatingCat) return
+    setSidebarCreatingCat(true)
+    try {
+      const color = NEW_CATEGORY_COLORS[categories.length % NEW_CATEGORY_COLORS.length]
+      const created = await createCategory(name, color)
+      setSidebarNewCatName('')
+      setSidebarAddingCat(false)
+      selectCategory(created.id)
+      notifySuccess(`已创建类别“${created.name}”`)
+    } catch (requestError) {
+      notifyError(errorMessage(requestError))
+    } finally {
+      setSidebarCreatingCat(false)
+    }
+  }
+
   function closeEditor() {
     setOverlay(null)
     void reloadAll()
@@ -1233,6 +1737,134 @@ export function Dashboard({
   function dropOnMain(event: ReactDragEvent) {
     if (event.dataTransfer.files.length) event.preventDefault()
   }
+
+  function exitSelection() {
+    setSelectionMode(false)
+    setSelectedIds(new Set())
+  }
+
+  function selectQuickView(view: 'pending' | 'today' | 'planned' | 'starred' | 'completed' | 'trash') {
+    setMemoOpen(false)
+    setMobileMoreOpen(false)
+    exitSelection()
+    if (view === 'pending') {
+      setTodayOverdueOnly(false)
+      setFilters((current) => ({
+        ...current,
+        trash: 'active',
+        status: 'pending',
+        priority: 'all',
+        category: '',
+        sort: current.sort === 'recently_completed' ? 'smart' : current.sort
+      }))
+    } else if (view === 'today') {
+      setTodayOverdueOnly(true)
+      setFilters((current) => ({
+        ...current,
+        trash: 'active',
+        status: 'pending',
+        priority: 'planned',
+        category: '',
+        sort: 'planned_date'
+      }))
+    } else if (view === 'planned') {
+      setTodayOverdueOnly(false)
+      setFilters((current) => ({
+        ...current,
+        trash: 'active',
+        status: 'pending',
+        priority: 'planned',
+        category: '',
+        sort: 'planned_date'
+      }))
+    } else if (view === 'starred') {
+      setTodayOverdueOnly(false)
+      setFilters((current) => ({
+        ...current,
+        trash: 'active',
+        status: 'all',
+        priority: 'starred',
+        category: ''
+      }))
+    } else if (view === 'completed') {
+      setTodayOverdueOnly(false)
+      setFilters((current) => ({
+        ...current,
+        trash: 'active',
+        status: 'completed',
+        priority: 'all',
+        category: '',
+        sort: 'recently_completed'
+      }))
+    } else if (view === 'trash') {
+      setTodayOverdueOnly(false)
+      setFilters((current) => ({
+        ...current,
+        trash: 'only',
+        status: 'all',
+        priority: 'all',
+        category: ''
+      }))
+    }
+  }
+
+  function selectCategory(categoryId: string) {
+    setMemoOpen(false)
+    setTodayOverdueOnly(false)
+    exitSelection()
+    setFilters((current) => ({
+      ...current,
+      trash: 'active',
+      priority: 'all',
+      status: current.trash === 'only' || current.status === 'completed' ? 'pending' : current.status,
+      category: categoryId
+    }))
+  }
+
+  function resetFilters(showAll = false) {
+    setTodayOverdueOnly(false)
+    setFilters({
+      ...defaultFilters,
+      trash: filters.trash,
+      status: filters.trash === 'only' || showAll ? 'all' : 'pending'
+    })
+  }
+
+  const activeNavTab: 'list' | 'plan' | 'memo' = memoOpen
+    ? 'memo'
+    : (filters.trash === 'active' && filters.priority === 'planned' && !todayOverdueOnly)
+      ? 'plan'
+      : 'list'
+
+  const activeQuickView = filters.trash === 'only'
+    ? 'trash'
+    : todayOverdueOnly
+      ? 'today'
+      : filters.priority === 'starred' && !filters.category
+        ? 'starred'
+        : filters.status === 'completed' && !filters.category && filters.priority === 'all'
+          ? 'completed'
+          : filters.status === 'pending' && !filters.category && filters.priority === 'all'
+            ? 'pending'
+            : ''
+
+  const viewTitle = filters.trash === 'only'
+    ? '回收站'
+    : todayOverdueOnly
+      ? '今日与逾期'
+      : filters.priority === 'planned'
+        ? '计划处理'
+        : filters.priority === 'starred'
+          ? '星标'
+          : filters.category === 'uncategorized'
+            ? '未分类'
+            : filters.category
+              ? (categories.find((category) => category.id === filters.category)?.name || '类别')
+              : filters.status === 'completed'
+                ? '已完成'
+                : filters.status === 'all'
+                  ? '全部条目'
+                  : '全部待处理'
 
   const queuedCount = offlineState.pendingCount + offlineState.failedCount
   const displayedSyncPhase = !offlineState.online
@@ -1249,715 +1881,983 @@ export function Dashboard({
       : queuedCount
         ? `${queuedCount} 项等待同步`
         : (offlineState.lastSyncedAt ? '数据已同步' : (syncStatus.message || '数据已就绪'))
-  const activeFilterCount = [
-    Boolean(filters.q),
-    filters.status !== (filters.trash === 'only' ? 'all' : 'pending'),
-    filters.kind !== 'all',
-    filters.priority !== 'all',
-    Boolean(filters.category),
-    Boolean(filters.date),
-    filters.sort !== 'smart'
-  ].filter(Boolean).length
-  const viewTotal = allItems.filter((item) => filters.trash === 'only' ? Boolean(item.trashedAt) : !item.trashedAt).length
-  const trashTotal = allItems.filter((item) => item.trashedAt).length
-  const filterChips = [
-    filters.status !== 'all' ? { key: 'status', label: filters.status === 'pending' ? '待处理' : '已完成' } : null,
-    filters.q ? { key: 'q', label: '搜索：' + filters.q } : null,
-    filters.kind !== 'all' ? { key: 'kind', label: filters.kind === 'link' ? '网页' : filters.kind === 'text' ? '文本' : '图片' } : null,
-    filters.priority !== 'all' ? { key: 'priority', label: filters.priority === 'starred' ? '星标' : '计划处理' } : null,
-    filters.category ? {
-      key: 'category',
-      label: filters.category === 'uncategorized'
-        ? '未分类'
-        : '类别：' + (categories.find((category) => category.id === filters.category)?.name || '已删除类别')
-    } : null,
-    filters.date ? { key: 'date', label: '保存日期：' + filters.date } : null,
-    filters.sort !== 'smart' ? { key: 'sort', label: '自定义排序' } : null
-  ].filter(Boolean) as Array<{ key: string; label: string }>
 
-  function resetFilters(showAll = false) {
-    setFilters({
-      ...defaultFilters,
-      trash: filters.trash,
-      status: filters.trash === 'only' || showAll ? 'all' : 'pending'
-    })
-  }
+  const viewTotal = filters.trash === 'only' ? counts.trash : (counts.pending + counts.completed)
+  const hasSecondaryFilters = Boolean(filters.q || filters.kind !== 'all' || filters.date || filters.category || todayOverdueOnly || filters.priority !== 'all')
 
-  function switchLibraryView(next: 'active' | 'only') {
-    setFilters((current) => ({ ...current, trash: next, status: next === 'only' ? 'all' : 'pending' }))
-    setSelectionMode(false)
-    setSelectedIds(new Set())
-    setBulkPanelOpen(false)
-    setMobilePanel(null)
-  }
+  const aiCoverConfigured = Boolean(preferences.aiImageApiKeySet)
 
-  function removeFilterChip(key: string) {
-    setFilters((current) => {
-      if (key === 'status') return { ...current, status: 'all' }
-      if (key === 'q') return { ...current, q: '' }
-      if (key === 'kind') return { ...current, kind: 'all' }
-      if (key === 'priority') return { ...current, priority: 'all' }
-      if (key === 'category') return { ...current, category: '' }
-      if (key === 'date') return { ...current, date: '' }
-      if (key === 'sort') return { ...current, sort: 'smart' }
-      return current
-    })
-  }
-
-  function openFromMobile(nextOverlay: NonNullable<Overlay>) {
-    setMobilePanel(null)
-    setOverlay(nextOverlay)
-  }
-
-  const renderItemList = (groupItems: LibraryItem[]) => (
-    <div className="item-list">
+  const renderItems = (groupItems: LibraryItem[]) => (
+    <div className={viewMode === 'gallery' ? 'fig-gallery-grid' : 'fig-list'}>
       {groupItems.map((item) => (
-        <ItemCard
+        <ItemEntry
           key={item.id}
           item={item}
+          viewMode={viewMode === 'gallery' ? 'gallery' : 'list'}
           categories={categories}
           selectionMode={selectionMode}
           trashMode={filters.trash === 'only'}
           selected={selectedIds.has(item.id)}
           busy={busyItems.has(item.id)}
+          generatingCover={generatingCoverIds.has(item.id)}
           retry={retryItems[item.id]}
+          now={now}
           onEdit={() => setOverlay({ type: 'edit', item })}
           onPatch={(changes, label) => patchItem(item, changes, label)}
+          onCreateCategory={createCategory}
           onSelect={(selected) => toggleSelection(item.id, selected)}
           onDelete={() => deleteItem(item)}
           onRestore={() => restoreItem(item)}
           onPermanentDelete={() => permanentDeleteItem(item)}
+          onGenerateCover={() => void generateItemCover(item)}
           onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
-          now={now}
         />
       ))}
     </div>
   )
 
   return (
-    <div className="app-shell" onDragOver={dropOnMain}>
-      <header className="app-header">
-        <div className="brand-lockup">
-          {theme === 'animal-island' && <img src={islandBag} alt="" className="brand-icon" />}
-          <div>
-            <span className="brand-kicker">{themeDefinition.dashboardKicker}</span>
-            <h1>Do It Laaaaaater</h1>
-            <p>{themeDefinition.dashboardDescription}</p>
-          </div>
-        </div>
-        <nav className="header-actions" aria-label="主要操作">
-          <Button
-            type="primary"
-            size="middle"
-            icon={<AppIcon name="add" size={26} />}
-            className="header-add-button"
-            aria-expanded={desktopAddOpen}
-            onClick={() => setDesktopAddOpen((open) => !open)}
-          >
-            添加
-          </Button>
-          {desktopAddOpen && (
-            <div className="desktop-add-menu" role="menu" aria-label="选择添加类型">
-              <button type="button" role="menuitem" onClick={() => { setDesktopAddOpen(false); setOverlay({ type: 'link' }) }}>
-                <AppIcon name="link" size={22} /><span><strong>添加网页</strong><small>自动读取标题和封面</small></span>
-              </button>
-              <button type="button" role="menuitem" onClick={() => { setDesktopAddOpen(false); setOverlay({ type: 'text', initialText: '' }) }}>
-                <AppIcon name="text" size={22} /><span><strong>添加文本</strong><small>保存一段文字</small></span>
-              </button>
-              <button type="button" role="menuitem" onClick={() => { setDesktopAddOpen(false); setOverlay({ type: 'images', files: [] }) }}>
-                <AppIcon name="image" size={22} /><span><strong>添加图片</strong><small>一张或多张图片成组</small></span>
-              </button>
-            </div>
-          )}
-          <Button
-            size="middle"
-            icon={<AppIcon name="memo" size={26} />}
-            onClick={() => setMemoOpen(true)}
-          >
-            备忘录
-          </Button>
-          <Button
-            size="middle"
-            icon={<AppIcon name="bookmark" size={26} />}
-            onClick={() => setOverlay({ type: 'bookmarklet' })}
-          >
-            书签按钮
-          </Button>
-          <Button
-            size="middle"
-            icon={<AppIcon name="categories" size={26} />}
-            onClick={() => setOverlay({ type: 'categories' })}
-          >
-            类别管理
-          </Button>
-          <Button
-            size="middle"
-            icon={<AppIcon name="trash" size={26} />}
-            onClick={() => switchLibraryView(filters.trash === 'only' ? 'active' : 'only')}
-          >
-            {filters.trash === 'only' ? '返回清单' : `回收站${trashTotal ? ` ${trashTotal}` : ''}`}
-          </Button>
-          <ThemeControl />
-          <Button
-            size="middle"
-            icon={<AppIcon name="account" size={26} />}
-            onClick={() => setOverlay({ type: 'account' })}
-          >
-            账号
-          </Button>
-          <Button
-            size="middle"
-            icon={<AppIcon name="logout" size={26} />}
-            onClick={() => void logout()}
-          >
-            退出
-          </Button>
-        </nav>
-        <button
-          type="button"
-          className={`sync-indicator sync-${displayedSyncPhase}`}
-          aria-label={`${displayedSyncMessage}，查看同步详情`}
-          onClick={() => setOverlay({ type: 'sync' })}
-        >
-          <AppIcon
-            name={displayedSyncPhase === 'error' || displayedSyncPhase === 'offline' ? 'warning' : 'sync'}
-            size={17}
-          />
-          <span aria-live="polite">{displayedSyncMessage}</span>
-        </button>
-      </header>
+    <div className="fig-app" onDragOver={dropOnMain}>
+      {/* Flat 64px Top Header */}
+      <header className="fig-header">
+        <div className="fig-header-inner">
+          <div className="fig-header-left">
+            <button
+              type="button"
+              className="btn btn-icon fig-sidebar-toggle"
+              aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+              aria-expanded={!sidebarCollapsed}
+              onClick={() => setSidebarCollapsed((value) => !value)}
+            >
+              <AppIcon name="sidebar" size={18} />
+            </button>
 
-      <main className="main-content">
-        <div className="library-view-bar" role="navigation" aria-label="清单视图">
-          <button
-            type="button"
-            className={filters.trash === 'active' ? 'is-active' : ''}
-            onClick={() => switchLibraryView('active')}
-          >
-            <AppIcon name="focus" size={18} />阅读清单
-          </button>
-          <button
-            type="button"
-            className={filters.trash === 'only' ? 'is-active' : ''}
-            onClick={() => switchLibraryView('only')}
-          >
-            <AppIcon name="trash" size={18} />回收站{trashTotal ? `（${trashTotal}）` : ''}
-          </button>
-          {filters.trash === 'only' && trashTotal > 0 && (
-            <Button size="small" danger onClick={() => void emptyTrash()}>清空回收站</Button>
-          )}
-        </div>
-        <Card className="toolbar" pattern="default" aria-label="筛选和搜索">
-          <div className="toolbar-tabs">
-            <Tabs
-              aria-label="处理状态"
-              className="status-tabs"
-              activeKey={filters.status}
-              items={[
-                { key: 'pending', label: '待处理', children: null },
-                { key: 'completed', label: '已完成', children: null },
-                { key: 'all', label: '全部', children: null }
-              ]}
-              onChange={(value) => setFilters((current) => ({
-                ...current,
-                status: value as ItemFilters['status']
-              }))}
-            />
+            <button
+              type="button"
+              className="fig-brand"
+              onClick={() => selectQuickView('pending')}
+            >
+              <BrandMark size={22} />
+              <span className="fig-brand-name">Do It Laaaaaater</span>
+            </button>
+
+            <nav className="fig-nav-tabs" aria-label="主视图">
+              <button
+                type="button"
+                className={`fig-nav-tab${activeNavTab === 'list' ? ' is-active' : ''}`}
+                onClick={() => selectQuickView('pending')}
+              >
+                清单
+              </button>
+              <button
+                type="button"
+                className={`fig-nav-tab${activeNavTab === 'plan' ? ' is-active' : ''}`}
+                onClick={() => selectQuickView('planned')}
+              >
+                计划
+              </button>
+              <button
+                type="button"
+                className={`fig-nav-tab${activeNavTab === 'memo' ? ' is-active' : ''}`}
+                onClick={() => setMemoOpen(true)}
+              >
+                备忘录
+              </button>
+            </nav>
           </div>
-          <label className="search-field">
-            <span className="visually-hidden">搜索</span>
-            <Input
+
+          <div className="fig-header-search">
+            <AppIcon name="search" size={15} className="fig-search-icon" />
+            <input
+              ref={searchInputRef}
               type="search"
-              size="large"
-              shadow
-              allowClear
-              aria-label="搜索"
-              clearAriaLabel="清除搜索"
-              prefix={<AppIcon name="search" size={21} className="search-icon" />}
-              placeholder="搜索标题、网址、类别或图片名"
+              className="fig-search-input"
+              aria-label="全局搜索"
+              placeholder="搜索标题、网址、类别…"
               value={filters.q}
               onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
-              onClear={() => setFilters((current) => ({ ...current, q: '' }))}
-            />
-          </label>
-          <div className="filter-select advanced-filter">
-            <ThemeFilterSelect
-              theme={theme}
-              ariaLabel="内容类型"
-              value={filters.kind}
-              options={[
-                { key: 'all', label: '全部类型' },
-                { key: 'link', label: '网页' },
-                { key: 'text', label: '文本' },
-                { key: 'image_group', label: '图片' }
-              ]}
-              onChange={(value) => setFilters((current) => ({
-                ...current,
-                kind: value as ItemFilters['kind']
-              }))}
-            />
-          </div>
-          <div className="filter-select advanced-filter">
-            <ThemeFilterSelect
-              theme={theme}
-              ariaLabel="优先筛选"
-              value={filters.priority}
-              options={[
-                { key: 'all', label: '全部优先级' },
-                { key: 'planned', label: '计划处理' },
-                { key: 'starred', label: '星标' }
-              ]}
-              onChange={(value) => setFilters((current) => ({
-                ...current,
-                priority: value as ItemFilters['priority']
-              }))}
-            />
-          </div>
-          <div className="filter-select advanced-filter">
-            <ThemeFilterSelect
-              theme={theme}
-              ariaLabel="类别"
-              value={filters.category}
-              options={[
-                { key: '', label: '全部类别' },
-                { key: 'uncategorized', label: '未分类' },
-                ...categories.map((category) => ({ key: category.id, label: category.name }))
-              ]}
-              onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
-            />
-          </div>
-          <label className="date-field advanced-filter">
-            <span className="visually-hidden">保存日期</span>
-            <input
-              type="date"
-              aria-label="保存日期"
-              value={filters.date}
-              onChange={(event) => setFilters((current) => ({ ...current, date: event.target.value }))}
-            />
-          </label>
-          <div className="filter-select sort-select advanced-filter">
-            <ThemeFilterSelect
-              theme={theme}
-              ariaLabel="排序方式"
-              value={filters.sort}
-              options={[
-                { key: 'smart', label: '智能优先' },
-                { key: 'newest', label: '最近保存' },
-                { key: 'oldest', label: '最久未看' },
-                { key: 'recently_completed', label: '最近完成' },
-                { key: 'planned_date', label: '计划日期' }
-              ]}
-              onChange={(value) => setFilters((current) => ({
-                ...current,
-                sort: value as ItemFilters['sort']
-              }))}
-            />
-          </div>
-          <Button className="advanced-filter" size="small" type="dashed" onClick={() => resetFilters()}>清除筛选</Button>
-        </Card>
-
-        {activeDraft && (
-          <div className="draft-recovery notice notice-warning" role="status">
-            <div>
-              <strong>发现一份未完成草稿</strong>
-              <span>上次输入的文字和图片仍保存在这个浏览器中。</span>
-            </div>
-            <Button size="small" type="primary" onClick={() => void restoreActiveDraft()}>恢复草稿</Button>
-            <Button size="small" onClick={() => void discardActiveDraft()}>丢弃</Button>
-          </div>
-        )}
-        {error && <div className="notice notice-error" role="alert">{error}</div>}
-        <div className="result-summary">
-          <div className="result-count">
-            <span>{loading ? '正在加载…' : `显示 ${items.length} 条 · 当前视图共 ${viewTotal} 条`}</span>
-            {filters.trash !== 'only' && (
-            <Button
-              size="small"
-              type={focusMode ? 'primary' : 'default'}
-              icon={<AppIcon name="focus" size={18} />}
-              disabled={!items.length}
-              onClick={() => setFocusMode(true)}
-            >
-              开始处理
-            </Button>
-            )}
-            <Button
-              size="small"
-              icon={<AppIcon name="select" size={18} />}
-              onClick={() => {
-                setSelectionMode((value) => !value)
-                if (selectionMode) setSelectedIds(new Set())
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  if (filters.q) setFilters((current) => ({ ...current, q: '' }))
+                  else searchInputRef.current?.blur()
+                }
               }}
-            >
-              {selectionMode ? '退出选择' : '选择条目'}
-            </Button>
+            />
+            {filters.q ? (
+              <button
+                type="button"
+                className="fig-search-clear"
+                aria-label="清除搜索"
+                onClick={() => setFilters((current) => ({ ...current, q: '' }))}
+              >
+                <AppIcon name="close" size={13} />
+              </button>
+            ) : (
+              <kbd className="fig-search-kbd" aria-hidden="true">/</kbd>
+            )}
           </div>
-          <span className="muted">在空白处按 Ctrl+V，可直接添加图片、文字或网页链接</span>
+
+          <div className="fig-header-right">
+            <button
+              type="button"
+              className="btn btn-primary fig-add-btn"
+              onClick={() => setOverlay({ type: 'smart-add' })}
+            >
+              <AppIcon name="plus" size={15} />
+              <span>添加</span>
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-icon fig-sync-btn"
+              title={displayedSyncMessage}
+              aria-label={`${displayedSyncMessage}，点击管理离线缓存`}
+              onClick={() => setOverlay({ type: 'sync' })}
+            >
+              <span className={`fig-sync-dot is-${displayedSyncPhase}`} aria-hidden="true" />
+              {queuedCount > 0 && <span className="fig-sync-count">{queuedCount}</span>}
+            </button>
+
+            <button
+              ref={accountBtnRef}
+              type="button"
+              className="btn btn-icon fig-menu-trigger"
+              aria-label="账号与工具菜单"
+              aria-expanded={accountMenuOpen}
+              onClick={() => setAccountMenuOpen((value) => !value)}
+            >
+              <AppIcon name="user" size={17} />
+            </button>
+          </div>
         </div>
-        {filterChips.length > 0 && (
-          <div className="active-filter-chips" aria-label="当前筛选条件">
-            <span>当前条件</span>
-            {filterChips.map((chip) => (
-              <button key={chip.key} type="button" onClick={() => removeFilterChip(chip.key)} title="移除此条件">
-                {chip.label}<span aria-hidden="true">×</span>
+      </header>
+
+      {/* Account & Tools Dropdown */}
+      <AnchoredMenu
+        open={accountMenuOpen}
+        anchor={accountBtnRef.current}
+        label="账号与工具"
+        className="fig-account-menu"
+        onClose={() => setAccountMenuOpen(false)}
+      >
+        <div className="fig-menu-header">
+          <span className="fig-menu-email" title={userEmail}>{userEmail}</span>
+          <span className="fig-menu-sync">{displayedSyncMessage}</span>
+        </div>
+        <div className="fig-menu-divider" />
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item"
+          disabled={!items.length || filters.trash === 'only'}
+          onClick={() => {
+            setAccountMenuOpen(false)
+            setFocusMode(true)
+          }}
+        >
+          <AppIcon name="focus" size={15} />
+          <span>晚间专注处理</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item"
+          onClick={() => {
+            setAccountMenuOpen(false)
+            setOverlay({ type: 'bookmarklet' })
+          }}
+        >
+          <AppIcon name="bookmark" size={15} />
+          <span>书签按钮</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item"
+          onClick={() => {
+            setAccountMenuOpen(false)
+            setOverlay({ type: 'categories' })
+          }}
+        >
+          <AppIcon name="folder" size={15} />
+          <span>类别管理</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item"
+          onClick={() => {
+            setAccountMenuOpen(false)
+            setOverlay({ type: 'backup' })
+          }}
+        >
+          <AppIcon name="download" size={15} />
+          <span>数据备份与恢复</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item"
+          onClick={() => {
+            setAccountMenuOpen(false)
+            setOverlay({ type: 'sync' })
+          }}
+        >
+          <AppIcon name="sync" size={15} />
+          <span>离线缓存管理</span>
+          {queuedCount > 0 && <span className="fig-menu-count">{queuedCount}</span>}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item"
+          onClick={() => {
+            setAccountMenuOpen(false)
+            selectQuickView(filters.trash === 'only' ? 'pending' : 'trash')
+          }}
+        >
+          <AppIcon name="trash" size={15} />
+          <span>{filters.trash === 'only' ? '返回待处理清单' : '回收站'}</span>
+          {counts.trash > 0 && <span className="fig-menu-count">{counts.trash}</span>}
+        </button>
+        <div className="fig-menu-divider" />
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item"
+          onClick={() => {
+            setAccountMenuOpen(false)
+            setOverlay({ type: 'account' })
+          }}
+        >
+          <AppIcon name="settings" size={15} />
+          <span>账号设置</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item is-danger"
+          onClick={() => {
+            setAccountMenuOpen(false)
+            void logout()
+          }}
+        >
+          <AppIcon name="logout" size={15} />
+          <span>退出登录</span>
+        </button>
+      </AnchoredMenu>
+
+      {/* Mobile Horizontal Scrollable Category Pill Rail (<900px) */}
+      <nav className="fig-mobile-cats" aria-label="移动端快速类别">
+        <button
+          type="button"
+          className={`pill${activeQuickView === 'pending' && !filters.category ? ' is-active' : ''}`}
+          onClick={() => selectQuickView('pending')}
+        >
+          待处理 <span className="fig-mono">{counts.pending}</span>
+        </button>
+        <button
+          type="button"
+          className={`pill${activeQuickView === 'today' ? ' is-active' : ''}`}
+          onClick={() => selectQuickView('today')}
+        >
+          今日 <span className="fig-mono">{counts.todayOverdue}</span>
+        </button>
+        <button
+          type="button"
+          className={`pill${activeQuickView === 'starred' ? ' is-active' : ''}`}
+          onClick={() => selectQuickView('starred')}
+        >
+          星标 <span className="fig-mono">{counts.starred}</span>
+        </button>
+        <button
+          type="button"
+          className={`pill${filters.category === 'uncategorized' ? ' is-active' : ''}`}
+          onClick={() => selectCategory('uncategorized')}
+        >
+          <span className="cat-dot" style={{ backgroundColor: '#b5b5b5' }} aria-hidden="true" />
+          未分类
+        </button>
+        {categories.map((category) => (
+          <button
+            key={category.id}
+            type="button"
+            className={`pill${filters.category === category.id ? ' is-active' : ''}`}
+            onClick={() => selectCategory(category.id)}
+          >
+            <span className="cat-dot" style={{ backgroundColor: category.color }} aria-hidden="true" />
+            {category.name}
+          </button>
+        ))}
+      </nav>
+
+      {/* Main Shell: Collapsible Left Sidebar + Workspace */}
+      <div className={`fig-shell${sidebarCollapsed ? ' is-sidebar-collapsed' : ''}`}>
+        <aside className="fig-sidebar" aria-label="侧边导航">
+          <div className="fig-sidebar-section">
+            <div className="fig-sidebar-label">视图</div>
+            <button
+              type="button"
+              className={`fig-sidebar-item${activeQuickView === 'pending' ? ' is-active' : ''}`}
+              onClick={() => selectQuickView('pending')}
+            >
+              <AppIcon name="inbox" size={16} />
+              <span className="fig-sidebar-name">全部待处理</span>
+              <span className="fig-sidebar-count">{counts.pending}</span>
+            </button>
+            <button
+              type="button"
+              className={`fig-sidebar-item${activeQuickView === 'today' ? ' is-active' : ''}`}
+              onClick={() => selectQuickView('today')}
+            >
+              <AppIcon name="calendar" size={16} />
+              <span className="fig-sidebar-name">今日与逾期</span>
+              <span className="fig-sidebar-count">{counts.todayOverdue}</span>
+            </button>
+            <button
+              type="button"
+              className={`fig-sidebar-item${activeQuickView === 'starred' ? ' is-active' : ''}`}
+              onClick={() => selectQuickView('starred')}
+            >
+              <AppIcon name="star" size={16} />
+              <span className="fig-sidebar-name">星标</span>
+              <span className="fig-sidebar-count">{counts.starred}</span>
+            </button>
+            <button
+              type="button"
+              className={`fig-sidebar-item${activeQuickView === 'completed' ? ' is-active' : ''}`}
+              onClick={() => selectQuickView('completed')}
+            >
+              <AppIcon name="checkCircle" size={16} />
+              <span className="fig-sidebar-name">已完成</span>
+              <span className="fig-sidebar-count">{counts.completed}</span>
+            </button>
+            <button
+              type="button"
+              className={`fig-sidebar-item${activeQuickView === 'trash' ? ' is-active' : ''}`}
+              onClick={() => selectQuickView('trash')}
+            >
+              <AppIcon name="trash" size={16} />
+              <span className="fig-sidebar-name">回收站</span>
+              <span className="fig-sidebar-count">{counts.trash}</span>
+            </button>
+          </div>
+
+          <div className="fig-sidebar-section">
+            <div className="fig-sidebar-label-row">
+              <span className="fig-sidebar-label">类别</span>
+              <button
+                type="button"
+                className="btn btn-icon fig-sidebar-add-icon"
+                aria-label="新建类别"
+                onClick={() => setSidebarAddingCat((value) => !value)}
+              >
+                <AppIcon name="plus" size={14} />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              className={`fig-sidebar-item${filters.category === 'uncategorized' && filters.trash === 'active' ? ' is-active' : ''}`}
+              onClick={() => selectCategory('uncategorized')}
+            >
+              <span className="cat-dot" style={{ backgroundColor: '#b5b5b5' }} aria-hidden="true" />
+              <span className="fig-sidebar-name">未分类</span>
+              <span className="fig-sidebar-count">{counts.uncategorized}</span>
+            </button>
+
+            {categories.map((category) => (
+              <button
+                key={category.id}
+                type="button"
+                className={`fig-sidebar-item${filters.category === category.id && filters.trash === 'active' ? ' is-active' : ''}`}
+                onClick={() => selectCategory(category.id)}
+              >
+                <span className="cat-dot" style={{ backgroundColor: category.color }} aria-hidden="true" />
+                <span className="fig-sidebar-name">{category.name}</span>
+                <span className="fig-sidebar-count">{counts.byCategory.get(category.id) || 0}</span>
               </button>
             ))}
-            <button type="button" className="clear-filter-chip" onClick={() => resetFilters()}>清除全部条件</button>
-          </div>
-        )}
 
-        {selectionMode && (
-          <div className="bulk-toolbar desktop-bulk-toolbar" role="toolbar" aria-label="批量操作">
-            <strong>已选 {selectedIds.size} 条</strong>
-            <Button size="small" disabled={!items.length || bulkBusy} onClick={() => setSelectedIds(new Set(items.map((item) => item.id)))}>全选当前结果</Button>
-            <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => setSelectedIds(new Set())}>取消全选</Button>
-            <span className="bulk-divider" />
-            {filters.trash === 'only' ? (
-              <>
-                <Button size="small" type="primary" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="restore" size={16} />} onClick={() => void runBulkRestore()}>恢复</Button>
-                <Button size="small" danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="delete" size={16} />} onClick={() => void runBulkPermanentDelete()}>彻底删除</Button>
-              </>
+            {sidebarAddingCat ? (
+              <form
+                className="fig-sidebar-create-form"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void submitSidebarCategory()
+                }}
+              >
+                <input
+                  type="text"
+                  className="input fig-sidebar-create-input"
+                  maxLength={40}
+                  placeholder="输入类别名后回车"
+                  aria-label="新类别名称"
+                  value={sidebarNewCatName}
+                  disabled={sidebarCreatingCat}
+                  autoFocus
+                  onChange={(event) => setSidebarNewCatName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      setSidebarAddingCat(false)
+                      setSidebarNewCatName('')
+                    }
+                  }}
+                />
+              </form>
             ) : (
-              <>
-            <Button size="small" type="primary" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ status: 'completed' }, '已批量完成')}>完成</Button>
-            <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ status: 'pending' }, '已批量恢复')}>恢复</Button>
-            <Button size="small" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="star" size={16} />} onClick={() => void runBulk({ isStarred: true }, '已批量加星标')}>加星标</Button>
-            <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ isStarred: false }, '已批量取消星标')}>取消星标</Button>
-            <Button
-              size="small"
-              disabled={!selectedIds.size || bulkBusy || !bulkCanSchedule}
-              icon={<AppIcon name="calendar" size={16} />}
-              onClick={(event) => {
-                setBulkScheduleAnchor(event.currentTarget as HTMLElement)
-                setBulkScheduleOpen(true)
-              }}
-            >安排日期</Button>
-            <Button size="small" disabled={!selectedIds.size || bulkBusy || !bulkHasPlanned} onClick={() => void runBulk({ plannedFor: null }, '已批量取消计划')}>取消计划</Button>
-            <label className="bulk-category">
-              <span className="visually-hidden">批量修改类别</span>
-              {theme === 'animal-island' ? (
-                <Select
-                  aria-label="批量修改类别"
-                  value={bulkCategoryId}
-                  options={[
-                    { key: '', label: '未分类' },
-                    ...categories.map((category) => ({ key: category.id, label: category.name }))
-                  ]}
-                  onChange={setBulkCategoryId}
+              <button
+                type="button"
+                className="fig-sidebar-item fig-sidebar-new-cat"
+                onClick={() => setSidebarAddingCat(true)}
+              >
+                <AppIcon name="plus" size={14} />
+                <span className="fig-sidebar-name">新建类别</span>
+              </button>
+            )}
+          </div>
+        </aside>
+
+        <main className="fig-main">
+          {/* Workspace Header & Toolbar */}
+          <div className="fig-toolbar">
+            <div className="fig-workspace-head">
+              <div className="fig-workspace-title-group">
+                <h1 className="fig-view-title">{viewTitle}</h1>
+                <span className="fig-view-count">{loading ? '…' : items.length}</span>
+              </div>
+
+              <div className="fig-workspace-actions">
+                {filters.trash === 'only' && counts.trash > 0 && (
+                  <button type="button" className="btn btn-danger btn-sm" onClick={() => void emptyTrash()}>
+                    清空回收站
+                  </button>
+                )}
+
+                {filters.trash !== 'only' && items.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-subtle btn-sm fig-desktop-only"
+                    onClick={() => setFocusMode(true)}
+                  >
+                    <AppIcon name="focus" size={14} />
+                    <span>专注处理</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  className={`btn btn-subtle btn-sm${selectionMode ? ' is-active' : ''}`}
+                  onClick={() => {
+                    if (selectionMode) exitSelection()
+                    else setSelectionMode(true)
+                  }}
+                >
+                  <AppIcon name="select" size={14} />
+                  <span>{selectionMode ? '退出选择' : '批量选择'}</span>
+                </button>
+
+                <div className="fig-view-switch" role="group" aria-label="视图模式">
+                  <button
+                    type="button"
+                    className={`fig-view-switch-btn${viewMode === 'list' ? ' is-active' : ''}`}
+                    aria-label="精炼列表视图"
+                    aria-pressed={viewMode === 'list'}
+                    title="精炼列表"
+                    onClick={() => setViewMode('list')}
+                  >
+                    <AppIcon name="list" size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`fig-view-switch-btn${viewMode === 'gallery' ? ' is-active' : ''}`}
+                    aria-label="4列画廊视图"
+                    aria-pressed={viewMode === 'gallery'}
+                    title="4列画廊"
+                    onClick={() => setViewMode('gallery')}
+                  >
+                    <AppIcon name="grid" size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`fig-view-switch-btn${viewMode === 'coverflow' ? ' is-active' : ''}`}
+                    aria-label="专辑封面视图"
+                    aria-pressed={viewMode === 'coverflow'}
+                    title="专辑封面"
+                    onClick={() => setViewMode('coverflow')}
+                  >
+                    <AppIcon name="album" size={15} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="fig-filter-bar">
+              <div className="fig-type-pills" role="group" aria-label="内容类型筛选">
+                {(
+                  [
+                    { key: 'all', label: '全部' },
+                    { key: 'link', label: '网页' },
+                    { key: 'text', label: '文本' },
+                    { key: 'image_group', label: '图片' }
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    className={`pill${filters.kind === tab.key ? ' is-active' : ''}`}
+                    onClick={() => setFilters((current) => ({ ...current, kind: tab.key }))}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="fig-filter-controls">
+                {filters.category && filters.trash === 'active' && (
+                  <select
+                    className="select fig-sort-select"
+                    aria-label="状态筛选"
+                    value={filters.status}
+                    onChange={(event) => setFilters((current) => ({
+                      ...current,
+                      status: event.target.value as ItemFilters['status']
+                    }))}
+                  >
+                    <option value="pending">待处理</option>
+                    <option value="completed">已完成</option>
+                    <option value="all">全部状态</option>
+                  </select>
+                )}
+
+                <select
+                  className="select fig-sort-select"
+                  aria-label="排序方式"
+                  value={filters.sort}
+                  onChange={(event) => setFilters((current) => ({
+                    ...current,
+                    sort: event.target.value as ItemFilters['sort']
+                  }))}
+                >
+                  <option value="smart">智能排序</option>
+                  <option value="newest">最新保存</option>
+                  <option value="oldest">最早保存</option>
+                  <option value="planned_date">计划日期</option>
+                  <option value="recently_completed">最近完成</option>
+                </select>
+
+                {hasSecondaryFilters && (
+                  <button
+                    type="button"
+                    className="btn btn-text btn-sm"
+                    onClick={() => resetFilters()}
+                  >
+                    重置
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {activeDraft && (
+            <div className="notice notice-info fig-draft-banner" role="status">
+              <span>发现一份未完成的草稿，可继续编辑或丢弃。</span>
+              <div className="fig-draft-actions">
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => void restoreActiveDraft()}>
+                  恢复草稿
+                </button>
+                <button type="button" className="btn btn-text btn-sm" onClick={() => void discardActiveDraft()}>
+                  丢弃
+                </button>
+              </div>
+            </div>
+          )}
+
+          {error && <div className="notice notice-error" role="alert">{error}</div>}
+
+          {!loading && !items.length && (
+            viewTotal === 0 ? (
+              filters.trash === 'only' ? (
+                <EmptyState
+                  title="回收站是空的"
+                  description="删除的内容会在这里保留 7 天，期间随时可以一键恢复。"
+                  action={
+                    <button type="button" className="btn btn-ghost" onClick={() => selectQuickView('pending')}>
+                      返回清单
+                    </button>
+                  }
                 />
               ) : (
-                <select aria-label="批量修改类别" value={bulkCategoryId} onChange={(event) => setBulkCategoryId(event.target.value)}>
-                  <option value="">未分类</option>
-                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-                </select>
-              )}
-              <Button size="small" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ categoryId: bulkCategoryId || null }, '类别已批量更新')}>应用类别</Button>
-            </label>
-            <Button size="small" danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="delete" size={16} />} onClick={() => void runBulkDelete()}>移到回收站</Button>
-              </>
-            )}
-          </div>
-        )}
-
-        {!loading && !items.length && (
-          <EmptyState>
-            {theme === 'animal-island' && <img src={islandBag} alt="" className="empty-mascot" />}
-            {viewTotal === 0 ? filters.trash === 'only' ? (
-              <>
-                <h2>回收站是空的</h2>
-                <p>删除的内容会在这里保留 7 天，期间可以随时恢复。</p>
-                <div className="empty-actions">
-                  <Button type="primary" onClick={() => switchLibraryView('active')}>返回阅读清单</Button>
-                </div>
-              </>
+                <EmptyState
+                  title="开始收集你的稍后阅读"
+                  description="在页面任意处直接 Ctrl+V 粘贴网址、文字或图片，或点击右上角“+ 添加”。"
+                  action={
+                    <button type="button" className="btn btn-primary" onClick={() => setOverlay({ type: 'smart-add' })}>
+                      <AppIcon name="plus" size={15} />快速添加
+                    </button>
+                  }
+                />
+              )
             ) : (
-              <>
-                <h2>开始建立你的稍后阅读清单</h2>
-                <p>粘贴图片、文字或网页链接即可添加，也可以使用下面的入口。</p>
-                <div className="empty-actions">
-                  <Button type="primary" onClick={() => setOverlay({ type: 'link' })}>添加网页</Button>
-                  <Button onClick={() => setOverlay({ type: 'text', initialText: '' })}>添加文本</Button>
-                  <Button onClick={() => setOverlay({ type: 'images', files: [] })}>添加图片</Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h2>当前条件下没有结果</h2>
-                <p>资料库里仍有 {viewTotal} 条内容，只是没有符合当前搜索或筛选条件的条目。</p>
-                <div className="empty-filter-summary">
-                  {filterChips.map((chip) => <span key={chip.key}>{chip.label}</span>)}
-                </div>
-                <div className="empty-actions">
-                  <Button type="primary" onClick={() => resetFilters()}>清除筛选</Button>
-                  <Button onClick={() => resetFilters(true)}>查看全部</Button>
-                </div>
-              </>
-            )}
-          </EmptyState>
-        )}
-
-        <div className="date-groups">
-          {groups.map((group) => (
-            <section
-              key={group.key}
-              className={`date-group${filters.sort === 'smart' ? ' priority-group' : ''}`}
-              data-group-key={group.key}
-            >
-              <div className="date-heading">
-                <Title size="small" color="app-teal">
-                  <span role="heading" aria-level={2}>{group.label}</span>
-                </Title>
-                {group.date && <time dateTime={group.date}>{group.date}</time>}
-              </div>
-              <Divider type="line-teal" className="date-divider" />
-              {group.dateGroups ? (
-                <div className="rest-date-groups">
-                  {group.dateGroups.map((dateGroup) => (
-                    <section key={dateGroup.key} className="rest-date-group">
-                      <div className="rest-date-heading">
-                        <time dateTime={dateGroup.date}>
-                          <span role="heading" aria-level={3}>{dateGroup.label}</span>
-                        </time>
-                        <Divider type="line-teal" className="rest-date-divider" />
-                      </div>
-                      {renderItemList(dateGroup.items)}
-                    </section>
-                  ))}
-                </div>
-              ) : renderItemList(group.items)}
-            </section>
-          ))}
-        </div>
-      </main>
-
-      {selectionMode && (
-        <div className="mobile-selection-bar" role="toolbar" aria-label="移动端批量操作">
-          <strong>已选 {selectedIds.size} 条</strong>
-          <button type="button" disabled={!items.length || bulkBusy} onClick={() => setSelectedIds(new Set(items.map((item) => item.id)))}>全选</button>
-          {filters.trash === 'only' ? (
-            <button type="button" className="is-primary" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulkRestore()}>恢复</button>
-          ) : (
-            <button type="button" className="is-primary" disabled={!selectedIds.size || bulkBusy} onClick={() => void runBulk({ status: 'completed' }, '已批量完成')}>完成</button>
+              <EmptyState
+                title="当前视图没有匹配内容"
+                description="尝试切换筛选条件、清空搜索关键词，或查看全部条目。"
+                action={
+                  <div className="fig-empty-actions">
+                    <button type="button" className="btn btn-primary" onClick={() => resetFilters()}>
+                      清除筛选
+                    </button>
+                    <button type="button" className="btn btn-ghost" onClick={() => resetFilters(true)}>
+                      查看全部
+                    </button>
+                  </div>
+                }
+              />
+            )
           )}
-          <button type="button" disabled={!selectedIds.size || bulkBusy} onClick={() => setBulkPanelOpen(true)}>更多</button>
-          <button type="button" onClick={() => { setSelectionMode(false); setSelectedIds(new Set()); setBulkPanelOpen(false) }}>退出</button>
+
+          {items.length > 0 && viewMode === 'coverflow' ? (
+            <CoverFlowView
+              items={items}
+              categories={categories}
+              generatingIds={generatingCoverIds}
+              aiCoverConfigured={aiCoverConfigured}
+              onPatch={patchItem}
+              onEdit={(item) => setOverlay({ type: 'edit', item })}
+              onDelete={deleteItem}
+              onGenerateCover={(item) => generateItemCover(item)}
+              onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
+              onOpenAiSettings={() => setOverlay({ type: 'account' })}
+              now={now}
+            />
+          ) : (
+            <div className="fig-groups">
+              {groups.map((group) => (
+                <section key={group.key} className="fig-group" data-group-key={group.key}>
+                  <header className="fig-group-head">
+                    <h2>{group.label}</h2>
+                    <span className="fig-group-count">{group.items.length}</span>
+                  </header>
+                  {group.dateGroups ? (
+                    <div className="fig-subgroups">
+                      {group.dateGroups.map((dateGroup) => (
+                        <section key={dateGroup.key} className="fig-subgroup">
+                          <h3 className="fig-subgroup-head">
+                            <time dateTime={dateGroup.date}>{dateGroup.label}</time>
+                          </h3>
+                          {renderItems(dateGroup.items)}
+                        </section>
+                      ))}
+                    </div>
+                  ) : renderItems(group.items)}
+                </section>
+              ))}
+            </div>
+          )}
+        </main>
+      </div>
+
+      {/* Floating Bulk Action Pill Bar */}
+      {selectionMode && (
+        <div className="fig-bulk-bar" role="toolbar" aria-label="批量操作">
+          <span className="fig-bulk-count">已选 <strong>{selectedIds.size}</strong></span>
+          <button
+            type="button"
+            className="btn btn-text btn-sm"
+            disabled={!items.length || bulkBusy}
+            onClick={() => setSelectedIds(new Set(items.map((item) => item.id)))}
+          >
+            全选
+          </button>
+          {selectedIds.size > 0 && (
+            <button
+              type="button"
+              className="btn btn-text btn-sm"
+              disabled={bulkBusy}
+              onClick={() => setSelectedIds(new Set())}
+            >
+              清空
+            </button>
+          )}
+          <span className="fig-bulk-divider" aria-hidden="true" />
+          {filters.trash === 'only' ? (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!selectedIds.size || bulkBusy}
+                onClick={() => void runBulkRestore()}
+              >
+                <AppIcon name="restore" size={14} />恢复
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                disabled={!selectedIds.size || bulkBusy}
+                onClick={() => void runBulkPermanentDelete()}
+              >
+                彻底删除
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!selectedIds.size || bulkBusy}
+                onClick={() => void runBulk({ status: 'completed' }, '已批量完成')}
+              >
+                完成
+              </button>
+              <button
+                type="button"
+                className="btn btn-subtle btn-sm"
+                disabled={!selectedIds.size || bulkBusy}
+                onClick={() => void runBulk({ status: 'pending' }, '已批量恢复待处理')}
+              >
+                待处理
+              </button>
+              <button
+                type="button"
+                className="btn btn-subtle btn-sm"
+                disabled={!selectedIds.size || bulkBusy}
+                onClick={() => void runBulk({ isStarred: true }, '已批量加星标')}
+              >
+                <AppIcon name="star" size={14} />星标
+              </button>
+              <button
+                type="button"
+                className="btn btn-subtle btn-sm"
+                disabled={!selectedIds.size || bulkBusy || !bulkCanSchedule}
+                onClick={(event) => {
+                  setBulkScheduleAnchor(event.currentTarget)
+                  setBulkScheduleOpen(true)
+                }}
+              >
+                <AppIcon name="calendar" size={14} />计划
+              </button>
+              <button
+                type="button"
+                className="btn btn-subtle btn-sm"
+                disabled={!selectedIds.size || bulkBusy}
+                onClick={(event) => {
+                  setBulkCatAnchor(event.currentTarget)
+                  setBulkCatOpen(true)
+                }}
+              >
+                <AppIcon name="folder" size={14} />改类别
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                disabled={!selectedIds.size || bulkBusy}
+                onClick={() => void runBulkDelete()}
+              >
+                <AppIcon name="trash" size={14} />删除
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="btn btn-icon btn-sm"
+            aria-label="退出批量选择"
+            onClick={exitSelection}
+          >
+            <AppIcon name="close" size={15} />
+          </button>
         </div>
       )}
 
-      <nav className="mobile-bottom-nav" aria-label="移动端主导航">
+      {/* Undo Delete Bar */}
+      {undoDelete && (
+        <div className="fig-undo-bar" role="status" aria-live="polite">
+          <span>{undoDelete.label}</span>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => void undoLastDelete()}>
+            撤销
+          </button>
+          <button
+            type="button"
+            className="btn btn-icon btn-sm"
+            aria-label="关闭撤销提示"
+            onClick={() => setUndoDelete(null)}
+          >
+            <AppIcon name="close" size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Mobile Single-Hand Bottom Nav (<900px) */}
+      <nav className="fig-bottom-nav" aria-label="移动端主导航">
         <button
           type="button"
-          className={!mobilePanel && !selectionMode ? 'is-active' : ''}
+          className={`fig-bottom-item${activeNavTab === 'list' && !mobileMoreOpen ? ' is-active' : ''}`}
           onClick={() => {
-            setMobilePanel(null)
+            selectQuickView('pending')
             window.scrollTo({ top: 0, behavior: 'smooth' })
           }}
         >
-          <AppIcon name="focus" size={22} />
+          <AppIcon name="inbox" size={20} />
           <span>清单</span>
         </button>
         <button
           type="button"
-          className={mobilePanel === 'filters' ? 'is-active' : ''}
-          onClick={() => setMobilePanel((current) => current === 'filters' ? null : 'filters')}
+          className={`fig-bottom-item${activeNavTab === 'plan' && !mobileMoreOpen ? ' is-active' : ''}`}
+          onClick={() => selectQuickView('planned')}
         >
-          <span className="mobile-nav-icon"><AppIcon name="sort" size={22} />{activeFilterCount > 0 && <b>{activeFilterCount}</b>}</span>
-          <span>筛选</span>
+          <AppIcon name="calendar" size={20} />
+          <span>计划</span>
         </button>
         <button
           type="button"
-          className={`mobile-add-action${mobilePanel === 'add' ? ' is-active' : ''}`}
-          onClick={() => setMobilePanel((current) => current === 'add' ? null : 'add')}
+          className="fig-bottom-item fig-bottom-add"
+          aria-label="快速添加"
+          onClick={() => {
+            setMobileMoreOpen(false)
+            setOverlay({ type: 'smart-add' })
+          }}
         >
-          <span className="mobile-add-icon"><AppIcon name="add" size={27} /></span>
+          <span className="fig-bottom-add-pill">
+            <AppIcon name="plus" size={20} />
+          </span>
           <span>添加</span>
         </button>
         <button
           type="button"
-          className={memoOpen ? 'is-active' : ''}
+          className={`fig-bottom-item${memoOpen ? ' is-active' : ''}`}
           onClick={() => {
-            setMobilePanel(null)
+            setMobileMoreOpen(false)
             setMemoOpen(true)
           }}
         >
-          <AppIcon name="memo" size={22} />
+          <AppIcon name="memo" size={20} />
           <span>备忘录</span>
         </button>
         <button
           type="button"
-          className={mobilePanel === 'more' ? 'is-active' : ''}
-          onClick={() => setMobilePanel((current) => current === 'more' ? null : 'more')}
+          className={`fig-bottom-item${mobileMoreOpen ? ' is-active' : ''}`}
+          onClick={() => setMobileMoreOpen((value) => !value)}
         >
-          <span className="mobile-nav-icon"><AppIcon name={queuedCount ? 'sync' : 'categories'} size={22} />{queuedCount > 0 && <b>{queuedCount}</b>}</span>
+          <span className="fig-bottom-icon-wrap">
+            <AppIcon name="more" size={20} />
+            {queuedCount > 0 && <span className="fig-bottom-badge">{queuedCount}</span>}
+          </span>
           <span>更多</span>
         </button>
       </nav>
 
-      <MobileActionSheet open={mobilePanel === 'filters'} title="筛选与排序" onClose={() => setMobilePanel(null)}>
-        <div className="mobile-filter-sheet stack">
-          <label className="field">
-            <span>内容类型</span>
-            <ThemeFilterSelect
-              theme={theme}
-              ariaLabel="内容类型"
-              value={filters.kind}
-              options={[
-                { key: 'all', label: '全部类型' },
-                { key: 'link', label: '网页' },
-                { key: 'text', label: '文本' },
-                { key: 'image_group', label: '图片' }
-              ]}
-              onChange={(value) => setFilters((current) => ({ ...current, kind: value as ItemFilters['kind'] }))}
-            />
-          </label>
-          <label className="field">
-            <span>优先级</span>
-            <ThemeFilterSelect
-              theme={theme}
-              ariaLabel="优先筛选"
-              value={filters.priority}
-              options={[
-                { key: 'all', label: '全部优先级' },
-                { key: 'planned', label: '计划处理' },
-                { key: 'starred', label: '星标' }
-              ]}
-              onChange={(value) => setFilters((current) => ({ ...current, priority: value as ItemFilters['priority'] }))}
-            />
-          </label>
-          <label className="field">
-            <span>类别</span>
-            <ThemeFilterSelect
-              theme={theme}
-              ariaLabel="类别"
-              value={filters.category}
-              options={[
-                { key: '', label: '全部类别' },
-                { key: 'uncategorized', label: '未分类' },
-                ...categories.map((category) => ({ key: category.id, label: category.name }))
-              ]}
-              onChange={(value) => setFilters((current) => ({ ...current, category: value }))}
-            />
-          </label>
-          <label className="field">
-            <span>保存日期</span>
-            <input type="date" value={filters.date} onChange={(event) => setFilters((current) => ({ ...current, date: event.target.value }))} />
-          </label>
-          <label className="field">
-            <span>排序方式</span>
-            <ThemeFilterSelect
-              theme={theme}
-              ariaLabel="排序方式"
-              value={filters.sort}
-              options={[
-                { key: 'smart', label: '智能优先' },
-                { key: 'newest', label: '最近保存' },
-                { key: 'oldest', label: '最久未看' },
-                { key: 'recently_completed', label: '最近完成' },
-                { key: 'planned_date', label: '计划日期' }
-              ]}
-              onChange={(value) => setFilters((current) => ({ ...current, sort: value as ItemFilters['sort'] }))}
-            />
-          </label>
-          <div className="mobile-sheet-actions">
-            <Button type="dashed" onClick={() => resetFilters()}>清除筛选</Button>
-            <Button type="primary" onClick={() => setMobilePanel(null)}>查看结果</Button>
-          </div>
-        </div>
-      </MobileActionSheet>
+      {/* Mobile "更多" Bottom Sheet */}
+      <MobileBottomSheet open={mobileMoreOpen} title="更多与工具" onClose={() => setMobileMoreOpen(false)}>
+        <div className="fig-sheet-list">
+          <div className="fig-sheet-section-title">快速视图</div>
+          <button type="button" className="fig-sheet-row" onClick={() => selectQuickView('today')}>
+            <AppIcon name="calendar" size={17} />
+            <span>今日与逾期</span>
+            <span className="fig-mono">{counts.todayOverdue}</span>
+          </button>
+          <button type="button" className="fig-sheet-row" onClick={() => selectQuickView('starred')}>
+            <AppIcon name="star" size={17} />
+            <span>星标</span>
+            <span className="fig-mono">{counts.starred}</span>
+          </button>
+          <button type="button" className="fig-sheet-row" onClick={() => selectQuickView('completed')}>
+            <AppIcon name="checkCircle" size={17} />
+            <span>已完成</span>
+            <span className="fig-mono">{counts.completed}</span>
+          </button>
+          <button type="button" className="fig-sheet-row" onClick={() => selectQuickView('trash')}>
+            <AppIcon name="trash" size={17} />
+            <span>回收站</span>
+            <span className="fig-mono">{counts.trash}</span>
+          </button>
 
-      <MobileActionSheet open={mobilePanel === 'add'} title="添加内容" onClose={() => setMobilePanel(null)}>
-        <div className="mobile-action-list">
-          <Button block type="primary" size="large" icon={<AppIcon name="link" size={24} />} onClick={() => openFromMobile({ type: 'link' })}>
-            添加网页
-          </Button>
-          <Button block size="large" icon={<AppIcon name="text" size={24} />} onClick={() => openFromMobile({ type: 'text', initialText: '' })}>
-            添加文本
-          </Button>
-          <Button block size="large" icon={<AppIcon name="image" size={24} />} onClick={() => openFromMobile({ type: 'images', files: [] })}>
-            添加图片
-          </Button>
-          <Button block size="large" icon={<AppIcon name="clipboard" size={24} />} onClick={() => void readClipboardAndSave()}>
-            识别剪贴板并保存
-          </Button>
-          <p>断网时也可以添加；内容会先安全保存在本机，联网后自动同步。</p>
+          <div className="fig-sheet-section-title">效率与工具</div>
+          <button
+            type="button"
+            className="fig-sheet-row"
+            disabled={!items.length || filters.trash === 'only'}
+            onClick={() => {
+              setMobileMoreOpen(false)
+              setFocusMode(true)
+            }}
+          >
+            <AppIcon name="focus" size={17} />
+            <span>晚间专注处理</span>
+          </button>
+          <button type="button" className="fig-sheet-row" onClick={() => void readClipboardAndSave()}>
+            <AppIcon name="copy" size={17} />
+            <span>识别剪贴板并保存</span>
+          </button>
+          <button
+            type="button"
+            className="fig-sheet-row"
+            onClick={() => {
+              setMobileMoreOpen(false)
+              setOverlay({ type: 'categories' })
+            }}
+          >
+            <AppIcon name="folder" size={17} />
+            <span>类别管理</span>
+          </button>
+          <button
+            type="button"
+            className="fig-sheet-row"
+            onClick={() => {
+              setMobileMoreOpen(false)
+              setOverlay({ type: 'backup' })
+            }}
+          >
+            <AppIcon name="download" size={17} />
+            <span>数据备份与恢复</span>
+          </button>
+          <button
+            type="button"
+            className="fig-sheet-row"
+            onClick={() => {
+              setMobileMoreOpen(false)
+              setOverlay({ type: 'sync' })
+            }}
+          >
+            <AppIcon name="sync" size={17} />
+            <span>离线缓存管理</span>
+            {queuedCount > 0 && <span className="fig-mono">{queuedCount}</span>}
+          </button>
+          <button
+            type="button"
+            className="fig-sheet-row"
+            onClick={() => {
+              setMobileMoreOpen(false)
+              setOverlay({ type: 'bookmarklet' })
+            }}
+          >
+            <AppIcon name="bookmark" size={17} />
+            <span>书签按钮</span>
+          </button>
+          <button
+            type="button"
+            className="fig-sheet-row"
+            onClick={() => {
+              setMobileMoreOpen(false)
+              setOverlay({ type: 'account' })
+            }}
+          >
+            <AppIcon name="settings" size={17} />
+            <span>账号设置</span>
+          </button>
+          <button
+            type="button"
+            className="fig-sheet-row is-danger"
+            onClick={() => {
+              setMobileMoreOpen(false)
+              void logout()
+            }}
+          >
+            <AppIcon name="logout" size={17} />
+            <span>退出登录</span>
+          </button>
         </div>
-      </MobileActionSheet>
+      </MobileBottomSheet>
 
-      <MobileActionSheet open={mobilePanel === 'more'} title="更多功能" onClose={() => setMobilePanel(null)}>
-        <div className="mobile-action-list mobile-more-list">
-          <Button block size="large" icon={<AppIcon name="sync" size={24} />} onClick={() => openFromMobile({ type: 'sync' })}>
-            离线与同步{queuedCount ? `（${queuedCount}）` : ''}
-          </Button>
-          <Button block size="large" icon={<AppIcon name="categories" size={24} />} onClick={() => openFromMobile({ type: 'categories' })}>
-            类别管理
-          </Button>
-          <Button block size="large" icon={<AppIcon name="trash" size={24} />} onClick={() => {
-            switchLibraryView(filters.trash === 'only' ? 'active' : 'only')
-          }}>
-            {filters.trash === 'only' ? '返回阅读清单' : `回收站${trashTotal ? `（${trashTotal}）` : ''}`}
-          </Button>
-          <Button block size="large" icon={<AppIcon name="select" size={24} />} onClick={() => {
-            setMobilePanel(null)
-            setSelectionMode((value) => !value)
-            if (selectionMode) setSelectedIds(new Set())
-          }}>
-            {selectionMode ? '退出选择模式' : '选择与批量操作'}
-          </Button>
-          <ThemeControl />
-          <Button block size="large" icon={<AppIcon name="account" size={24} />} onClick={() => openFromMobile({ type: 'account' })}>
-            账号设置
-          </Button>
-          <Button block size="large" danger icon={<AppIcon name="logout" size={24} />} onClick={() => {
-            setMobilePanel(null)
-            void logout()
-          }}>
-            退出账号
-          </Button>
-        </div>
-      </MobileActionSheet>
-
-      <MobileActionSheet open={bulkPanelOpen} title="批量操作" onClose={() => setBulkPanelOpen(false)}>
-        <div className="mobile-bulk-sheet stack">
-          <p>已选择 {selectedIds.size} 条内容</p>
-          {filters.trash === 'only' ? (
-            <>
-              <Button block type="primary" disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="restore" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulkRestore() }}>恢复到清单</Button>
-              <Button block danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="delete" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulkPermanentDelete() }}>彻底删除</Button>
-            </>
-          ) : (
-            <>
-              <Button block type="primary" disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ status: 'completed' }, '已批量完成') }}>标记完成</Button>
-              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ status: 'pending' }, '已批量恢复') }}>恢复待处理</Button>
-              <Button block disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="star" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulk({ isStarred: true }, '已批量加星标') }}>加星标</Button>
-              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ isStarred: false }, '已批量取消星标') }}>取消星标</Button>
-              <Button
-                block
-                disabled={!selectedIds.size || bulkBusy || !bulkCanSchedule}
-                icon={<AppIcon name="calendar" size={20} />}
-                onClick={(event) => {
-                  setBulkScheduleAnchor(event.currentTarget as HTMLElement)
-                  setBulkScheduleOpen(true)
-                }}
-              >安排日期</Button>
-              <Button block disabled={!selectedIds.size || bulkBusy || !bulkHasPlanned} onClick={() => {
-                void runBulk({ plannedFor: null }, '已批量取消计划').then((saved) => {
-                  if (saved) setBulkPanelOpen(false)
-                })
-              }}>取消计划</Button>
-              <label className="field">
-                <span>修改类别</span>
-                <select value={bulkCategoryId} onChange={(event) => setBulkCategoryId(event.target.value)}>
-                  <option value="">未分类</option>
-                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-                </select>
-              </label>
-              <Button block disabled={!selectedIds.size || bulkBusy} onClick={() => { setBulkPanelOpen(false); void runBulk({ categoryId: bulkCategoryId || null }, '类别已批量更新') }}>应用类别</Button>
-              <Button block danger disabled={!selectedIds.size || bulkBusy} icon={<AppIcon name="trash" size={20} />} onClick={() => { setBulkPanelOpen(false); void runBulkDelete() }}>移到回收站</Button>
-            </>
-          )}
-        </div>
-      </MobileActionSheet>
-
+      {/* Bulk Popovers */}
       <SchedulePicker
         open={bulkScheduleOpen}
         anchor={bulkScheduleAnchor}
@@ -1965,93 +2865,39 @@ export function Dashboard({
         title={`为已选 ${selectedIds.size} 条安排日期`}
         busy={bulkBusy}
         clearDisabled={!selectedIds.size || !bulkHasPlanned}
-        onSelect={async (date) => {
-          const saved = await runBulk({ plannedFor: date }, `已批量安排 ${plannedDateLabel(date)}处理`)
-          if (saved) setBulkPanelOpen(false)
-          return saved
-        }}
-        onClear={async () => {
-          const saved = await runBulk({ plannedFor: null }, '已批量取消计划')
-          if (saved) setBulkPanelOpen(false)
-          return saved
-        }}
+        onSelect={(date) => runBulk({ plannedFor: date }, `已批量安排 ${plannedDateLabel(date)}处理`)}
+        onClear={() => runBulk({ plannedFor: null }, '已批量取消计划')}
         onClose={() => setBulkScheduleOpen(false)}
       />
 
-      {undoDelete && (
-        <div className="delete-undo-bar" role="status" aria-live="polite">
-          <span>{undoDelete.label}</span>
-          <button type="button" onClick={() => void undoLastDelete()}>撤销</button>
-          <button type="button" aria-label="关闭撤销提示" onClick={() => setUndoDelete(null)}>×</button>
-        </div>
+      <CategoryPickerPopover
+        open={bulkCatOpen}
+        anchor={bulkCatAnchor}
+        categories={categories}
+        selectedId={null}
+        busy={bulkBusy}
+        onSelect={(categoryId) => runBulk({ categoryId }, '类别已批量更新')}
+        onCreateCategory={createCategory}
+        onClose={() => setBulkCatOpen(false)}
+      />
+
+      {/* Modals & Overlays */}
+      {overlay?.type === 'smart-add' && (
+        <SmartAddModal
+          categories={categories}
+          defaultCategoryId={preferences.quickSaveCategoryId}
+          aiCoverAuto={Boolean(preferences.aiCoverAuto && preferences.aiImageApiKeySet)}
+          initial={overlay.initial}
+          onCreateCategory={createCategory}
+          onSaved={(saved) => void itemSaved(saved, true)}
+          onDuplicate={(id) => void openDuplicate(id)}
+          onClose={() => {
+            setActiveDraft(readActiveDraft())
+            setOverlay(null)
+          }}
+        />
       )}
 
-      <footer className="app-footer">
-        {theme === 'animal-island' ? (
-          <>
-            <Footer type="tree" seamless />
-            <p>
-              Animal Island UI by{' '}
-              <a href="https://github.com/guokaigdg/animal-island-ui" target="_blank" rel="noreferrer">
-                guokaigdg
-              </a>
-              {' '}· CC BY-NC 4.0
-            </p>
-          </>
-        ) : (
-          <p className="flat-credit">
-            Flat Design 2013 by{' '}
-            <a href="https://github.com/novusgfx/retro-design-system" target="_blank" rel="noreferrer">
-              NovusGFX
-            </a>
-            {' '}· MIT
-          </p>
-        )}
-      </footer>
-
-      {overlay?.type === 'link' && (
-        <Modal title="添加网页" onClose={() => setOverlay(null)} wide>
-          <LinkForm
-            categories={categories}
-            onCreateCategory={createCategory}
-            initial={overlay.initial}
-            onClose={() => {
-              setActiveDraft(null)
-              setOverlay(null)
-            }}
-            onSaved={() => void itemSaved()}
-            onDuplicate={(id) => void openDuplicate(id)}
-          />
-        </Modal>
-      )}
-      {overlay?.type === 'text' && (
-        <Modal title="添加文本" onClose={() => setOverlay(null)}>
-          <TextItemForm
-            categories={categories}
-            onCreateCategory={createCategory}
-            initialText={overlay.initialText}
-            onClose={() => {
-              setActiveDraft(null)
-              setOverlay(null)
-            }}
-            onSaved={() => void itemSaved()}
-          />
-        </Modal>
-      )}
-      {overlay?.type === 'images' && (
-        <Modal title="添加图片" onClose={() => setOverlay(null)} wide>
-          <ImageGroupForm
-            categories={categories}
-            onCreateCategory={createCategory}
-            initialFiles={overlay.files}
-            onClose={() => {
-              setActiveDraft(null)
-              setOverlay(null)
-            }}
-            onSaved={() => void itemSaved()}
-          />
-        </Modal>
-      )}
       {overlay?.type === 'edit' && (
         <Modal title="编辑条目" onClose={closeEditor} wide>
           <EditItemForm
@@ -2067,6 +2913,7 @@ export function Dashboard({
           />
         </Modal>
       )}
+
       {overlay?.type === 'categories' && (
         <CategoriesManager
           categories={categories}
@@ -2074,18 +2921,31 @@ export function Dashboard({
           onChanged={reloadAll}
         />
       )}
+
       {overlay?.type === 'account' && (
         <AccountManager
           email={userEmail}
           categories={categories}
           onChanged={reloadAll}
+          onPreferencesChange={setPreferences}
           onClose={() => setOverlay(null)}
         />
       )}
+
+      {overlay?.type === 'backup' && (
+        <Modal title="数据备份与恢复" onClose={() => setOverlay(null)} wide>
+          <BackupManager onRestored={reloadAll} />
+        </Modal>
+      )}
+
       {overlay?.type === 'sync' && (
         <OfflineManagerModal onChanged={reloadAll} onClose={() => setOverlay(null)} />
       )}
-      {overlay?.type === 'bookmarklet' && <BookmarkletHelp onClose={() => setOverlay(null)} />}
+
+      {overlay?.type === 'bookmarklet' && (
+        <BookmarkletHelp onClose={() => setOverlay(null)} />
+      )}
+
       {overlay?.type === 'lightbox' && (
         <Lightbox
           assets={overlay.assets}
@@ -2093,6 +2953,7 @@ export function Dashboard({
           onClose={() => setOverlay(null)}
         />
       )}
+
       {focusMode && (
         <FocusMode
           items={items}
@@ -2105,21 +2966,33 @@ export function Dashboard({
           onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
         />
       )}
+
       {memoOpen && (
-        <Suspense fallback={<div className="memo-canvas-overlay"><div className="memo-canvas-loading"><span className="spinner" /><p>正在加载备忘录画布…</p></div></div>}>
-          <MemoCanvas
-            items={allItems}
-            categories={categories}
-            onClose={() => setMemoOpen(false)}
-            onEdit={(item) => setOverlay({ type: 'edit', item })}
-            onPatch={patchItem}
-            onDelete={deleteItem}
-            onRestore={restoreItem}
-            onPermanentDelete={permanentDeleteItem}
-            onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
-            onRefresh={reloadAll}
-          />
-        </Suspense>
+        <MemoErrorBoundary onClose={() => setMemoOpen(false)}>
+          <Suspense
+            fallback={
+              <div className="memo-canvas-overlay">
+                <div className="memo-canvas-loading">
+                  <span className="spinner" />
+                  <p>正在加载备忘录画布…</p>
+                </div>
+              </div>
+            }
+          >
+            <MemoCanvas
+              items={allItems}
+              categories={categories}
+              onClose={() => setMemoOpen(false)}
+              onEdit={(item) => setOverlay({ type: 'edit', item })}
+              onPatch={patchItem}
+              onDelete={deleteItem}
+              onRestore={restoreItem}
+              onPermanentDelete={permanentDeleteItem}
+              onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
+              onRefresh={reloadAll}
+            />
+          </Suspense>
+        </MemoErrorBoundary>
       )}
     </div>
   )

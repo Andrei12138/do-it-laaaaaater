@@ -1,5 +1,4 @@
-import { useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { Button, Card, Checkbox, Progress, Radio } from 'animal-island-ui'
+import { useRef, useState, type ChangeEvent } from 'react'
 import {
   exportBackup,
   restoreBackup,
@@ -9,22 +8,7 @@ import {
   type ValidatedBackup
 } from '../backup'
 import { errorMessage } from '../api'
-import { useTheme } from '../theme'
 import { AppIcon } from './AppIcon'
-
-function BackupSection({ children }: { children: ReactNode }) {
-  const { theme } = useTheme()
-  if (theme === 'animal-island') {
-    return <Card className="account-section backup-manager" pattern="default" role="region" aria-label="数据备份与恢复">{children}</Card>
-  }
-  return <section className="account-section backup-manager">{children}</section>
-}
-
-function BackupPanel({ children }: { children: ReactNode }) {
-  const { theme } = useTheme()
-  if (theme === 'animal-island') return <Card className="backup-panel" pattern="default">{children}</Card>
-  return <div className="backup-panel">{children}</div>
-}
 
 function formatBytes(value: number) {
   if (value < 1024) return value + ' B'
@@ -40,7 +24,6 @@ function progressPercent(progress: BackupProgress | null) {
 }
 
 export function BackupManager({ onRestored }: { onRestored: () => Promise<void> }) {
-  const { theme } = useTheme()
   const [includeOriginals, setIncludeOriginals] = useState(true)
   const [backup, setBackup] = useState<ValidatedBackup | null>(null)
   const [sourceName, setSourceName] = useState('')
@@ -81,8 +64,11 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
       setSuccess('备份已生成：' + result.filename)
       return result
     } catch (requestError) {
-      if (requestError instanceof DOMException && requestError.name === 'AbortError') setError('操作已取消，没有修改数据。')
-      else setError(errorMessage(requestError))
+      if (requestError instanceof DOMException && requestError.name === 'AbortError') {
+        setError('操作已取消，没有修改数据。')
+      } else {
+        setError(errorMessage(requestError))
+      }
       return null
     } finally {
       finish()
@@ -154,56 +140,80 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
   const percent = progressPercent(progress)
 
   return (
-    <BackupSection>
+    <section className="fig-card account-section backup-manager" aria-label="数据备份与恢复">
       <div className="account-section-heading">
-        <AppIcon name="backup" size={24} />
+        <AppIcon name="download" size={20} />
         <div>
           <h3>数据备份与恢复</h3>
-          <p>备份包含类别、条目、状态、日期、星标、今日计划、图片顺序、默认类别和唯一备忘录画布，不包含密码或登录信息。</p>
+          <p className="field-hint">
+            备份包含类别、条目、状态、日期、星标、计划日期、图片顺序、默认类别与备忘录画布，不包含密码或登录凭证。
+          </p>
         </div>
       </div>
+
       {error && <div className="notice notice-error" role="alert">{error}</div>}
       {success && <div className="notice notice-success" role="status">{success}</div>}
+
       {busy && progress && (
         <div className="backup-progress" role="status">
-          <span>{progress.message}</span>
-          {theme === 'animal-island'
-            ? <Progress percent={percent} infoPosition="right" />
-            : <div className="quick-capture-progress"><i style={{ width: percent + '%' }} /></div>}
-          <Button size="small" onClick={() => controllerRef.current?.abort()}>取消</Button>
+          <div className="backup-progress-header">
+            <span>{progress.message}</span>
+            <span className="mono">{percent}%</span>
+          </div>
+          <div className="progress-bar" aria-hidden="true">
+            <div className="progress-fill" style={{ width: percent + '%' }} />
+          </div>
+          <div>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => controllerRef.current?.abort()}>
+              取消
+            </button>
+          </div>
         </div>
       )}
 
       <div className="backup-panels">
-        <BackupPanel>
+        <div className="backup-panel">
           <h4>导出备份</h4>
-          {theme === 'animal-island' ? (
-            <Checkbox
-              options={[{ label: '包含全部原图（推荐）', value: 'images' }]}
-              value={includeOriginals ? ['images'] : []}
-              onChange={(values) => setIncludeOriginals(values.includes('images'))}
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={includeOriginals}
+              disabled={busy}
+              onChange={(event) => setIncludeOriginals(event.target.checked)}
             />
-          ) : (
-            <label className="inline-check">
-              <input type="checkbox" checked={includeOriginals} onChange={(event) => setIncludeOriginals(event.target.checked)} />
-              包含全部原图（推荐）
-            </label>
-          )}
-          <p className="muted">
+            <span>包含全部原图（推荐）</span>
+          </label>
+          <p className="field-hint">
             {canStream
-              ? '当前浏览器支持边读取边保存，适合较大的图片备份。'
-              : '当前浏览器会先在内存中生成完整 ZIP；超大备份建议改用 Windows Edge。'}
+              ? '当前浏览器支持边读取边写入，适合包含大量原图的完整备份。'
+              : '当前浏览器会先在内存中打包完整 ZIP；超大备份建议使用桌面 Edge 或 Chrome。'}
           </p>
-          <Button type="primary" disabled={busy} icon={<AppIcon name="download" size={18} />} onClick={() => void runExport()}>
-            导出 ZIP 备份
-          </Button>
-        </BackupPanel>
+          <div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={busy}
+              onClick={() => void runExport()}
+            >
+              <AppIcon name="download" size={15} />
+              导出 ZIP 备份
+            </button>
+          </div>
+        </div>
 
-        <BackupPanel>
+        <div className="backup-panel">
           <h4>恢复备份</h4>
-          <Button disabled={busy} icon={<AppIcon name="upload" size={18} />} onClick={() => fileInputRef.current?.click()}>
-            选择 ZIP 备份
-          </Button>
+          <div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={busy}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <AppIcon name="upload" size={15} />
+              选择 ZIP 备份
+            </button>
+          </div>
           <input
             ref={fileInputRef}
             className="visually-hidden"
@@ -215,51 +225,69 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
           {backup && (
             <div className="backup-summary">
               <strong>{sourceName}</strong>
-              <span>{backup.manifest.items.length} 条内容 · {backup.manifest.categories.length} 个类别 · {imageCount} 张原图 · {backup.manifest.memoCanvas ? '含备忘录画布' : '不含画布'}</span>
-              <span>解压后原图约 {formatBytes(backup.totalBytes)}</span>
+              <span className="mono">
+                {backup.manifest.items.length} 条内容 · {backup.manifest.categories.length} 个类别 · {imageCount} 张原图 · {backup.manifest.memoCanvas ? '含备忘录画布' : '不含画布'}
+              </span>
+              <span className="field-hint mono">解压后原图约 {formatBytes(backup.totalBytes)}</span>
             </div>
           )}
-          <div className="restore-modes" role={theme === 'animal-island' ? undefined : 'radiogroup'} aria-label="恢复方式">
-            {theme === 'animal-island' ? (
-              <Radio
-                value={mode}
-                direction="vertical"
-                options={[
-                  { value: 'merge', label: <span className="restore-mode-copy"><strong>安全合并</strong><small>保留现有内容，重复项跳过。</small></span> },
-                  { value: 'replace', label: <span className="restore-mode-copy"><strong>完整覆盖</strong><small>先自动备份当前内容，再替换数据。</small></span> }
-                ]}
-                onChange={(value) => setMode(value as 'merge' | 'replace')}
+          <div className="restore-modes" role="radiogroup" aria-label="恢复方式">
+            <label className={`restore-mode-option${mode === 'merge' ? ' is-selected' : ''}`}>
+              <input
+                type="radio"
+                name="restore-mode"
+                checked={mode === 'merge'}
+                disabled={busy}
+                onChange={() => setMode('merge')}
               />
-            ) : (
-              <>
-                <label>
-                  <input type="radio" name="restore-mode" checked={mode === 'merge'} onChange={() => setMode('merge')} />
-                  <span className="restore-mode-copy"><strong>安全合并</strong><small>保留现有内容，重复项跳过。</small></span>
-                </label>
-                <label>
-                  <input type="radio" name="restore-mode" checked={mode === 'replace'} onChange={() => setMode('replace')} />
-                  <span className="restore-mode-copy"><strong>完整覆盖</strong><small>先自动备份当前内容，再替换数据。</small></span>
-                </label>
-              </>
-            )}
+              <span className="restore-mode-copy">
+                <strong>安全合并</strong>
+                <small>保留现有内容，重复项自动跳过。</small>
+              </span>
+            </label>
+            <label className={`restore-mode-option${mode === 'replace' ? ' is-selected' : ''}`}>
+              <input
+                type="radio"
+                name="restore-mode"
+                checked={mode === 'replace'}
+                disabled={busy}
+                onChange={() => setMode('replace')}
+              />
+              <span className="restore-mode-copy">
+                <strong>完整覆盖</strong>
+                <small>先自动导出当前安全备份，再完全替换数据。</small>
+              </span>
+            </label>
           </div>
-          <Button disabled={!backup || busy} danger={mode === 'replace'} icon={<AppIcon name="restore" size={18} />} onClick={() => void runRestore()}>
-            {mode === 'replace' ? '生成安全备份并完整覆盖' : '开始安全合并'}
-          </Button>
-        </BackupPanel>
+          <div>
+            <button
+              type="button"
+              className={mode === 'replace' ? 'btn btn-danger btn-sm' : 'btn btn-primary btn-sm'}
+              disabled={!backup || busy}
+              onClick={() => void runRestore()}
+            >
+              <AppIcon name="restore" size={15} />
+              {mode === 'replace' ? '生成安全备份并完整覆盖' : '开始安全合并'}
+            </button>
+          </div>
+        </div>
       </div>
 
       {report && (
-        <div className="restore-report">
-          <strong>
+        <div className="notice notice-info restore-report">
+          <strong className="mono">
             恢复报告：新增 {report.added} · 跳过 {report.skipped} · 失败 {report.failed.length}
             {report.canvas === 'restored' ? ' · 画布已恢复' : report.canvas === 'skipped' ? ' · 现有画布已保留' : ''}
           </strong>
           {report.failed.length > 0 && (
-            <ul>{report.failed.slice(0, 20).map((entry, index) => <li key={index}>{entry.title}：{entry.error}</li>)}</ul>
+            <ul className="restore-report-errors">
+              {report.failed.slice(0, 20).map((entry, index) => (
+                <li key={index}>{entry.title}：{entry.error}</li>
+              ))}
+            </ul>
           )}
         </div>
       )}
-    </BackupSection>
+    </section>
   )
 }

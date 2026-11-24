@@ -21,9 +21,11 @@ export function CategoryField({
   const selectId = useId()
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
-  const [color, setColor] = useState('#64748b')
+  const [color, setColor] = useState('#4d49fc')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+
+  const selectedCategory = categories.find((category) => category.id === categoryId) || null
 
   async function createCategory() {
     const trimmed = name.trim()
@@ -45,23 +47,33 @@ export function CategoryField({
   return (
     <div className="field category-field">
       <div className="field-label-row">
-        <label htmlFor={selectId}>类别</label>
+        <label className="field-label" htmlFor={selectId}>
+          {selectedCategory && (
+            <span className="cat-dot" style={{ backgroundColor: selectedCategory.color }} aria-hidden="true" />
+          )}
+          类别
+        </label>
         {onCreateCategory && (
           <button
             type="button"
-            className="category-add-trigger"
+            className="btn btn-text btn-sm category-add-trigger"
             aria-expanded={adding}
             onClick={() => {
               setAdding((value) => !value)
               setError('')
             }}
           >
-            <AppIcon name="add" size={15} />
+            <AppIcon name="plus" size={14} />
             {adding ? '收起' : '新增类别'}
           </button>
         )}
       </div>
-      <select id={selectId} value={categoryId} onChange={(event) => onCategoryChange(event.target.value)}>
+      <select
+        id={selectId}
+        className="select"
+        value={categoryId}
+        onChange={(event) => onCategoryChange(event.target.value)}
+      >
         <option value="">未分类</option>
         {categories.map((category) => (
           <option key={category.id} value={category.id}>{category.name}</option>
@@ -70,6 +82,7 @@ export function CategoryField({
       {adding && onCreateCategory && (
         <div className="category-quick-add" role="group" aria-label="新增类别">
           <input
+            className="input"
             aria-label="新类别名称"
             maxLength={40}
             placeholder="输入类别名称"
@@ -85,20 +98,31 @@ export function CategoryField({
           />
           <input
             type="color"
+            className="category-color-input"
             aria-label="新类别颜色"
             value={color}
             onChange={(event) => setColor(event.target.value)}
           />
-          <button type="button" className="button button-primary button-small" disabled={!name.trim() || creating} onClick={() => void createCategory()}>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={!name.trim() || creating}
+            onClick={() => void createCategory()}
+          >
             {creating ? '添加中…' : '添加并选中'}
           </button>
-          <button type="button" className="button button-small" disabled={creating} onClick={() => {
-            setAdding(false)
-            setError('')
-          }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={creating}
+            onClick={() => {
+              setAdding(false)
+              setError('')
+            }}
+          >
             取消
           </button>
-          {error && <span className="category-quick-error" role="alert">{error}</span>}
+          {error && <div className="notice notice-error category-quick-error" role="alert">{error}</div>}
         </div>
       )}
     </div>
@@ -124,17 +148,25 @@ function FilePreview({
     setUrl(objectUrl)
     return () => URL.revokeObjectURL(objectUrl)
   }, [file])
+
   return (
     <li className="pending-image">
-      {url && <img src={url} alt="" />}
-      <span title={file.name}>{file.name}</span>
-      <span className="pending-image-order">第 {index + 1} 张</span>
+      {url && <img className="pending-image-thumb" src={url} alt="" />}
+      <div className="pending-image-meta">
+        <span className="pending-image-name" title={file.name}>{file.name}</span>
+        <span className="pending-image-order mono">#{index + 1}</span>
+      </div>
       <div className="pending-image-actions">
-        <button type="button" className="small-button" disabled={index === 0} onClick={() => onMove(-1)}>前移</button>
-        <button type="button" className="small-button" disabled={index === total - 1} onClick={() => onMove(1)}>后移</button>
-      <button type="button" className="small-button" onClick={onRemove}>
-        <AppIcon name="delete" size={16} />移除
-      </button>
+        <button type="button" className="btn btn-subtle btn-sm" disabled={index === 0} onClick={() => onMove(-1)}>
+          前移
+        </button>
+        <button type="button" className="btn btn-subtle btn-sm" disabled={index === total - 1} onClick={() => onMove(1)}>
+          后移
+        </button>
+        <button type="button" className="btn btn-danger btn-sm" onClick={onRemove} aria-label={`移除 ${file.name}`}>
+          <AppIcon name="trash" size={14} />
+          移除
+        </button>
       </div>
     </li>
   )
@@ -178,6 +210,7 @@ export function ImageInput({
 }) {
   const inputId = useId()
   const [expanded, setExpanded] = useState(!collapsible || files.length > 0)
+  const [dragging, setDragging] = useState(false)
 
   function add(input: File[]) {
     const result = validateImageFiles(input, existingCount + files.length)
@@ -195,41 +228,52 @@ export function ImageInput({
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
+    setDragging(false)
     add(Array.from(event.dataTransfer.files))
   }
 
   return (
-    <div className={compact ? 'image-input compact' : 'image-input'}>
+    <div className={compact ? 'image-input is-compact' : 'image-input'}>
       {collapsible && (
-        <button type="button" className="image-input-summary" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-          <AppIcon name="image" size={18} />
+        <button
+          type="button"
+          className="btn btn-subtle image-input-summary"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <AppIcon name="image" size={16} />
           <span>{files.length ? `已选择 ${files.length} 张截图` : '添加相关截图（可选）'}</span>
-          <span aria-hidden="true">{expanded ? '−' : '+'}</span>
+          <span className="mono" aria-hidden="true">{expanded ? '−' : '+'}</span>
         </button>
       )}
       {expanded && (
-      <div
-        className={compact ? 'image-dropzone compact' : 'image-dropzone'}
-        tabIndex={0}
-        onPaste={onPaste}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={onDrop}
-      >
-        <strong>拖入图片或按 Ctrl+V 粘贴</strong>
-        <span>PNG、JPEG、WebP，单张不超过 20 MB</span>
-        <label htmlFor={inputId} className="button button-small">选择图片</label>
-        <input
-          id={inputId}
-          className="visually-hidden"
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          multiple
-          onChange={(event) => {
-            add(Array.from(event.target.files || []))
-            event.target.value = ''
+        <div
+          className={`image-dropzone${compact ? ' is-compact' : ''}${dragging ? ' is-dragging' : ''}`}
+          tabIndex={0}
+          onPaste={onPaste}
+          onDragOver={(event) => {
+            event.preventDefault()
+            setDragging(true)
           }}
-        />
-      </div>
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+        >
+          <AppIcon name="upload" size={18} />
+          <strong>拖入图片或按 Ctrl+V 粘贴</strong>
+          <span className="field-hint">PNG、JPEG、WebP · 单张不超过 20 MB</span>
+          <label htmlFor={inputId} className="btn btn-ghost btn-sm">选择图片</label>
+          <input
+            id={inputId}
+            className="visually-hidden"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            onChange={(event) => {
+              add(Array.from(event.target.files || []))
+              event.target.value = ''
+            }}
+          />
+        </div>
       )}
       {files.length > 0 && (
         <ul className="pending-images">
@@ -256,3 +300,5 @@ export function ImageInput({
     </div>
   )
 }
+
+export const ImageDropInput = ImageInput

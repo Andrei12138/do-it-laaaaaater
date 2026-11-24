@@ -8,7 +8,6 @@ import {
   type CSSProperties
 } from 'react'
 import { createPortal } from 'react-dom'
-import { Button } from 'animal-island-ui'
 import {
   calendarDateLabel,
   calendarDays,
@@ -17,7 +16,7 @@ import {
   monthFromDate,
   shiftCalendarMonth
 } from '../calendar'
-import { chinaToday } from '../china-date'
+import { addChinaDays, chinaToday } from '../china-date'
 import { AppIcon } from './AppIcon'
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
@@ -47,6 +46,25 @@ function focusableElements(container: HTMLElement) {
   )).filter((element) => !element.hasAttribute('hidden'))
 }
 
+function ChevronLeftIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="app-icon"
+    >
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  )
+}
+
 export function SchedulePicker({
   open,
   anchor,
@@ -59,6 +77,8 @@ export function SchedulePicker({
   onClose
 }: SchedulePickerProps) {
   const today = chinaToday()
+  const tomorrow = addChinaDays(1, today)
+  const nextWeek = addChinaDays(7, today)
   const titleId = useId()
   const panelRef = useRef<HTMLElement>(null)
   const [month, setMonth] = useState(() => initialCalendarMonth(value, today))
@@ -180,7 +200,7 @@ export function SchedulePicker({
       <button type="button" className="schedule-picker-backdrop" aria-label="关闭日期选择" onClick={onClose} />
       <section
         ref={panelRef}
-        className={`schedule-picker-panel${position ? ' is-positioned' : ''}`}
+        className={`fig-popover schedule-picker-panel${position ? ' is-positioned' : ''}`}
         style={panelStyle}
         role="dialog"
         aria-modal="true"
@@ -189,34 +209,69 @@ export function SchedulePicker({
       >
         <header className="schedule-picker-heading">
           <div>
-            <span className="schedule-picker-kicker">处理计划</span>
+            <span className="schedule-picker-kicker">SCHEDULE</span>
             <h2 id={titleId}>{title}</h2>
           </div>
-          <Button type="text" size="small" aria-label="关闭日历" onClick={onClose}>
-            <AppIcon name="close" size={19} />
-          </Button>
+          <button type="button" className="btn btn-icon btn-sm" aria-label="关闭日历" onClick={onClose}>
+            <AppIcon name="close" size={16} />
+          </button>
         </header>
 
+        <div className="schedule-picker-quick" role="group" aria-label="快捷安排">
+          <button
+            type="button"
+            className={`pill${value === today ? ' is-active' : ''}`}
+            disabled={disabled}
+            onClick={() => void commitDate(today)}
+          >
+            今天
+          </button>
+          <button
+            type="button"
+            className={`pill${value === tomorrow ? ' is-active' : ''}`}
+            disabled={disabled}
+            onClick={() => void commitDate(tomorrow)}
+          >
+            明天
+          </button>
+          <button
+            type="button"
+            className={`pill${value === nextWeek ? ' is-active' : ''}`}
+            disabled={disabled}
+            onClick={() => void commitDate(nextWeek)}
+          >
+            下周
+          </button>
+          <button
+            type="button"
+            className="pill schedule-picker-clear-pill"
+            disabled={disabled || clearDisabled}
+            onClick={() => void clearPlan()}
+          >
+            清除计划
+          </button>
+        </div>
+
         <div className="schedule-picker-month-nav">
-          <Button
-            type="text"
-            size="small"
+          <button
+            type="button"
+            className="btn btn-icon btn-sm"
             aria-label="上个月"
             disabled={disabled || previousDisabled}
             onClick={() => setMonth((current) => shiftCalendarMonth(current, -1))}
           >
-            <AppIcon name="previous" size={20} />
-          </Button>
-          <strong aria-live="polite">{calendarMonthLabel(month)}</strong>
-          <Button
-            type="text"
-            size="small"
+            <ChevronLeftIcon size={16} />
+          </button>
+          <strong className="schedule-picker-month-label" aria-live="polite">{calendarMonthLabel(month)}</strong>
+          <button
+            type="button"
+            className="btn btn-icon btn-sm"
             aria-label="下个月"
             disabled={disabled}
             onClick={() => setMonth((current) => shiftCalendarMonth(current, 1))}
           >
-            <AppIcon name="next" size={20} />
-          </Button>
+            <AppIcon name="chevronRight" size={16} />
+          </button>
         </div>
 
         <div className="schedule-picker-calendar" role="grid" aria-label={calendarMonthLabel(month)}>
@@ -252,9 +307,6 @@ export function SchedulePicker({
 
         <footer className="schedule-picker-footer">
           <span>{value ? `当前计划：${calendarDateLabel(value)}` : '尚未安排处理日期'}</span>
-          <Button danger disabled={disabled || clearDisabled} onClick={() => void clearPlan()}>
-            取消计划
-          </Button>
         </footer>
       </section>
     </div>,
