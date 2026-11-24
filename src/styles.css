@@ -4596,29 +4596,43 @@ img {
 }
 
 @media (max-width: 560px) {
+  .fig-brand-name {
+    display: none;
+  }
+
+  .coverflow-view {
+    gap: 12px;
+    padding-bottom: 16px;
+  }
+
   .coverflow-track {
-    height: 304px;
+    height: 244px;
   }
 
   .coverflow-card {
-    width: 236px;
-    height: 272px;
+    width: 210px;
+    height: 230px;
   }
 
   .coverflow-card.is-offset-neg-1 {
-    transform: translateX(-188px) scale(0.82);
+    transform: translateX(-168px) scale(0.82);
   }
 
   .coverflow-card.is-offset-1 {
-    transform: translateX(188px) scale(0.82);
+    transform: translateX(168px) scale(0.82);
   }
 
   .coverflow-poster-title {
-    font-size: 20px;
+    font-size: 18px;
   }
 
   .coverflow-float-card {
-    padding: 18px 16px;
+    margin-top: -28px;
+    padding: 16px;
+  }
+
+  .coverflow-float-title {
+    font-size: 17px;
   }
   .auth-card {
     padding: 24px 20px;
