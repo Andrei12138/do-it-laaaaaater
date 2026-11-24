@@ -23,7 +23,7 @@ import {
   Title
 } from 'animal-island-ui'
 import islandBag from 'animal-island-ui/items/item-022.png'
-import { ApiRequestError, api, errorMessage, jsonRequest } from '../api'
+import { ApiRequestError, api, errorMessage, jsonRequest, readCachedSnapshot } from '../api'
 import { chinaToday, plannedDateLabel, plannedState } from '../china-date'
 import { smartDashboardGroups, type DashboardGroup } from '../dashboard-groups'
 import { discardDraft, readActiveDraft, type ActiveDraft } from '../draft-store'
@@ -655,9 +655,9 @@ export function Dashboard({
     return nextCategories.find((category) => category.id === created.id) || created
   }, [refreshReferences])
 
-  const refreshItems = useCallback(async () => {
+  const refreshItems = useCallback(async (background = false) => {
     const currentRequest = ++requestNumber.current
-    setLoading(true)
+    if (!background) setLoading(true)
     try {
       const fetchedItems = await api<LibraryItem[]>('/api/items?status=all&sort=newest&trash=all')
       if (currentRequest === requestNumber.current) {
@@ -672,8 +672,32 @@ export function Dashboard({
   }, [])
 
   useEffect(() => {
-    void refreshReferences().catch((requestError) => setError(errorMessage(requestError)))
-  }, [refreshReferences])
+    let active = true
+    let itemsSettled = false
+    let refsSettled = false
+    void Promise.all([
+      readCachedSnapshot<Category[]>('/api/categories'),
+      readCachedSnapshot<AppPreferences>('/api/preferences'),
+      readCachedSnapshot<LibraryItem[]>('/api/items?status=all&sort=newest&trash=all')
+    ]).then(([cachedCategories, cachedPreferences, cachedItems]) => {
+      if (!active) return
+      if (!refsSettled) {
+        if (cachedCategories) setCategories(cachedCategories)
+        if (cachedPreferences) setPreferences(cachedPreferences)
+      }
+      if (!itemsSettled && cachedItems) {
+        setAllItems(cachedItems)
+        setLoading(false)
+      }
+    })
+    void refreshReferences()
+      .then(() => { refsSettled = true })
+      .catch((requestError) => setError(errorMessage(requestError)))
+    void refreshItems(true).finally(() => { itemsSettled = true })
+    return () => {
+      active = false
+    }
+  }, [refreshItems, refreshReferences])
 
   useEffect(() => {
     const refreshNow = () => setNow(Date.now())
@@ -684,10 +708,6 @@ export function Dashboard({
       document.removeEventListener('visibilitychange', refreshNow)
     }
   }, [])
-
-  useEffect(() => {
-    void refreshItems()
-  }, [refreshItems])
 
   useEffect(() => {
     const synced = () => {
@@ -963,7 +983,6 @@ export function Dashboard({
     try {
       const updated = await jsonRequest<LibraryItem>('/api/items/' + item.id, 'PATCH', changes)
       setAllItems((current) => current.map((entry) => entry.id === item.id ? updated : entry))
-      await refreshItems()
       notifySuccess(label)
       return true
     } catch (requestError) {
@@ -981,24 +1000,34 @@ export function Dashboard({
   }
 
   async function deleteItem(item: LibraryItem) {
+    const previous = item
+    const nowTs = Date.now()
+    setAllItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, trashedAt: nowTs, updatedAt: nowTs } : entry))
     try {
-      await api('/api/items/' + item.id, { method: 'DELETE' })
-      await reloadAll()
+      const res = await api<{ ok: boolean; item?: LibraryItem }>('/api/items/' + item.id, { method: 'DELETE' })
+      if (res?.item) {
+        setAllItems((current) => current.map((entry) => entry.id === item.id ? res.item! : entry))
+      }
       setUndoDelete({ ids: [item.id], label: '“' + item.title + '”已移到回收站' })
       return true
     } catch (requestError) {
+      setAllItems((current) => current.map((entry) => entry.id === item.id ? previous : entry))
       notifyError(errorMessage(requestError))
       return false
     }
   }
 
   async function restoreItem(item: LibraryItem) {
+    const previous = item
+    const nowTs = Date.now()
+    setAllItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, trashedAt: null, updatedAt: nowTs } : entry))
     try {
-      await jsonRequest<LibraryItem>('/api/items/' + item.id + '/restore', 'POST')
-      await reloadAll()
+      const restored = await jsonRequest<LibraryItem>('/api/items/' + item.id + '/restore', 'POST')
+      setAllItems((current) => current.map((entry) => entry.id === item.id ? restored : entry))
       notifySuccess('已恢复到清单')
       return true
     } catch (requestError) {
+      setAllItems((current) => current.map((entry) => entry.id === item.id ? previous : entry))
       notifyError(errorMessage(requestError))
       return false
     }
@@ -1006,12 +1035,14 @@ export function Dashboard({
 
   async function permanentDeleteItem(item: LibraryItem) {
     if (!window.confirm('确定彻底删除“' + item.title + '”吗？相关图片也会永久删除，无法撤销。')) return false
+    const previous = item
+    setAllItems((current) => current.filter((entry) => entry.id !== item.id))
     try {
       await api('/api/items/' + item.id + '/permanent', { method: 'DELETE' })
-      await reloadAll()
       notifySuccess('已彻底删除')
       return true
     } catch (requestError) {
+      setAllItems((current) => [previous, ...current])
       notifyError(errorMessage(requestError))
       return false
     }

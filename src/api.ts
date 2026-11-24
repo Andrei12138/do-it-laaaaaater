@@ -1,33 +1,37 @@
 import { ApiRequestError } from './api-error'
-import { cloudApi } from './cloud/cloud-api'
-import { cloudEnabled } from './cloud/supabase'
+import { enrichFormDataWithThumbs } from './image-thumb'
 import {
   enqueueOfflineApi,
   flushOfflineQueue,
   initializeOfflineRuntime,
   isOfflineQueueable,
   isOfflineReadable,
+  readCachedAuthStatus,
+  readCachedSnapshot,
   readOfflineApi,
   rememberSuccessfulApi
 } from './offline-store'
 import { markOfflineReading, markQueued, markSaved, markSaveFailed, markSaving } from './sync-status'
 
 export { ApiRequestError } from './api-error'
-export { cloudEnabled as isCloudMode } from './cloud/supabase'
+export { readCachedAuthStatus, readCachedSnapshot }
+export const isCloudMode = false
 
 async function sendRemote<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (cloudEnabled) return cloudApi<T>(path, options)
   const headers = new Headers(options.headers)
-  if (options.body && !(options.body instanceof FormData) && !headers.has('content-type')) {
+  let body = options.body
+  if (body instanceof FormData) {
+    body = await enrichFormDataWithThumbs(body)
+  } else if (body && !headers.has('content-type')) {
     headers.set('content-type', 'application/json')
   }
-  const response = await fetch(path, { ...options, headers, credentials: 'same-origin' })
+  const response = await fetch(path, { ...options, body, headers, credentials: 'same-origin' })
   const contentType = response.headers.get('content-type') || ''
-  const body = contentType.includes('application/json') ? await response.json() : null
+  const parsed = contentType.includes('application/json') ? await response.json() : null
   if (!response.ok) {
-    throw new ApiRequestError(response.status, body?.error || '操作失败，请稍后重试', body?.details)
+    throw new ApiRequestError(response.status, parsed?.error || '操作失败，请稍后重试', parsed?.details)
   }
-  return body as T
+  return parsed as T
 }
 
 function retryableNetworkError(error: unknown) {
@@ -60,7 +64,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   try {
     const result = await sendRemote<T>(path, options)
     await rememberSuccessfulApi(path, options, result)
-    if (tracksWrite) markSaved(cloudEnabled)
+    if (tracksWrite) markSaved(true)
     return result
   } catch (error) {
     if (isOfflineReadable(path, method) && retryableNetworkError(error)) {

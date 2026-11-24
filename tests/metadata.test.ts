@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isPrivateAddress, normalizeUrl, parsePageMetadata } from '../server/metadata.js'
+import { isPrivateAddress, normalizeUrl, parsePageMetadata } from '../worker/metadata'
 
 describe('网页地址与信息解析', () => {
   it('规范化地址并保留有意义的查询参数', () => {

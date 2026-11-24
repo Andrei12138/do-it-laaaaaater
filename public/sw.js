@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'do-it-laaaaaater-shell-'
-const CACHE_NAME = CACHE_PREFIX + '2026-07-24-memo-canvas-v3'
+const CACHE_NAME = CACHE_PREFIX + '2026-11-24-cf-v4'
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -43,12 +43,20 @@ self.addEventListener('fetch', (event) => {
 
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put('/', response.clone()))
-          return response
-        })
-        .catch(() => caches.match('/'))
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match('/')
+        const networkPromise = fetch(request)
+          .then((response) => {
+            if (response.ok) cache.put('/', response.clone())
+            return response
+          })
+          .catch(() => null)
+        if (cached) {
+          event.waitUntil(networkPromise)
+          return cached
+        }
+        return (await networkPromise) || new Response('Offline', { status: 503 })
+      })
     )
     return
   }
@@ -60,7 +68,10 @@ self.addEventListener('fetch', (event) => {
   if (!staticAsset) return
   event.respondWith(
     caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-      if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()))
+      const contentType = response.headers.get('content-type') || ''
+      if (response.ok && !contentType.includes('text/html')) {
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()))
+      }
       return response
     }))
   )

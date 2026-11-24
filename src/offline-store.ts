@@ -832,6 +832,51 @@ export function isOfflineQueueable(path: string, method: string) {
     pathname === '/api/items/bulk' || pathname.startsWith('/api/items/') || pathname.startsWith('/api/assets/')
 }
 
+export function readCachedAuthStatus(): AuthStatus | null {
+  return cachedAuth()
+}
+
+export async function readCachedSnapshot<T>(path: string): Promise<T | null> {
+  try {
+    const url = new URL(path, location.origin)
+    if (url.pathname === '/api/auth/status') {
+      return (cachedAuth() as T | null)
+    }
+    if (!activeUserKey) {
+      const auth = cachedAuth()
+      if (auth?.user?.email) configureOfflineUser(auth.user.email)
+    }
+    if (!activeUserKey) return null
+    const snapshot = await readSnapshot()
+    if (!snapshot.updatedAt) return null
+    if (url.pathname === '/api/categories') {
+      if (!snapshot.categoriesSyncedAt) return null
+      return snapshot.categories.map((entry) => ({ ...entry })) as T
+    }
+    if (url.pathname === '/api/preferences') {
+      if (!snapshot.preferencesSyncedAt) return null
+      return { ...snapshot.preferences } as T
+    }
+    if (url.pathname === '/api/items') {
+      if (!snapshot.itemsSyncedAt) return null
+      const filters: ItemFilters = {
+        status: (url.searchParams.get('status') as ItemFilters['status']) || 'all',
+        kind: (url.searchParams.get('kind') as ItemFilters['kind']) || 'all',
+        category: url.searchParams.get('category') || '',
+        date: url.searchParams.get('date') || '',
+        q: url.searchParams.get('q') || '',
+        priority: (url.searchParams.get('priority') as ItemFilters['priority']) || 'all',
+        sort: (url.searchParams.get('sort') as ItemFilters['sort']) || 'newest',
+        trash: (url.searchParams.get('trash') as ItemFilters['trash']) || 'active'
+      }
+      return await hydrateItems(snapshot.userKey, filterLibraryItems(snapshot.items, filters)) as T
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export async function readOfflineApi<T>(path: string): Promise<T> {
   const url = new URL(path, location.origin)
   if (url.pathname === '/api/auth/status') {
