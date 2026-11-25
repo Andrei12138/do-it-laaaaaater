@@ -391,6 +391,7 @@ interface ItemEntryProps {
   onPermanentDelete: () => Promise<boolean>
   onGenerateCover: () => void
   onPreview: (assets: ImageAsset[], index: number) => void
+  onShareToBlog?: () => void
 }
 
 function ItemEntry({
@@ -413,7 +414,8 @@ function ItemEntry({
   onRestore,
   onPermanentDelete,
   onGenerateCover,
-  onPreview
+  onPreview,
+  onShareToBlog
 }: ItemEntryProps) {
   const webCover = item.assets.find((asset) => asset.role === 'web_cover')
   const manual = itemManualAssets(item)
@@ -554,6 +556,20 @@ function ItemEntry({
         <AppIcon name="edit" size={15} />
         <span>编辑详情</span>
       </button>
+      {!trashMode && onShareToBlog && (
+        <button
+          type="button"
+          role="menuitem"
+          className="fig-menu-item"
+          onClick={() => {
+            setMenuOpen(false)
+            onShareToBlog()
+          }}
+        >
+          <AppIcon name="send" size={15} />
+          <span>转摘到博客</span>
+        </button>
+      )}
       <div className="fig-menu-divider" />
       <button
         type="button"
@@ -953,10 +969,16 @@ function ItemEntry({
 
 export function Dashboard({
   userEmail,
-  onSessionChange
+  onSessionChange,
+  initialTab,
+  onConsumeInitialTab,
+  onOpenBlog
 }: {
   userEmail: string
   onSessionChange: () => Promise<void>
+  initialTab?: 'list' | 'plan' | 'memo'
+  onConsumeInitialTab?: () => void
+  onOpenBlog?: (opts?: { path?: string; importItemId?: string }) => void
 }) {
   const [categories, setCategories] = useState<Category[]>([])
   const [allItems, setAllItems] = useState<LibraryItem[]>([])
@@ -1923,6 +1945,45 @@ export function Dashboard({
       ? 'plan'
       : 'list'
 
+  useEffect(() => {
+    if (!initialTab) return
+    if (initialTab === 'plan') {
+      setMemoOpen(false)
+      setMobileMoreOpen(false)
+      setSelectionMode(false)
+      setSelectedIds(new Set())
+      setTodayOverdueOnly(false)
+      setFilters((current) => ({
+        ...current,
+        trash: 'active',
+        status: 'pending',
+        priority: 'planned',
+        category: '',
+        sort: 'planned_date'
+      }))
+    } else if (initialTab === 'memo') {
+      setMobileMoreOpen(false)
+      setSelectionMode(false)
+      setSelectedIds(new Set())
+      setMemoOpen(true)
+    } else if (initialTab === 'list') {
+      setMemoOpen(false)
+      setMobileMoreOpen(false)
+      setSelectionMode(false)
+      setSelectedIds(new Set())
+      setTodayOverdueOnly(false)
+      setFilters((current) => ({
+        ...current,
+        trash: 'active',
+        status: 'pending',
+        priority: 'all',
+        category: '',
+        sort: current.sort === 'recently_completed' ? 'smart' : current.sort
+      }))
+    }
+    onConsumeInitialTab?.()
+  }, [initialTab, onConsumeInitialTab])
+
   const activeQuickView = filters.trash === 'only'
     ? 'trash'
     : todayOverdueOnly
@@ -2041,6 +2102,9 @@ export function Dashboard({
           onPermanentDelete={() => permanentDeleteItem(item)}
           onGenerateCover={() => void generateItemCover(item)}
           onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
+          onShareToBlog={
+            onOpenBlog ? () => onOpenBlog({ path: '/blog', importItemId: item.id }) : undefined
+          }
         />
       ))}
     </div>
@@ -2092,6 +2156,13 @@ export function Dashboard({
                 onClick={() => setMemoOpen(true)}
               >
                 备忘录
+              </button>
+              <button
+                type="button"
+                className="fig-nav-tab"
+                onClick={() => onOpenBlog?.({ path: '/blog' })}
+              >
+                博客
               </button>
             </nav>
           </div>
@@ -2920,6 +2991,17 @@ export function Dashboard({
           </button>
 
           <div className="fig-sheet-section-title">效率与工具</div>
+          <button
+            type="button"
+            className="fig-sheet-row"
+            onClick={() => {
+              setMobileMoreOpen(false)
+              onOpenBlog?.({ path: '/blog' })
+            }}
+          >
+            <AppIcon name="book" size={17} />
+            <span>个人博客（朋友圈）</span>
+          </button>
           <button
             type="button"
             className="fig-sheet-row"

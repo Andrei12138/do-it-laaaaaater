@@ -1,16 +1,26 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState, type FormEvent } from 'react'
 import { api, errorMessage, jsonRequest, readCachedAuthStatus } from './api'
 import { BrandMark } from './components/AppIcon'
 import { Dashboard } from './components/Dashboard'
 import { QuickCapture } from './components/QuickCapture'
 import type { AuthStatus } from './types'
 
+const BlogApp = lazy(() =>
+  import('./components/blog/BlogApp').then((module) => ({ default: module.BlogApp }))
+)
+
+function isBlogPath(pathname: string): boolean {
+  return pathname === '/blog' || pathname.startsWith('/blog/')
+}
+
 function AuthScreen({
   mode,
-  onComplete
+  onComplete,
+  onOpenBlog
 }: {
   mode: 'setup' | 'login'
   onComplete: () => Promise<void>
+  onOpenBlog?: () => void
 }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -116,6 +126,25 @@ function AuthScreen({
             {busy ? '正在处理…' : mode === 'setup' ? '创建账号并开始使用' : '登录'}
           </button>
         </form>
+
+        {mode === 'login' && onOpenBlog && (
+          <div
+            style={{
+              marginTop: 18,
+              paddingTop: 14,
+              borderTop: '1px solid var(--border-subtle)',
+              textAlign: 'center'
+            }}
+          >
+            <button
+              type="button"
+              className="btn btn-text btn-sm"
+              onClick={onOpenBlog}
+            >
+              访问公开博客 →
+            </button>
+          </div>
+        )}
       </section>
     </main>
   )
@@ -124,6 +153,28 @@ function AuthScreen({
 export default function App() {
   const [status, setStatus] = useState<AuthStatus | null>(() => readCachedAuthStatus())
   const [error, setError] = useState('')
+  const [pathname, setPathname] = useState(() => window.location.pathname)
+  const [postLoginRedirect, setPostLoginRedirect] = useState<string | null>(null)
+  const [initialDashboardTab, setInitialDashboardTab] = useState<'list' | 'plan' | 'memo' | undefined>(
+    undefined
+  )
+  const [pendingBlogImportItemId, setPendingBlogImportItemId] = useState<string | null>(null)
+
+  const navigate = useCallback((nextPath: string) => {
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState(null, '', nextPath)
+    }
+    setPathname(nextPath)
+    window.scrollTo(0, 0)
+  }, [])
+
+  useEffect(() => {
+    const onPopState = () => {
+      setPathname(window.location.pathname)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -137,6 +188,52 @@ export default function App() {
   useEffect(() => {
     void refreshStatus()
   }, [refreshStatus])
+
+  const handleAuthComplete = useCallback(async () => {
+    await refreshStatus()
+    if (postLoginRedirect) {
+      const target = postLoginRedirect
+      setPostLoginRedirect(null)
+      navigate(target)
+    }
+  }, [refreshStatus, postLoginRedirect, navigate])
+
+  const handleConsumePendingImport = useCallback(() => {
+    setPendingBlogImportItemId(null)
+  }, [])
+
+  const handleConsumeInitialTab = useCallback(() => {
+    setInitialDashboardTab(undefined)
+  }, [])
+
+  if (isBlogPath(pathname) && !status?.setupRequired) {
+    return (
+      <Suspense
+        fallback={
+          <main className="center-page">
+            <div className="spinner" aria-label="加载中" />
+          </main>
+        }
+      >
+        <BlogApp
+          path={pathname}
+          embedded={Boolean(status?.authenticated)}
+          pendingImportItemId={pendingBlogImportItemId}
+          onConsumePendingImport={handleConsumePendingImport}
+          onNavigate={navigate}
+          onRequestLogin={() => {
+            setPostLoginRedirect(pathname)
+            navigate('/')
+          }}
+          onBackToWorkspace={() => navigate('/')}
+          onSwitchWorkspaceTab={(tab) => {
+            setInitialDashboardTab(tab)
+            navigate('/')
+          }}
+        />
+      </Suspense>
+    )
+  }
 
   if (error && !status) {
     return (
@@ -168,14 +265,33 @@ export default function App() {
     )
   }
 
-  if (status.setupRequired) return <AuthScreen mode="setup" onComplete={refreshStatus} />
-  if (!status.authenticated) return <AuthScreen mode="login" onComplete={refreshStatus} />
+  if (status.setupRequired) return <AuthScreen mode="setup" onComplete={handleAuthComplete} />
+  if (!status.authenticated) {
+    return (
+      <AuthScreen
+        mode="login"
+        onComplete={handleAuthComplete}
+        onOpenBlog={() => {
+          setPostLoginRedirect(null)
+          navigate('/blog')
+        }}
+      />
+    )
+  }
   if (new URLSearchParams(window.location.search).get('capture') === 'quick') return <QuickCapture />
 
   return (
     <Dashboard
       userEmail={status.user?.email || ''}
       onSessionChange={refreshStatus}
+      initialTab={initialDashboardTab}
+      onConsumeInitialTab={handleConsumeInitialTab}
+      onOpenBlog={(opts) => {
+        if (opts?.importItemId) {
+          setPendingBlogImportItemId(opts.importItemId)
+        }
+        navigate(opts?.path || '/blog')
+      }}
     />
   )
 }

@@ -1,4 +1,5 @@
 import { generateAiPosterCover, listAiModels, maskApiKey } from './ai-cover'
+import { handleBlogApi } from './blog'
 import { detectImageMime, fetchImage, fetchPageMetadata, normalizeUrl } from './metadata'
 import {
   buildClearSessionCookie,
@@ -760,6 +761,10 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     ])
     const cookie = await createSession(env, user.id, url)
     return json({ ok: true }, 200, { 'set-cookie': cookie })
+  }
+
+  if (path === '/api/blog' || path.startsWith('/api/blog/')) {
+    return handleBlogApi(request, env, ctx)
   }
 
   // All routes below require authentication
