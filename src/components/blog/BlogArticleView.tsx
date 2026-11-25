@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { formatArticleDateTime, toggleBlogPostLike } from '../../blog-api'
-import { formatMomentText, renderArticleMarkdown } from '../../blog-markdown'
+import { formatMomentText, renderArticleMarkdown, type TocHeading } from '../../blog-markdown'
 import { useOptionalBlogMusic } from '../../blog-music'
 import type {
   BlogComment,
@@ -17,6 +17,8 @@ import { BlogMusicCard } from './BlogMusicCard'
 import { BlogUnlockCard } from './BlogUnlockCard'
 import { BlogVideoCard } from './BlogVideoCard'
 
+const EMPTY_TOC_HEADINGS: TocHeading[] = []
+
 export interface BlogArticleViewProps {
   post: BlogPostDetail
   profile: BlogProfile
@@ -29,6 +31,8 @@ export interface BlogArticleViewProps {
   onEditPost: (post: BlogPostDetail) => void
   onPostUpdated: (post: BlogPostDetail) => void
   onOpenLightbox: (images: Array<{ url: string; alt?: string }>, index: number) => void
+  tocInRail?: boolean
+  onTocStateChange?: (headings: TocHeading[], activeId: string) => void
 }
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
@@ -88,7 +92,9 @@ export function BlogArticleView({
   onFilterTag,
   onEditPost,
   onPostUpdated,
-  onOpenLightbox
+  onOpenLightbox,
+  tocInRail = false,
+  onTocStateChange
 }: BlogArticleViewProps) {
   const [activeHeadingId, setActiveHeadingId] = useState<string>('')
   const [liking, setLiking] = useState(false)
@@ -96,6 +102,8 @@ export function BlogArticleView({
 
   const articleContentRef = useRef<HTMLDivElement | null>(null)
   const copyTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map())
+  const onTocStateChangeRef = useRef(onTocStateChange)
+  onTocStateChangeRef.current = onTocStateChange
 
   const isArticle = post.type === 'article'
   const headerTitle = post.title || '动态详情'
@@ -106,6 +114,8 @@ export function BlogArticleView({
     if (post.locked || !isArticle) return null
     return renderArticleMarkdown(post.content)
   }, [post.locked, isArticle, post.content])
+
+  const renderedHeadings = rendered ? rendered.headings : EMPTY_TOC_HEADINGS
 
   const momentSegments = useMemo(() => {
     if (post.locked || isArticle) return []
@@ -151,6 +161,17 @@ export function BlogArticleView({
       window.removeEventListener('scroll', updateActiveHeading)
     }
   }, [rendered, post.id])
+
+  // Sync TOC headings & active heading ID to parent shell rail
+  useEffect(() => {
+    onTocStateChangeRef.current?.(renderedHeadings, activeHeadingId)
+  }, [renderedHeadings, activeHeadingId])
+
+  useEffect(() => {
+    return () => {
+      onTocStateChangeRef.current?.(EMPTY_TOC_HEADINGS, '')
+    }
+  }, [])
 
   const handleCopyShareUrl = async () => {
     const ok = await copyTextToClipboard(window.location.href)
@@ -381,7 +402,7 @@ export function BlogArticleView({
     <>
       {stickyTopBar}
 
-      {isArticle && rendered && rendered.headings.length >= 2 && (
+      {!tocInRail && isArticle && rendered && rendered.headings.length >= 2 && (
         <aside className="blog-toc" aria-label="文章目录">
           <div className="blog-toc-title">目录</div>
           <ul className="blog-toc-list">

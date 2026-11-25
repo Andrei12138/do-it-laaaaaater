@@ -5,6 +5,20 @@ import { updateBlogSettings, uploadBlogMedia } from '../../blog-api'
 import type { BlogProfile } from '../../blog-types'
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
+import {
+  BLOG_SIDEBAR_WIDGET_LABELS,
+  readBlogSidebarConfig,
+  type BlogSidebarWidgetId
+} from './BlogSideRails'
+
+const SIDEBAR_WIDGET_ORDER: readonly BlogSidebarWidgetId[] = [
+  'about',
+  'album',
+  'music',
+  'equipment',
+  'labs',
+  'friends'
+]
 
 export interface BlogSettingsModalProps {
   open: boolean
@@ -27,6 +41,9 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
   const [bio, setBio] = useState(profile.bio || '')
   const [footerText, setFooterText] = useState(profile.footerText || '')
   const [allowComments, setAllowComments] = useState(Boolean(profile.allowComments))
+  const [hiddenWidgets, setHiddenWidgets] = useState<BlogSidebarWidgetId[]>(
+    () => readBlogSidebarConfig(profile.extensions).hiddenWidgets
+  )
 
   const [coverMediaId, setCoverMediaId] = useState<string | null>(profile.coverMediaId ?? null)
   const [coverUrl, setCoverUrl] = useState<string | null>(profile.coverUrl ?? null)
@@ -52,6 +69,7 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
     setBio(profile.bio || '')
     setFooterText(profile.footerText || '')
     setAllowComments(Boolean(profile.allowComments))
+    setHiddenWidgets(readBlogSidebarConfig(profile.extensions).hiddenWidgets)
     setCoverMediaId(profile.coverMediaId ?? null)
     setCoverUrl(profile.coverUrl ?? null)
     setAvatarMediaId(profile.avatarMediaId ?? null)
@@ -140,12 +158,27 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
     }
   }, [rssUrl])
 
+  const toggleSidebarWidget = useCallback((widgetId: BlogSidebarWidgetId) => {
+    setHiddenWidgets((prev) =>
+      prev.includes(widgetId) ? prev.filter((item) => item !== widgetId) : [...prev, widgetId]
+    )
+  }, [])
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
     if (busy) return
     setError('')
     setSaving(true)
     try {
+      const existingExtensions =
+        profile.extensions && typeof profile.extensions === 'object' ? profile.extensions : {}
+      const existingSidebar =
+        existingExtensions.sidebar &&
+        typeof existingExtensions.sidebar === 'object' &&
+        !Array.isArray(existingExtensions.sidebar)
+          ? (existingExtensions.sidebar as Record<string, unknown>)
+          : {}
+
       const updated = await updateBlogSettings({
         siteName: siteName.trim(),
         nickname: nickname.trim(),
@@ -153,7 +186,14 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
         footerText: footerText.trim(),
         avatarMediaId,
         coverMediaId,
-        allowComments
+        allowComments,
+        extensions: {
+          ...existingExtensions,
+          sidebar: {
+            ...existingSidebar,
+            hiddenWidgets
+          }
+        }
       })
       showToast('success', '博客设置已保存')
       onSaved(updated)
@@ -389,24 +429,40 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
               </div>
             </div>
 
-            {/* Subtle Phase 2 Expansion Note */}
-            <div
-              style={{
-                padding: '10px 12px',
-                borderRadius: 10,
-                background: 'var(--blog-surface-subtle)',
-                border: '1px dashed var(--blog-divider)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10,
-                flexWrap: 'wrap'
-              }}
-            >
-              <span className="blog-field-hint">
-                已预留扩展槽位（Phase 2）：音乐歌单 · 关于与装备页 · 实况图
-              </span>
-              <span className="blog-badge-category">即将支持</span>
+            {/* Desktop Left/Right Bento Sidebar Widgets */}
+            <div className="blog-field">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span className="blog-field-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <AppIcon name="sidebar" size={13} />
+                  <span>桌面左右侧栏模块</span>
+                </span>
+                <span className="blog-field-hint">宽屏（≥1240px）展示三栏 Bento 卡片</span>
+              </div>
+
+              <div className="blog-settings-widgets" role="group" aria-label="桌面左右侧栏模块开关">
+                {SIDEBAR_WIDGET_ORDER.map((widgetId) => {
+                  const meta = BLOG_SIDEBAR_WIDGET_LABELS[widgetId]
+                  const visible = !hiddenWidgets.includes(widgetId)
+                  return (
+                    <div key={widgetId} className="blog-settings-widget-item">
+                      <div className="blog-settings-widget-info">
+                        <span className="blog-settings-widget-name">{meta.label}</span>
+                        <span className="blog-settings-widget-side">
+                          {meta.side === 'left' ? '左栏' : '右栏'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={visible}
+                        aria-label={`显示${meta.label}模块`}
+                        className={`blog-switch${visible ? ' is-checked' : ''}`}
+                        onClick={() => toggleSidebarWidget(widgetId)}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
             </div>
 
             {error && (

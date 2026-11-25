@@ -954,10 +954,12 @@ function BlogMusicManagerModal({
 export function BlogMusicProvider({
   isOwner,
   hasBottomBar = false,
+  desktopRailActive = false,
   children
 }: {
   isOwner: boolean
   hasBottomBar?: boolean
+  desktopRailActive?: boolean
   children: ReactNode
 }) {
   const [tracks, setTracks] = useState<BlogMusicTrack[]>([])
@@ -1320,7 +1322,7 @@ export function BlogMusicProvider({
             data-blog-theme={blogTheme}
           >
             <div
-              className={`blog-p2-music-pill${isPlaying ? ' is-playing' : ''}${hasBottomBar ? ' has-bottom-bar' : ''}`}
+              className={`blog-p2-music-pill${isPlaying ? ' is-playing' : ''}${hasBottomBar ? ' has-bottom-bar' : ''}${desktopRailActive ? ' is-desktop-rail-active' : ''}`}
               role="region"
               aria-label="全局音乐播放器"
             >

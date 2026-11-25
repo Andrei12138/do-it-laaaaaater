@@ -13,6 +13,16 @@ function isAppPath(pathname: string): boolean {
   return pathname === '/app' || pathname.startsWith('/app/') || pathname === '/login'
 }
 
+function hasWorkspaceQueryIntent(search: string, hash: string): boolean {
+  const params = new URLSearchParams(search)
+  if (params.get('capture') === 'quick') return true
+  if (params.get('add') === 'link') return true
+  if (params.has('open')) return true
+  const hashParams = new URLSearchParams(hash.replace(/^#/, ''))
+  if (hashParams.has('quick-clipboard')) return true
+  return false
+}
+
 function AuthScreen({
   mode,
   onComplete,
@@ -153,7 +163,19 @@ function AuthScreen({
 export default function App() {
   const [status, setStatus] = useState<AuthStatus | null>(() => readCachedAuthStatus())
   const [error, setError] = useState('')
-  const [pathname, setPathname] = useState(() => window.location.pathname)
+  const [pathname, setPathname] = useState(() => {
+    const currentPath = window.location.pathname
+    const isQuick = new URLSearchParams(window.location.search).get('capture') === 'quick'
+    if (
+      !isAppPath(currentPath) &&
+      hasWorkspaceQueryIntent(window.location.search, window.location.hash) &&
+      !isQuick
+    ) {
+      window.history.replaceState(null, '', '/app' + window.location.search + window.location.hash)
+      return '/app'
+    }
+    return currentPath
+  })
   const [postLoginRedirect, setPostLoginRedirect] = useState<string | null>(null)
   const [initialDashboardTab, setInitialDashboardTab] = useState<'list' | 'plan' | 'memo' | undefined>(
     undefined
@@ -207,8 +229,9 @@ export default function App() {
   }, [])
 
   const isQuickCapture = new URLSearchParams(window.location.search).get('capture') === 'quick'
+  const hasWorkspaceIntent = hasWorkspaceQueryIntent(window.location.search, window.location.hash)
 
-  if (!isAppPath(pathname) && !isQuickCapture && !status?.setupRequired) {
+  if (!isAppPath(pathname) && !hasWorkspaceIntent && !status?.setupRequired) {
     return (
       <Suspense
         fallback={

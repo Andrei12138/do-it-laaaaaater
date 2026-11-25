@@ -20,6 +20,8 @@ import {
 } from '../../blog-api'
 import '../../blog.css'
 import '../../blog-phase2.css'
+import '../../blog-bento.css'
+import type { TocHeading } from '../../blog-markdown'
 import { BlogMusicProvider, useBlogMusic } from '../../blog-music'
 import type {
   BlogArchiveItem,
@@ -40,6 +42,7 @@ import { BlogLightbox, type BlogLightboxImage } from './BlogLightbox'
 import { BlogMomentCard } from './BlogMomentCard'
 import { BlogPagesView } from './BlogPagesView'
 import { BlogSettingsModal } from './BlogSettingsModal'
+import { BlogLeftRail, BlogRightRail, readBlogSidebarConfig } from './BlogSideRails'
 
 export interface BlogAppProps {
   path: string
@@ -140,6 +143,7 @@ interface BlogAppInnerProps extends BlogAppProps {
   setBootstrap: Dispatch<SetStateAction<BlogBootstrap | null>>
   refreshBootstrap: () => Promise<void>
   isOwner: boolean
+  sidebarConfig: ReturnType<typeof readBlogSidebarConfig>
 }
 
 export function BlogApp(props: BlogAppProps) {
@@ -160,11 +164,21 @@ export function BlogApp(props: BlogAppProps) {
     void refreshBootstrap()
   }, [refreshBootstrap, embedded])
 
+  const profile = bootstrap?.profile ?? DEFAULT_PROFILE
+  const sidebarConfig = useMemo(
+    () => readBlogSidebarConfig(profile.extensions),
+    [profile.extensions]
+  )
+  const musicInRightRail = !sidebarConfig.hiddenWidgets.includes('music')
   const isOwner = bootstrap ? bootstrap.isOwner : Boolean(embedded)
   const isDetailRoute = route.kind === 'article' || route.kind === 'moment'
 
   return (
-    <BlogMusicProvider isOwner={isOwner} hasBottomBar={isDetailRoute}>
+    <BlogMusicProvider
+      isOwner={isOwner}
+      hasBottomBar={isDetailRoute}
+      desktopRailActive={musicInRightRail}
+    >
       <BlogAppInner
         {...props}
         route={route}
@@ -172,6 +186,7 @@ export function BlogApp(props: BlogAppProps) {
         setBootstrap={setBootstrap}
         refreshBootstrap={refreshBootstrap}
         isOwner={isOwner}
+        sidebarConfig={sidebarConfig}
       />
     </BlogMusicProvider>
   )
@@ -189,7 +204,8 @@ function BlogAppInner({
   bootstrap,
   setBootstrap,
   refreshBootstrap,
-  isOwner
+  isOwner,
+  sidebarConfig
 }: BlogAppInnerProps) {
   const music = useBlogMusic()
 
@@ -234,8 +250,45 @@ function BlogAppInner({
   // Scroll state for floating dock
   const [showBackToTop, setShowBackToTop] = useState(false)
 
+  // Bento side rails state (refresh tick & article TOC)
+  const [railRefreshTick, setRailRefreshTick] = useState(0)
+  const [articleToc, setArticleToc] = useState<{ headings: TocHeading[]; activeId: string }>({
+    headings: [],
+    activeId: ''
+  })
+
   const feedReqIdRef = useRef(0)
   const searchInputElRef = useRef<HTMLInputElement | null>(null)
+  const prevRouteKindRef = useRef<BlogRoute['kind']>(route.kind)
+
+  useEffect(() => {
+    const prevKind = prevRouteKindRef.current
+    prevRouteKindRef.current = route.kind
+    if (
+      prevKind !== route.kind &&
+      (prevKind === 'about' ||
+        prevKind === 'equipment' ||
+        prevKind === 'labs' ||
+        prevKind === 'friends')
+    ) {
+      setRailRefreshTick((t) => t + 1)
+    }
+  }, [route.kind])
+
+  const handleTocStateChange = useCallback((headings: TocHeading[], activeId: string) => {
+    setArticleToc((prev) =>
+      prev.headings === headings && prev.activeId === activeId ? prev : { headings, activeId }
+    )
+  }, [])
+
+  const handleJumpHeading = useCallback((id: string) => {
+    if (typeof document === 'undefined') return
+    const target = document.getElementById(id)
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setArticleToc((prev) => (prev.activeId === id ? prev : { ...prev, activeId: id }))
+    }
+  }, [])
 
   const profile = bootstrap?.profile ?? DEFAULT_PROFILE
   const existingCategories = useMemo(
@@ -489,6 +542,7 @@ function BlogAppInner({
       void refreshBootstrap()
       setFeedRefreshTick((t) => t + 1)
       setArchivesRefreshTick((t) => t + 1)
+      setRailRefreshTick((t) => t + 1)
 
       if (detailPost && (detailPost.id === savedPost.id || detailPost.shortId === savedPost.shortId)) {
         setDetailPost(savedPost)
@@ -531,6 +585,7 @@ function BlogAppInner({
         showToast('success', updated.isPinned ? '已置顶' : '已取消置顶')
         setFeedRefreshTick((t) => t + 1)
         setArchivesRefreshTick((t) => t + 1)
+        setRailRefreshTick((t) => t + 1)
         setDetailPost((prev) => (prev && prev.id === updated.id ? updated : prev))
       } catch (err) {
         showToast('error', errorMessage(err))
@@ -547,6 +602,7 @@ function BlogAppInner({
         await deleteBlogPost(post.shortId)
         setPosts((prev) => prev.filter((item) => item.id !== post.id))
         setArchiveItems((prev) => prev.filter((item) => item.id !== post.id))
+        setRailRefreshTick((t) => t + 1)
         void refreshBootstrap()
         showToast('success', `${label}已删除`)
         if (
@@ -711,7 +767,21 @@ function BlogAppInner({
         className={embedded ? 'blog-root is-embedded' : 'blog-root'}
         data-blog-theme={darkMode ? 'dark' : 'light'}
       >
-        <main className="blog-shell">
+        <div className="blog-bento-stage">
+          <BlogLeftRail
+            profile={profile}
+            isOwner={isOwner}
+            activeRoute={route.kind}
+            hiddenWidgets={sidebarConfig.hiddenWidgets}
+            refreshTick={railRefreshTick}
+            onNavigate={onNavigate}
+            onOpenLightbox={handleOpenLightbox}
+            onOpenCompose={handleOpenCompose}
+            articleHeadings={route.kind === 'article' ? articleToc.headings : undefined}
+            activeHeadingId={route.kind === 'article' ? articleToc.activeId : undefined}
+            onJumpHeading={handleJumpHeading}
+          />
+          <main className="blog-shell">
           {!isDetailRoute && (
             <BlogCoverHeader
               profile={profile}
@@ -1106,11 +1176,24 @@ function BlogAppInner({
                   onEditPost={(post) => handleEditPost(post)}
                   onPostUpdated={handleDetailPostUpdated}
                   onOpenLightbox={handleOpenLightbox}
+                  tocInRail={true}
+                  onTocStateChange={handleTocStateChange}
                 />
               ) : null}
             </>
           )}
-        </main>
+          </main>
+          <BlogRightRail
+            profile={profile}
+            isOwner={isOwner}
+            activeRoute={route.kind}
+            hiddenWidgets={sidebarConfig.hiddenWidgets}
+            refreshTick={railRefreshTick}
+            onNavigate={onNavigate}
+            onOpenLightbox={handleOpenLightbox}
+            onOpenCompose={handleOpenCompose}
+          />
+        </div>
 
         <footer className="blog-footer">
           <div>
@@ -1199,6 +1282,7 @@ function BlogAppInner({
           onClose={() => setSettingsOpen(false)}
           onSaved={(nextProfile) => {
             setBootstrap((prev) => (prev ? { ...prev, profile: nextProfile } : prev))
+            setRailRefreshTick((t) => t + 1)
             void refreshBootstrap()
             setSettingsOpen(false)
           }}

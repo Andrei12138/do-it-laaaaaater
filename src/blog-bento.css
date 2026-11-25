@@ -1,0 +1,1042 @@
+/* ==========================================================================
+   Do It Laaaaaater — Desktop 3-Column Bento Layout & Sticky Side Rails
+   Scoped under .blog-root (Light + Dark [data-blog-theme='dark'])
+   Follows DESIGN.md: White gallery wall (#ffffff) / Dark (#1a1a1e),
+   1px hairline borders, 16px card radius, ZERO drop shadows on Bento cards,
+   single Electric Indigo (#4d49fc) spotlight, Inter + JetBrains Mono.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Responsive Stage & Sticky Side Rails
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 1239px) {
+  .blog-bento-stage {
+    display: block;
+    padding: 0;
+  }
+
+  .blog-bento-rail {
+    display: none;
+  }
+}
+
+@media (min-width: 1240px) {
+  .blog-bento-stage {
+    max-width: 1260px;
+    margin: 0 auto;
+    padding: 24px 20px 56px;
+    display: grid;
+    grid-template-columns: 280px 620px 280px;
+    gap: 20px;
+    align-items: start;
+    justify-content: center;
+  }
+
+  .blog-root.is-embedded .blog-bento-stage {
+    padding-top: 20px;
+  }
+
+  .blog-bento-stage .blog-shell,
+  .blog-root.is-embedded .blog-bento-stage .blog-shell {
+    margin: 0;
+    width: 620px;
+    max-width: 620px;
+  }
+
+  .blog-bento-rail {
+    position: sticky;
+    top: 24px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    scrollbar-width: none;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-bottom: 12px;
+    min-width: 0;
+  }
+
+  .blog-root.is-embedded .blog-bento-rail {
+    top: 84px;
+    max-height: calc(100vh - 104px);
+  }
+
+  .blog-bento-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Keep center column ultra-clean when side rails provide full section navigation */
+  .blog-bento-stage .blog-p2-nav-strip {
+    display: none;
+  }
+
+  /* Deduplicate floating bottom-left music pill when right-rail music card is active */
+  .blog-p2-music-pill.is-desktop-rail-active {
+    display: none;
+  }
+
+  /* Anchor floating dock cleanly at bottom-right viewport corner */
+  .blog-floating-dock {
+    right: 24px;
+    bottom: 24px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   2. Shared Bento Rail Card Shell & Header
+   -------------------------------------------------------------------------- */
+
+.blog-rail-card {
+  background: var(--blog-surface);
+  border: 1px solid var(--blog-divider);
+  border-radius: var(--blog-radius-md, 16px);
+  box-shadow: none;
+  padding: 15px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  transition: background-color 0.2s var(--blog-ease), border-color 0.2s var(--blog-ease);
+}
+
+.blog-rail-card.is-route-active {
+  border-color: rgba(77, 73, 252, 0.36);
+}
+
+.blog-root[data-blog-theme='dark'] .blog-rail-card.is-route-active {
+  border-color: rgba(129, 140, 248, 0.42);
+}
+
+.blog-rail-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.blog-rail-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--blog-text);
+  line-height: 1.25;
+}
+
+.blog-rail-card-title .app-icon {
+  color: var(--blog-text-muted);
+  flex-shrink: 0;
+}
+
+.blog-rail-card.is-route-active .blog-rail-card-title .app-icon,
+.blog-rail-music.is-playing .blog-rail-card-title .app-icon {
+  color: var(--blog-link);
+}
+
+.blog-rail-active-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--blog-radius-pill, 50px);
+  background: var(--blog-link-soft);
+  color: var(--blog-link);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.blog-rail-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.blog-rail-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+  padding: 0 7px;
+  margin-right: -4px;
+  border: 0;
+  border-radius: var(--blog-radius-sm, 8px);
+  background: transparent;
+  color: var(--blog-text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.14s var(--blog-ease), color 0.14s var(--blog-ease);
+}
+
+.blog-rail-head-actions .blog-rail-more {
+  margin-right: 0;
+}
+
+.blog-rail-more:hover {
+  background: var(--blog-surface-subtle);
+  color: var(--blog-link);
+  text-decoration: none;
+}
+
+.blog-rail-inline-count {
+  font-family: var(--blog-font-mono);
+  font-size: 11px;
+  color: var(--blog-link);
+}
+
+.blog-rail-icon-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--blog-radius-sm, 8px);
+  background: transparent;
+  color: var(--blog-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.14s var(--blog-ease), color 0.14s var(--blog-ease);
+}
+
+.blog-rail-icon-btn:hover {
+  background: var(--blog-surface-subtle);
+  color: var(--blog-link);
+}
+
+/* --------------------------------------------------------------------------
+   3. Article Table of Contents Bento Card (.blog-rail-toc)
+   -------------------------------------------------------------------------- */
+
+.blog-rail-toc-count {
+  font-family: var(--blog-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--blog-text-muted);
+  padding: 2px 6px;
+  border-radius: var(--blog-radius-xs, 2px);
+  background: var(--blog-surface-subtle);
+}
+
+.blog-rail-toc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding-left: 2px;
+  border-left: 1px solid var(--blog-divider);
+}
+
+.blog-rail-toc-item {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+  border: 0;
+  border-radius: 0 var(--blog-radius-sm, 8px) var(--blog-radius-sm, 8px) 0;
+  background: transparent;
+  color: var(--blog-text-secondary);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.14s var(--blog-ease), color 0.14s var(--blog-ease);
+}
+
+.blog-rail-toc-item.is-h3 {
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--blog-text-muted);
+}
+
+.blog-rail-toc-item:hover {
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text);
+}
+
+.blog-rail-toc-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--blog-border-input);
+  flex-shrink: 0;
+  transition: background-color 0.14s var(--blog-ease), transform 0.14s var(--blog-ease);
+}
+
+.blog-rail-toc-item.is-h3 .blog-rail-toc-dot {
+  width: 4px;
+  height: 4px;
+}
+
+.blog-rail-toc-text {
+  min-width: 0;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-rail-toc-item.is-active {
+  background: var(--blog-link-soft);
+  color: var(--blog-link);
+  font-weight: 500;
+}
+
+.blog-rail-toc-item.is-active::before {
+  content: '';
+  position: absolute;
+  left: -3px;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 2px;
+  background: #4d49fc;
+}
+
+.blog-root[data-blog-theme='dark'] .blog-rail-toc-item.is-active::before {
+  background: var(--blog-link);
+}
+
+.blog-rail-toc-item.is-active .blog-rail-toc-dot {
+  background: #4d49fc;
+  transform: scale(1.2);
+}
+
+.blog-root[data-blog-theme='dark'] .blog-rail-toc-item.is-active .blog-rail-toc-dot {
+  background: var(--blog-link);
+}
+
+/* --------------------------------------------------------------------------
+   4. About Me Bento Card (.blog-rail-about)
+   -------------------------------------------------------------------------- */
+
+.blog-rail-about-author {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.blog-rail-about-avatar {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--blog-divider);
+  background: #4d49fc;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.blog-rail-about-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-rail-about-meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.blog-rail-about-name {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--blog-text);
+  font-family: inherit;
+  font-size: 14.5px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-rail-about-name:hover {
+  color: var(--blog-link);
+}
+
+.blog-rail-about-sub {
+  font-family: var(--blog-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--blog-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-rail-about-bio {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--blog-text-secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.blog-rail-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-top: 10px;
+  border-top: 1px solid var(--blog-divider);
+}
+
+.blog-rail-stat {
+  position: relative;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: var(--blog-radius-sm, 8px);
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  transition: background-color 0.14s var(--blog-ease);
+}
+
+.blog-rail-stat:hover {
+  background: var(--blog-surface-subtle);
+}
+
+.blog-rail-stat + .blog-rail-stat::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: var(--blog-divider);
+}
+
+.blog-rail-stat-value {
+  font-family: var(--blog-font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--blog-text);
+  line-height: 1.2;
+}
+
+.blog-rail-stat-label {
+  font-size: 11.5px;
+  color: var(--blog-text-muted);
+  line-height: 1.2;
+}
+
+/* --------------------------------------------------------------------------
+   5. Personal Photo Album 3x3 Grid (.blog-rail-album-grid)
+   -------------------------------------------------------------------------- */
+
+.blog-rail-album-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.blog-rail-album-tile {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border-radius: var(--blog-radius-sm, 8px);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.blog-rail-album-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.28s var(--blog-ease);
+}
+
+.blog-rail-album-tile:hover img {
+  transform: scale(1.06);
+}
+
+/* --------------------------------------------------------------------------
+   6. Persistent Music Player Bento Card (.blog-rail-music)
+   -------------------------------------------------------------------------- */
+
+.blog-rail-music.is-playing {
+  border-color: rgba(77, 73, 252, 0.34);
+}
+
+.blog-root[data-blog-theme='dark'] .blog-rail-music.is-playing {
+  border-color: rgba(129, 140, 248, 0.4);
+}
+
+.blog-rail-music-top {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.blog-rail-music-disc {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--blog-divider);
+  background: linear-gradient(135deg, #18181b 0%, #2e2e38 55%, #4d49fc 100%);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  cursor: pointer;
+  animation: blogRailDiscSpin 14s linear infinite;
+  animation-play-state: paused;
+}
+
+.blog-rail-music-disc.is-playing {
+  animation-play-state: running;
+}
+
+.blog-rail-music-disc img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-rail-music-disc::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--blog-surface);
+  border: 1.5px solid rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+@keyframes blogRailDiscSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.blog-rail-music-meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.blog-rail-music-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--blog-text);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-rail-music-artist {
+  font-size: 12px;
+  color: var(--blog-text-muted);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-rail-music-lyrics {
+  width: 100%;
+  min-height: 46px;
+  padding: 7px 10px;
+  border-radius: var(--blog-radius-sm, 8px);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.14s var(--blog-ease), border-color 0.14s var(--blog-ease);
+}
+
+.blog-rail-music-lyrics:hover {
+  background: var(--blog-surface-hover);
+  border-color: var(--blog-border-input);
+}
+
+.blog-rail-music-lyric-active {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--blog-link);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-rail-music:not(.is-playing) .blog-rail-music-lyric-active {
+  color: var(--blog-text-secondary);
+}
+
+.blog-rail-music-lyric-active.is-two-line {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.blog-rail-music-lyric-next {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--blog-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-rail-music-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.blog-rail-music-seek {
+  width: 100%;
+  height: 4px;
+  margin: 0;
+  accent-color: #4d49fc;
+  cursor: pointer;
+}
+
+.blog-rail-music-seek:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.blog-rail-music-times {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--blog-font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--blog-text-muted);
+}
+
+.blog-rail-music-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.blog-rail-music-transport {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.blog-rail-music-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: var(--blog-radius-sm, 8px);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  color: var(--blog-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.14s var(--blog-ease), color 0.14s var(--blog-ease),
+    border-color 0.14s var(--blog-ease);
+}
+
+.blog-rail-music-btn:hover:not(:disabled) {
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text);
+  border-color: var(--blog-border-input);
+}
+
+.blog-rail-music-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.blog-rail-music-play {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: var(--blog-radius-pill, 50px);
+  border: 1px solid #4d49fc;
+  background: #4d49fc;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.14s var(--blog-ease), border-color 0.14s var(--blog-ease),
+    transform 0.14s var(--blog-ease);
+}
+
+.blog-rail-music-play:hover {
+  background: #3c38e0;
+  border-color: #3c38e0;
+  transform: scale(1.03);
+}
+
+/* --------------------------------------------------------------------------
+   7. Equipment & Labs Compact Lists (.blog-rail-list & .blog-rail-item)
+   -------------------------------------------------------------------------- */
+
+.blog-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.blog-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  margin-inline: -4px;
+  width: calc(100% + 8px);
+  border: 1px solid transparent;
+  border-radius: var(--blog-radius-sm, 8px);
+  background: transparent;
+  color: var(--blog-text);
+  font-family: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  min-width: 0;
+  transition: background-color 0.14s var(--blog-ease), border-color 0.14s var(--blog-ease);
+}
+
+.blog-rail-item:hover {
+  background: var(--blog-surface-subtle);
+  border-color: var(--blog-divider);
+  text-decoration: none;
+}
+
+.blog-rail-item-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--blog-radius-sm, 8px);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.blog-rail-item-thumb.is-compact {
+  width: 34px;
+  height: 34px;
+}
+
+.blog-rail-item-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-rail-item-body {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.blog-rail-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.blog-rail-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--blog-text);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-rail-item:hover .blog-rail-item-title {
+  color: var(--blog-link);
+}
+
+.blog-rail-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: var(--blog-radius-xs, 2px);
+  background: var(--blog-link-soft);
+  color: var(--blog-link);
+  font-family: var(--blog-font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.blog-rail-item-sub {
+  font-size: 11.5px;
+  color: var(--blog-text-muted);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-rail-item-sub.is-mono {
+  font-family: var(--blog-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.blog-rail-item-ext {
+  font-family: var(--blog-font-mono);
+  font-size: 12px;
+  color: var(--blog-text-muted);
+  flex-shrink: 0;
+  transition: color 0.14s var(--blog-ease), transform 0.14s var(--blog-ease);
+}
+
+.blog-rail-item:hover .blog-rail-item-ext {
+  color: var(--blog-link);
+  transform: translate(1px, -1px);
+}
+
+/* --------------------------------------------------------------------------
+   8. Friends 2-Column Chips (.blog-rail-friends-grid)
+   -------------------------------------------------------------------------- */
+
+.blog-rail-friends-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.blog-rail-friend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 8px 0 6px;
+  border-radius: var(--blog-radius-pill, 50px);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  min-width: 0;
+  transition: background-color 0.14s var(--blog-ease), border-color 0.14s var(--blog-ease),
+    color 0.14s var(--blog-ease);
+}
+
+.blog-rail-friend-chip:hover {
+  background: var(--blog-link-soft);
+  border-color: var(--blog-link);
+  color: var(--blog-link);
+  text-decoration: none;
+}
+
+.blog-rail-friend-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--blog-divider);
+  background: #4d49fc;
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.blog-rail-friend-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-rail-friend-name {
+  min-width: 0;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+/* --------------------------------------------------------------------------
+   9. Compact Empty Prompts Inside Rail Cards (.blog-rail-empty)
+   -------------------------------------------------------------------------- */
+
+.blog-rail-empty {
+  padding: 10px 12px;
+  border-radius: var(--blog-radius-sm, 8px);
+  border: 1px dashed var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.blog-rail-empty-text {
+  font-size: 12px;
+  color: var(--blog-text-muted);
+  line-height: 1.4;
+}
+
+.blog-rail-empty-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--blog-radius-pill, 50px);
+  border: 1px solid #4d49fc;
+  background: #4d49fc;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.14s var(--blog-ease), border-color 0.14s var(--blog-ease);
+}
+
+.blog-rail-empty-btn:hover {
+  background: #3c38e0;
+  border-color: #3c38e0;
+}
+
+/* --------------------------------------------------------------------------
+   10. Settings Modal Sidebar Widget Toggles (.blog-settings-widgets)
+   -------------------------------------------------------------------------- */
+
+.blog-settings-widgets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.blog-settings-widget-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--blog-radius-sm, 8px);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  min-width: 0;
+}
+
+.blog-settings-widget-info {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.blog-settings-widget-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--blog-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-settings-widget-side {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--blog-radius-xs, 2px);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  color: var(--blog-text-muted);
+  font-family: var(--blog-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+@media (max-width: 560px) {
+  .blog-settings-widgets {
+    grid-template-columns: 1fr;
+  }
+}

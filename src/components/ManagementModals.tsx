@@ -759,11 +759,11 @@ export function BookmarkletHelp({ onClose }: { onClose: () => void }) {
   const origin = publicAppOrigin()
   const detailCode =
     'javascript:(()=>{const u=' +
-    JSON.stringify(origin + '/?add=link&url=') +
+    JSON.stringify(origin + '/app?add=link&url=') +
     "+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title);const w=window.open(u,'_blank');if(w){try{w.opener=null}catch(e){}}else{alert('浏览器阻止了新标签页，请允许弹出窗口后重试。')}})()"
   const quickCode =
     'javascript:(()=>{const u=' +
-    JSON.stringify(origin + '/?capture=quick&url=') +
+    JSON.stringify(origin + '/app?capture=quick&url=') +
     "+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title);const x=Math.max(0,(screen.width-480)/2),y=Math.max(0,(screen.height-620)/2);const w=window.open(u,'doitlaterQuick','popup=yes,width=480,height=620,left='+x+',top='+y+',resizable=yes,scrollbars=yes');if(w){try{w.opener=null;w.focus()}catch(e){}}else{alert('浏览器阻止了快速保存窗口，请允许弹出窗口后重试。')}})()"
 
   useEffect(() => {
