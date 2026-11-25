@@ -3,14 +3,25 @@ import { enrichFormDataWithThumbs } from './image-thumb'
 import type {
   BlogArchiveItem,
   BlogBootstrap,
+  BlogCatalogItem,
+  BlogCatalogItemInput,
+  BlogCatalogSection,
   BlogComment,
+  BlogFriend,
+  BlogFriendInput,
   BlogImportedItemDraft,
   BlogLikeEntry,
   BlogLinkCard,
+  BlogMediaKind,
   BlogMediaUpload,
+  BlogMusicTrack,
+  BlogMusicTrackInput,
+  BlogPageData,
+  BlogPageInput,
   BlogPostDetail,
   BlogPostInput,
   BlogPostsResponse,
+  BlogPostVideo,
   BlogProfile,
   BlogSettingsInput
 } from './blog-types'
@@ -304,6 +315,143 @@ export function fetchBlogUrlPreview(url: string): Promise<BlogLinkCard> {
 
 export function importLibraryItemToBlog(itemId: string): Promise<BlogImportedItemDraft> {
   return blogJson<BlogImportedItemDraft>(`/api/blog/import-item/${encodeURIComponent(itemId)}`, 'POST')
+}
+
+// --- Phase 2: Generic Media (Audio / Video / Image), Music, Pages, Catalog, Friends ---
+
+export async function uploadBlogFile(
+  file: File,
+  kind: BlogMediaKind,
+  pairedMediaId?: string
+): Promise<BlogMediaUpload> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('kind', kind)
+  if (pairedMediaId) form.append('pairedMediaId', pairedMediaId)
+  const res = await blogRequest<{ media: BlogMediaUpload[] }>('/api/blog/media', {
+    method: 'POST',
+    body: form
+  })
+  if (!res.media.length) {
+    throw new ApiRequestError(500, '文件上传结果为空')
+  }
+  return res.media[0]
+}
+
+export function fetchBlogMusicTracks(): Promise<{ tracks: BlogMusicTrack[] }> {
+  return blogRequest<{ tracks: BlogMusicTrack[] }>('/api/blog/music/tracks')
+}
+
+export function createBlogMusicTrack(input: BlogMusicTrackInput): Promise<BlogMusicTrack> {
+  return blogJson<BlogMusicTrack>('/api/blog/music/tracks', 'POST', input)
+}
+
+export function updateBlogMusicTrack(
+  id: string,
+  input: Partial<BlogMusicTrackInput>
+): Promise<BlogMusicTrack> {
+  return blogJson<BlogMusicTrack>(`/api/blog/music/tracks/${encodeURIComponent(id)}`, 'PATCH', input)
+}
+
+export function deleteBlogMusicTrack(id: string): Promise<{ ok: true }> {
+  return blogRequest<{ ok: true }>(`/api/blog/music/tracks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function fetchBlogPage(slug: string): Promise<BlogPageData> {
+  return blogRequest<BlogPageData>(`/api/blog/pages/${encodeURIComponent(slug)}`)
+}
+
+export function updateBlogPage(slug: string, input: BlogPageInput): Promise<BlogPageData> {
+  return blogJson<BlogPageData>(`/api/blog/pages/${encodeURIComponent(slug)}`, 'PUT', input)
+}
+
+export function createBlogPageComment(
+  slug: string,
+  payload: CreateBlogCommentPayload
+): Promise<BlogComment> {
+  return blogJson<BlogComment>(`/api/blog/pages/${encodeURIComponent(slug)}/comments`, 'POST', payload)
+}
+
+export function deleteBlogPageComment(commentId: string): Promise<{ ok: true }> {
+  return blogRequest<{ ok: true }>(`/api/blog/page-comments/${encodeURIComponent(commentId)}`, {
+    method: 'DELETE'
+  })
+}
+
+export function fetchBlogCatalog(section: BlogCatalogSection): Promise<{ items: BlogCatalogItem[] }> {
+  return blogRequest<{ items: BlogCatalogItem[] }>(`/api/blog/catalog/${encodeURIComponent(section)}`)
+}
+
+export function createBlogCatalogItem(input: BlogCatalogItemInput): Promise<BlogCatalogItem> {
+  return blogJson<BlogCatalogItem>('/api/blog/catalog', 'POST', input)
+}
+
+export function updateBlogCatalogItem(
+  id: string,
+  input: Partial<BlogCatalogItemInput>
+): Promise<BlogCatalogItem> {
+  return blogJson<BlogCatalogItem>(`/api/blog/catalog/${encodeURIComponent(id)}`, 'PATCH', input)
+}
+
+export function deleteBlogCatalogItem(id: string): Promise<{ ok: true }> {
+  return blogRequest<{ ok: true }>(`/api/blog/catalog/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function fetchBlogFriends(): Promise<{ friends: BlogFriend[] }> {
+  return blogRequest<{ friends: BlogFriend[] }>('/api/blog/friends')
+}
+
+export function createBlogFriend(input: BlogFriendInput): Promise<BlogFriend> {
+  return blogJson<BlogFriend>('/api/blog/friends', 'POST', input)
+}
+
+export function updateBlogFriend(id: string, input: Partial<BlogFriendInput>): Promise<BlogFriend> {
+  return blogJson<BlogFriend>(`/api/blog/friends/${encodeURIComponent(id)}`, 'PATCH', input)
+}
+
+export function deleteBlogFriend(id: string): Promise<{ ok: true }> {
+  return blogRequest<{ ok: true }>(`/api/blog/friends/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function parseVideoUrl(rawUrl: string): BlogPostVideo | null {
+  const trimmed = rawUrl.trim()
+  if (!trimmed) return null
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    const host = parsed.hostname.toLowerCase()
+    const bvMatch = /\/video\/(BV[0-9A-Za-z]+)/i.exec(parsed.pathname)
+    if ((host.includes('bilibili.com') || host === 'b23.tv') && bvMatch?.[1]) {
+      const bvid = bvMatch[1]
+      return {
+        source: 'bilibili',
+        url: parsed.toString(),
+        embedUrl: `https://player.bilibili.com/player.html?bvid=${encodeURIComponent(bvid)}&high_quality=1&autoplay=0`,
+        platform: 'Bilibili'
+      }
+    }
+    const ytMatch =
+      host.includes('youtube.com')
+        ? parsed.searchParams.get('v') || /\/(?:shorts|embed)\/([a-zA-Z0-9_-]{6,})/.exec(parsed.pathname)?.[1]
+        : host === 'youtu.be'
+          ? parsed.pathname.replace(/^\/+/, '').split('/')[0]
+          : null
+    if (ytMatch) {
+      return {
+        source: 'youtube',
+        url: parsed.toString(),
+        embedUrl: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytMatch)}`,
+        platform: 'YouTube'
+      }
+    }
+    return {
+      source: 'url',
+      url: parsed.toString(),
+      platform: host.replace(/^www\./, '')
+    }
+  } catch {
+    return null
+  }
 }
 
 interface CstParts {

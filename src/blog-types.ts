@@ -9,6 +9,32 @@ export interface BlogImageItem {
   width?: number | null
   height?: number | null
   alt?: string
+  liveVideoMediaId?: string
+  liveVideoUrl?: string
+}
+
+export interface BlogPostMusic {
+  trackId?: string
+  title: string
+  artist: string
+  coverUrl?: string | null
+  audioUrl: string
+  lrc?: string
+}
+
+export interface BlogPostVideo {
+  source: 'upload' | 'bilibili' | 'youtube' | 'url'
+  mediaId?: string
+  url: string
+  embedUrl?: string
+  coverUrl?: string | null
+  title?: string
+  platform?: string
+}
+
+export interface BlogPostMetadata extends Record<string, unknown> {
+  music?: BlogPostMusic | null
+  video?: BlogPostVideo | null
 }
 
 export interface BlogLinkCard {
@@ -191,4 +217,102 @@ export interface BlogImportedItemDraft {
   category: string
   sourceLabel: string
   sourceItemId: string
+}
+
+export interface BlogMusicTrack {
+  id: string
+  title: string
+  artist: string
+  album: string
+  audioMediaId: string
+  audioUrl: string
+  coverMediaId: string | null
+  coverUrl: string | null
+  lrcText: string
+  durationSec: number | null
+  sortOrder: number
+  createdAt: number
+}
+
+export interface BlogMusicTrackInput {
+  title: string
+  artist?: string
+  album?: string
+  audioMediaId: string
+  coverMediaId?: string | null
+  lrcText?: string
+  durationSec?: number | null
+  sortOrder?: number
+}
+
+export interface BlogPageData {
+  slug: string
+  title: string
+  subtitle: string
+  content: string
+  coverMediaId: string | null
+  coverUrl: string | null
+  allowComments: boolean
+  updatedAt: number
+  comments: BlogComment[]
+}
+
+export interface BlogPageInput {
+  title: string
+  subtitle?: string
+  content: string
+  coverMediaId?: string | null
+  allowComments?: boolean
+}
+
+export type BlogCatalogSection = 'equipment' | 'labs'
+
+export interface BlogCatalogItem {
+  id: string
+  section: BlogCatalogSection
+  category: string
+  title: string
+  subtitle: string
+  description: string
+  imageMediaId: string | null
+  imageUrl: string | null
+  linkUrl: string
+  tag: string
+  sortOrder: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface BlogCatalogItemInput {
+  section: BlogCatalogSection
+  category?: string
+  title: string
+  subtitle?: string
+  description?: string
+  imageMediaId?: string | null
+  imageUrl?: string | null
+  linkUrl?: string
+  tag?: string
+  sortOrder?: number
+}
+
+export interface BlogFriend {
+  id: string
+  name: string
+  url: string
+  avatarMediaId: string | null
+  avatarUrl: string
+  description: string
+  sortOrder: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface BlogFriendInput {
+  name: string
+  url: string
+  avatarMediaId?: string | null
+  avatarUrl?: string
+  description?: string
+  sortOrder?: number
 }

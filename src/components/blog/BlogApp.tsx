@@ -4,7 +4,9 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties
+  type CSSProperties,
+  type Dispatch,
+  type SetStateAction
 } from 'react'
 import { errorMessage } from '../../api'
 import {
@@ -17,6 +19,8 @@ import {
   updateBlogPost
 } from '../../blog-api'
 import '../../blog.css'
+import '../../blog-phase2.css'
+import { BlogMusicProvider, useBlogMusic } from '../../blog-music'
 import type {
   BlogArchiveItem,
   BlogBootstrap,
@@ -34,6 +38,7 @@ import { BlogComposerModal } from './BlogComposerModal'
 import { BlogCoverHeader } from './BlogCoverHeader'
 import { BlogLightbox, type BlogLightboxImage } from './BlogLightbox'
 import { BlogMomentCard } from './BlogMomentCard'
+import { BlogPagesView } from './BlogPagesView'
 import { BlogSettingsModal } from './BlogSettingsModal'
 
 export interface BlogAppProps {
@@ -50,6 +55,10 @@ export interface BlogAppProps {
 type BlogRoute =
   | { kind: 'feed' }
   | { kind: 'archives' }
+  | { kind: 'about' }
+  | { kind: 'equipment' }
+  | { kind: 'labs' }
+  | { kind: 'friends' }
   | { kind: 'article'; shortId: string }
   | { kind: 'moment'; shortId: string }
 
@@ -91,7 +100,7 @@ function safeDecodeSegment(raw: string): string {
   }
 }
 
-function parseBlogRoute(rawPath: string): BlogRoute {
+export function parseBlogRoute(rawPath: string): BlogRoute {
   const withoutQuery = (rawPath.split('?')[0] || '/').replace(/\/+$/, '') || '/'
   const clean =
     withoutQuery === '/blog'
@@ -101,6 +110,18 @@ function parseBlogRoute(rawPath: string): BlogRoute {
         : withoutQuery
   if (clean === '/archives') {
     return { kind: 'archives' }
+  }
+  if (clean === '/about') {
+    return { kind: 'about' }
+  }
+  if (clean === '/equipment') {
+    return { kind: 'equipment' }
+  }
+  if (clean === '/labs') {
+    return { kind: 'labs' }
+  }
+  if (clean === '/friends') {
+    return { kind: 'friends' }
   }
   const articleMatch = /^\/articles\/([^/]+)$/.exec(clean)
   if (articleMatch && articleMatch[1]) {
@@ -113,20 +134,66 @@ function parseBlogRoute(rawPath: string): BlogRoute {
   return { kind: 'feed' }
 }
 
-export function BlogApp({
-  path,
+interface BlogAppInnerProps extends BlogAppProps {
+  route: BlogRoute
+  bootstrap: BlogBootstrap | null
+  setBootstrap: Dispatch<SetStateAction<BlogBootstrap | null>>
+  refreshBootstrap: () => Promise<void>
+  isOwner: boolean
+}
+
+export function BlogApp(props: BlogAppProps) {
+  const { path, embedded = false } = props
+  const route = useMemo(() => parseBlogRoute(path), [path])
+  const [bootstrap, setBootstrap] = useState<BlogBootstrap | null>(null)
+
+  const refreshBootstrap = useCallback(async () => {
+    try {
+      const data = await fetchBlogBootstrap()
+      setBootstrap(data)
+    } catch {
+      // Non-fatal: feed/detail requests carry their own error states.
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshBootstrap()
+  }, [refreshBootstrap, embedded])
+
+  const isOwner = bootstrap ? bootstrap.isOwner : Boolean(embedded)
+  const isDetailRoute = route.kind === 'article' || route.kind === 'moment'
+
+  return (
+    <BlogMusicProvider isOwner={isOwner} hasBottomBar={isDetailRoute}>
+      <BlogAppInner
+        {...props}
+        route={route}
+        bootstrap={bootstrap}
+        setBootstrap={setBootstrap}
+        refreshBootstrap={refreshBootstrap}
+        isOwner={isOwner}
+      />
+    </BlogMusicProvider>
+  )
+}
+
+function BlogAppInner({
   embedded = false,
   pendingImportItemId,
   onConsumePendingImport,
   onNavigate,
   onRequestLogin,
   onBackToWorkspace,
-  onSwitchWorkspaceTab
-}: BlogAppProps) {
-  const route = useMemo(() => parseBlogRoute(path), [path])
+  onSwitchWorkspaceTab,
+  route,
+  bootstrap,
+  setBootstrap,
+  refreshBootstrap,
+  isOwner
+}: BlogAppInnerProps) {
+  const music = useBlogMusic()
 
   const [darkMode, setDarkMode] = useState<boolean>(readInitialDarkMode)
-  const [bootstrap, setBootstrap] = useState<BlogBootstrap | null>(null)
 
   // Search & filter state for feed
   const [searchOpen, setSearchOpen] = useState(false)
@@ -171,7 +238,6 @@ export function BlogApp({
   const searchInputElRef = useRef<HTMLInputElement | null>(null)
 
   const profile = bootstrap?.profile ?? DEFAULT_PROFILE
-  const isOwner = bootstrap ? bootstrap.isOwner : Boolean(embedded)
   const existingCategories = useMemo(
     () => (bootstrap?.categories ?? []).map((item) => item.name).filter(Boolean),
     [bootstrap]
@@ -188,19 +254,6 @@ export function BlogApp({
       return next
     })
   }, [])
-
-  const refreshBootstrap = useCallback(async () => {
-    try {
-      const data = await fetchBlogBootstrap()
-      setBootstrap(data)
-    } catch {
-      // Non-fatal: feed/detail requests carry their own error states.
-    }
-  }, [])
-
-  useEffect(() => {
-    void refreshBootstrap()
-  }, [refreshBootstrap, embedded])
 
   // Debounce search input
   useEffect(() => {
@@ -254,6 +307,14 @@ export function BlogApp({
       document.title = `${postLabel} · ${siteTitle}`
     } else if (route.kind === 'archives') {
       document.title = `个人相册 · ${siteTitle}`
+    } else if (route.kind === 'about') {
+      document.title = `关于 · ${siteTitle}`
+    } else if (route.kind === 'equipment') {
+      document.title = `装备清单 · ${siteTitle}`
+    } else if (route.kind === 'labs') {
+      document.title = `实验室 · ${siteTitle}`
+    } else if (route.kind === 'friends') {
+      document.title = `友情链接 · ${siteTitle}`
     } else {
       document.title = siteTitle
     }
@@ -651,12 +712,12 @@ export function BlogApp({
         data-blog-theme={darkMode ? 'dark' : 'light'}
       >
         <main className="blog-shell">
-          {(route.kind === 'feed' || route.kind === 'archives') && (
+          {!isDetailRoute && (
             <BlogCoverHeader
               profile={profile}
               isOwner={isOwner}
               embedded={embedded}
-              activeRoute={route.kind === 'archives' ? 'archives' : 'feed'}
+              activeRoute={route.kind}
               searchOpen={searchOpen}
               typeFilter={typeFilter}
               onTypeFilterChange={setTypeFilter}
@@ -673,6 +734,17 @@ export function BlogApp({
                 setSearchOpen(false)
                 onNavigate('/archives')
               }}
+              onNavigatePage={(section) => {
+                setSearchOpen(false)
+                onNavigate(`/${section}`)
+              }}
+              onOpenMusic={() =>
+                music.tracks.length > 0 || music.currentTrack
+                  ? music.openDrawer()
+                  : music.openManager()
+              }
+              musicPlaying={music.isPlaying}
+              hasMusic={music.tracks.length > 0 || Boolean(music.currentTrack)}
               onOpenCompose={(type) => handleOpenCompose(type ?? 'moment')}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenLogin={onRequestLogin}
@@ -938,6 +1010,19 @@ export function BlogApp({
               onOpenMoment={(shortId) =>
                 onNavigate(`/moments/${encodeURIComponent(shortId)}`)
               }
+            />
+          )}
+
+          {(route.kind === 'about' ||
+            route.kind === 'equipment' ||
+            route.kind === 'labs' ||
+            route.kind === 'friends') && (
+            <BlogPagesView
+              section={route.kind}
+              profile={profile}
+              isOwner={isOwner}
+              onBack={() => onNavigate('/')}
+              onOpenLightbox={handleOpenLightbox}
             />
           )}
 

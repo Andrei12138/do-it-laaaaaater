@@ -13,9 +13,12 @@ import { createPortal } from 'react-dom'
 import { api, errorMessage } from '../../api'
 import {
   createBlogPost,
+  fetchBlogMusicTracks,
   fetchBlogUrlPreview,
   importLibraryItemToBlog,
+  parseVideoUrl,
   updateBlogPost,
+  uploadBlogFile,
   uploadBlogMedia
 } from '../../blog-api'
 import { generateExcerpt, renderArticleMarkdown } from '../../blog-markdown'
@@ -23,15 +26,21 @@ import type {
   BlogImageItem,
   BlogImportedItemDraft,
   BlogLinkCard,
+  BlogMusicTrack,
   BlogPostDetail,
   BlogPostInput,
+  BlogPostMetadata,
+  BlogPostMusic,
   BlogPostSummary,
   BlogPostType,
+  BlogPostVideo,
   BlogVisibility
 } from '../../blog-types'
 import type { LibraryItem } from '../../types'
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
+import { BlogMusicCard } from './BlogMusicCard'
+import { BlogVideoCard } from './BlogVideoCard'
 
 export interface BlogComposerModalProps {
   open: boolean
@@ -78,6 +87,12 @@ function sanitizeFilenameAlt(name: string): string {
   const base = name.replace(/\.[^.]+$/, '').replace(/[\[\]()]/g, '').trim()
   return base || 'image'
 }
+
+function stripMediaExtension(name: string): string {
+  return name.replace(/\.[^.]+$/, '').trim()
+}
+
+type ComposerAttachTab = 'none' | 'link' | 'video' | 'music'
 
 function extractClipboardImageFiles(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
   const files: File[] = []
@@ -127,8 +142,15 @@ export function BlogComposerModal({
   const [tagsText, setTagsText] = useState('')
   const [images, setImages] = useState<BlogImageItem[]>([])
   const [linkCard, setLinkCard] = useState<BlogLinkCard | null>(null)
-  const [linkSectionOpen, setLinkSectionOpen] = useState(false)
   const [linkUrlInput, setLinkUrlInput] = useState('')
+  const [activeAttachTab, setActiveAttachTab] = useState<ComposerAttachTab>('none')
+  const [baseMetadata, setBaseMetadata] = useState<Record<string, unknown>>({})
+  const [videoData, setVideoData] = useState<BlogPostVideo | null>(null)
+  const [videoUrlInput, setVideoUrlInput] = useState('')
+  const [musicData, setMusicData] = useState<BlogPostMusic | null>(null)
+  const [playlistTracks, setPlaylistTracks] = useState<BlogMusicTrack[]>([])
+  const [tracksLoaded, setTracksLoaded] = useState(false)
+  const [tracksLoading, setTracksLoading] = useState(false)
   const [locationName, setLocationName] = useState('')
   const [sourceLabel, setSourceLabel] = useState('')
   const [sourceItemId, setSourceItemId] = useState<string | null>(null)
@@ -148,6 +170,11 @@ export function BlogComposerModal({
   // Async & drag state
   const [saving, setSaving] = useState(false)
   const [uploadingImages, setUploadingImages] = useState(false)
+  const [liveTargetIndex, setLiveTargetIndex] = useState<number | null>(null)
+  const [uploadingLiveIndex, setUploadingLiveIndex] = useState<number | null>(null)
+  const [uploadingVideo, setUploadingVideo] = useState(false)
+  const [uploadingVideoCover, setUploadingVideoCover] = useState(false)
+  const [uploadingAudio, setUploadingAudio] = useState(false)
   const [uploadingCover, setUploadingCover] = useState(false)
   const [uploadingInlineImage, setUploadingInlineImage] = useState(false)
   const [fetchingLink, setFetchingLink] = useState(false)
@@ -157,12 +184,20 @@ export function BlogComposerModal({
   const momentTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const articleTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const momentFileInputRef = useRef<HTMLInputElement | null>(null)
+  const liveVideoInputRef = useRef<HTMLInputElement | null>(null)
+  const videoFileInputRef = useRef<HTMLInputElement | null>(null)
+  const videoCoverInputRef = useRef<HTMLInputElement | null>(null)
+  const musicAudioInputRef = useRef<HTMLInputElement | null>(null)
   const coverFileInputRef = useRef<HTMLInputElement | null>(null)
   const inlineImageInputRef = useRef<HTMLInputElement | null>(null)
 
   const busy =
     saving ||
     uploadingImages ||
+    uploadingLiveIndex !== null ||
+    uploadingVideo ||
+    uploadingVideoCover ||
+    uploadingAudio ||
     uploadingCover ||
     uploadingInlineImage ||
     fetchingLink ||
@@ -184,7 +219,10 @@ export function BlogComposerModal({
 
   // Populate / reset form whenever modal opens
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      setTracksLoaded(false)
+      return
+    }
     setBlogTheme(detectBlogTheme())
     setError('')
     setMobileView('edit')
@@ -193,8 +231,16 @@ export function BlogComposerModal({
     setImportingItemId(null)
     setShowPassword(false)
     setDraggingIndex(null)
+    setLiveTargetIndex(null)
+    setUploadingLiveIndex(null)
 
     if (editingPost) {
+      const rawMeta =
+        editingPost.metadata && typeof editingPost.metadata === 'object'
+          ? { ...editingPost.metadata }
+          : {}
+      const hydratedMeta = rawMeta as BlogPostMetadata
+      setBaseMetadata(rawMeta)
       setType(editingPost.type)
       setTitle(editingPost.title || '')
       setExcerpt(editingPost.excerpt || '')
@@ -206,7 +252,18 @@ export function BlogComposerModal({
       setImages(editingPost.images ? editingPost.images.slice(0, MAX_MOMENT_IMAGES) : [])
       setLinkCard(editingPost.linkCard ? { ...editingPost.linkCard } : null)
       setLinkUrlInput(editingPost.linkCard?.url || '')
-      setLinkSectionOpen(Boolean(editingPost.linkCard))
+      setVideoData(hydratedMeta.video ? { ...hydratedMeta.video } : null)
+      setVideoUrlInput(hydratedMeta.video?.url || '')
+      setMusicData(hydratedMeta.music ? { ...hydratedMeta.music } : null)
+      setActiveAttachTab(
+        editingPost.type === 'moment' && editingPost.linkCard
+          ? 'link'
+          : hydratedMeta.video
+            ? 'video'
+            : hydratedMeta.music
+              ? 'music'
+              : 'none'
+      )
       setLocationName(editingPost.locationName || '')
       setSourceLabel(editingPost.sourceLabel || '')
       setSourceItemId(editingPost.sourceItemId ?? null)
@@ -217,6 +274,7 @@ export function BlogComposerModal({
     }
 
     if (importedDraft) {
+      setBaseMetadata({})
       setType(importedDraft.type || initialType)
       setTitle(importedDraft.title || '')
       setExcerpt('')
@@ -228,7 +286,10 @@ export function BlogComposerModal({
       setImages(importedDraft.images ? importedDraft.images.slice(0, MAX_MOMENT_IMAGES) : [])
       setLinkCard(importedDraft.linkCard ? { ...importedDraft.linkCard } : null)
       setLinkUrlInput(importedDraft.linkCard?.url || '')
-      setLinkSectionOpen(Boolean(importedDraft.linkCard))
+      setVideoData(null)
+      setVideoUrlInput('')
+      setMusicData(null)
+      setActiveAttachTab(importedDraft.linkCard ? 'link' : 'none')
       setLocationName('')
       setSourceLabel(importedDraft.sourceLabel || '')
       setSourceItemId(importedDraft.sourceItemId || null)
@@ -238,6 +299,7 @@ export function BlogComposerModal({
       return
     }
 
+    setBaseMetadata({})
     setType(initialType)
     setTitle('')
     setExcerpt('')
@@ -249,7 +311,10 @@ export function BlogComposerModal({
     setImages([])
     setLinkCard(null)
     setLinkUrlInput('')
-    setLinkSectionOpen(false)
+    setVideoData(null)
+    setVideoUrlInput('')
+    setMusicData(null)
+    setActiveAttachTab('none')
     setLocationName('')
     setSourceLabel('')
     setSourceItemId(null)
@@ -257,6 +322,29 @@ export function BlogComposerModal({
     setPassword('')
     setIsPinned(false)
   }, [open, editingPost, importedDraft, initialType])
+
+  // Lazy-load R2 music tracks when Music attachment tab opens
+  useEffect(() => {
+    if (!open || activeAttachTab !== 'music' || tracksLoaded || tracksLoading) return
+    let cancelled = false
+    setTracksLoading(true)
+    fetchBlogMusicTracks()
+      .then((res) => {
+        if (cancelled) return
+        setPlaylistTracks(Array.isArray(res.tracks) ? res.tracks : [])
+        setTracksLoaded(true)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        showToast('error', errorMessage(err))
+      })
+      .finally(() => {
+        if (!cancelled) setTracksLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, activeAttachTab, tracksLoaded, tracksLoading])
 
   // Escape key & body scroll lock
   useEffect(() => {
@@ -444,6 +532,199 @@ export function BlogComposerModal({
     [draggingIndex]
   )
 
+  const handleUploadLiveVideo = useCallback(
+    async (targetIndex: number, file: File) => {
+      const targetImage = images[targetIndex]
+      if (!targetImage) return
+      setUploadingLiveIndex(targetIndex)
+      setError('')
+      try {
+        const uploaded = await uploadBlogFile(file, 'video', targetImage.mediaId)
+        setImages((prev) =>
+          prev.map((item, idx) =>
+            idx === targetIndex
+              ? {
+                  ...item,
+                  liveVideoMediaId: uploaded.id,
+                  liveVideoUrl: uploaded.url
+                }
+              : item
+          )
+        )
+        showToast('success', '已配对实况视频')
+      } catch (err) {
+        const msg = errorMessage(err)
+        setError(msg)
+        showToast('error', msg)
+      } finally {
+        setUploadingLiveIndex(null)
+        setLiveTargetIndex(null)
+      }
+    },
+    [images]
+  )
+
+  const handleDetachLiveVideo = useCallback((targetIndex: number) => {
+    setImages((prev) =>
+      prev.map((item, idx) =>
+        idx === targetIndex
+          ? {
+              ...item,
+              liveVideoMediaId: undefined,
+              liveVideoUrl: undefined
+            }
+          : item
+      )
+    )
+    showToast('info', '已取消实况配对')
+  }, [])
+
+  const handleUploadAttachVideo = useCallback(async (file: File) => {
+    setUploadingVideo(true)
+    setError('')
+    try {
+      const uploaded = await uploadBlogFile(file, 'video')
+      setVideoUrlInput(uploaded.url)
+      setVideoData((prev) => ({
+        source: 'upload',
+        mediaId: uploaded.id,
+        url: uploaded.url,
+        title: prev?.title || stripMediaExtension(file.name),
+        coverUrl: prev?.coverUrl || null,
+        platform: '实拍视频'
+      }))
+      showToast('success', '视频已上传')
+    } catch (err) {
+      const msg = errorMessage(err)
+      setError(msg)
+      showToast('error', msg)
+    } finally {
+      setUploadingVideo(false)
+    }
+  }, [])
+
+  const handleParseVideoInput = useCallback(
+    (rawInput?: string, notify = false) => {
+      const candidate = (rawInput !== undefined ? rawInput : videoUrlInput).trim()
+      if (!candidate) {
+        if (notify) showToast('info', '请先粘贴视频链接')
+        return
+      }
+      if (candidate.startsWith('/api/blog/media/')) {
+        setVideoData((prev) => ({
+          source: 'upload',
+          mediaId: prev?.mediaId,
+          url: candidate,
+          title: prev?.title || '',
+          coverUrl: prev?.coverUrl || null,
+          platform: '实拍视频'
+        }))
+        return
+      }
+      const parsed = parseVideoUrl(candidate)
+      if (!parsed) {
+        if (notify) showToast('error', '无法识别该视频链接，请确认以 http(s):// 开头')
+        return
+      }
+      setVideoData((prev) => ({
+        ...parsed,
+        title: prev?.title || parsed.title || '',
+        coverUrl: prev?.coverUrl || null
+      }))
+      if (notify) {
+        showToast(
+          'success',
+          parsed.embedUrl ? `已解析 ${parsed.platform || '视频'} 嵌入播放器` : '已绑定视频链接'
+        )
+      }
+    },
+    [videoUrlInput]
+  )
+
+  const handleUploadVideoCover = useCallback(async (file: File) => {
+    setUploadingVideoCover(true)
+    setError('')
+    try {
+      const [uploaded] = await uploadBlogMedia([file])
+      if (uploaded) {
+        setVideoData((prev) =>
+          prev
+            ? { ...prev, coverUrl: uploaded.url }
+            : {
+                source: 'url',
+                url: videoUrlInput.trim(),
+                coverUrl: uploaded.url
+              }
+        )
+        showToast('success', '视频封面已上传')
+      }
+    } catch (err) {
+      const msg = errorMessage(err)
+      setError(msg)
+      showToast('error', msg)
+    } finally {
+      setUploadingVideoCover(false)
+    }
+  }, [videoUrlInput])
+
+  const handleSelectPlaylistTrack = useCallback(
+    (trackId: string) => {
+      if (!trackId) return
+      const found = playlistTracks.find((item) => item.id === trackId)
+      if (!found) return
+      setMusicData({
+        trackId: found.id,
+        title: found.title,
+        artist: found.artist || '',
+        coverUrl: found.coverUrl || null,
+        audioUrl: found.audioUrl,
+        lrc: found.lrcText || undefined
+      })
+    },
+    [playlistTracks]
+  )
+
+  const handleUploadAttachAudio = useCallback(async (file: File) => {
+    setUploadingAudio(true)
+    setError('')
+    try {
+      const uploaded = await uploadBlogFile(file, 'audio')
+      setMusicData((prev) => ({
+        trackId: undefined,
+        title: prev?.title || stripMediaExtension(file.name) || '未命名曲目',
+        artist: prev?.artist || '',
+        coverUrl: prev?.coverUrl || null,
+        audioUrl: uploaded.url,
+        lrc: prev?.lrc
+      }))
+      showToast('success', '音频已上传')
+    } catch (err) {
+      const msg = errorMessage(err)
+      setError(msg)
+      showToast('error', msg)
+    } finally {
+      setUploadingAudio(false)
+    }
+  }, [])
+
+  const updateMusicField = useCallback(
+    (field: keyof BlogPostMusic, value: string) => {
+      setMusicData((prev) => {
+        const base: BlogPostMusic = prev ?? {
+          title: '',
+          artist: '',
+          coverUrl: null,
+          audioUrl: ''
+        }
+        if (field === 'audioUrl') {
+          return { ...base, trackId: undefined, audioUrl: value }
+        }
+        return { ...base, [field]: value }
+      })
+    },
+    []
+  )
+
   const handleFetchLinkPreview = useCallback(async () => {
     const trimmed = linkUrlInput.trim()
     if (!trimmed) {
@@ -504,7 +785,7 @@ export function BlogComposerModal({
       setContent(draft.content || '')
       setLinkCard(draft.linkCard ? { ...draft.linkCard } : null)
       setLinkUrlInput(draft.linkCard?.url || '')
-      setLinkSectionOpen(Boolean(draft.linkCard))
+      setActiveAttachTab(draft.linkCard ? 'link' : 'none')
       setImages(draft.images ? draft.images.slice(0, MAX_MOMENT_IMAGES) : [])
       setCoverMediaId(draft.coverMediaId ?? null)
       setCoverUrl(draft.coverUrl || '')
@@ -626,7 +907,7 @@ export function BlogComposerModal({
 
     const activeLinkUrl = (linkCard?.url || linkUrlInput).trim()
     const normalizedLinkCard: BlogLinkCard | null =
-      type === 'moment' && linkSectionOpen && activeLinkUrl
+      type === 'moment' && activeLinkUrl
         ? {
             url: activeLinkUrl,
             title: (linkCard?.title || '').trim() || extractDomain(activeLinkUrl),
@@ -635,6 +916,40 @@ export function BlogComposerModal({
             image: (linkCard?.image || '').trim() || undefined
           }
         : null
+
+    let normalizedVideo: BlogPostVideo | null = null
+    const rawVideoUrl = (videoData?.url || videoUrlInput).trim()
+    if (rawVideoUrl) {
+      if (videoData && videoData.url.trim() === rawVideoUrl) {
+        normalizedVideo = {
+          ...videoData,
+          url: rawVideoUrl,
+          title: videoData.title?.trim() || undefined,
+          coverUrl: videoData.coverUrl?.trim() || null
+        }
+      } else {
+        const parsedVideo = parseVideoUrl(rawVideoUrl)
+        if (parsedVideo) {
+          normalizedVideo = {
+            ...parsedVideo,
+            title: videoData?.title?.trim() || undefined,
+            coverUrl: videoData?.coverUrl?.trim() || null
+          }
+        }
+      }
+    }
+
+    const rawAudioUrl = (musicData?.audioUrl || '').trim()
+    const normalizedMusic: BlogPostMusic | null = rawAudioUrl
+      ? {
+          trackId: musicData?.trackId || undefined,
+          title: (musicData?.title || '').trim() || '未命名曲目',
+          artist: (musicData?.artist || '').trim() || '未知艺术家',
+          coverUrl: (musicData?.coverUrl || '').trim() || null,
+          audioUrl: rawAudioUrl,
+          lrc: musicData?.lrc || undefined
+        }
+      : null
 
     if (type === 'article') {
       if (!trimmedTitle) {
@@ -646,8 +961,14 @@ export function BlogComposerModal({
         return
       }
     } else {
-      if (!trimmedContent && images.length === 0 && !normalizedLinkCard) {
-        setError('请输入动态正文、上传图片或添加外链卡片')
+      if (
+        !trimmedContent &&
+        images.length === 0 &&
+        !normalizedLinkCard &&
+        !normalizedVideo &&
+        !normalizedMusic
+      ) {
+        setError('请输入动态正文，或添加图片、视频、音乐、外链卡片')
         return
       }
     }
@@ -663,9 +984,31 @@ export function BlogComposerModal({
     const computedExcerpt =
       type === 'article' ? excerpt.trim() || generateExcerpt(trimmedContent) : ''
 
+    const nextMetadata: Record<string, unknown> = { ...baseMetadata }
+    if (normalizedVideo) {
+      nextMetadata.video = normalizedVideo
+    } else {
+      delete nextMetadata.video
+    }
+    if (normalizedMusic) {
+      nextMetadata.music = normalizedMusic
+    } else {
+      delete nextMetadata.music
+    }
+
+    const fallbackMomentTitle =
+      type === 'moment' &&
+      !trimmedTitle &&
+      !trimmedContent &&
+      images.length === 0 &&
+      !normalizedLinkCard
+        ? normalizedVideo?.title ||
+          (normalizedMusic ? `分享音乐：${normalizedMusic.title}` : normalizedVideo ? '分享视频' : '')
+        : trimmedTitle
+
     const payload: BlogPostInput = {
       type,
-      title: type === 'article' ? trimmedTitle : trimmedTitle,
+      title: type === 'article' ? trimmedTitle : fallbackMomentTitle,
       excerpt: type === 'article' ? computedExcerpt : '',
       content: trimmedContent,
       coverMediaId: type === 'article' ? coverMediaId : null,
@@ -677,6 +1020,7 @@ export function BlogComposerModal({
       locationName: type === 'moment' ? locationName.trim() : '',
       sourceLabel: sourceLabel.trim(),
       sourceItemId,
+      metadata: nextMetadata,
       visibility,
       isPinned
     }
@@ -717,6 +1061,402 @@ export function BlogComposerModal({
             siteName: extractDomain(linkUrlInput.trim())
           }
         : null
+
+  const previewVideoData: BlogPostVideo | null = (() => {
+    const raw = (videoData?.url || videoUrlInput).trim()
+    if (!raw) return null
+    if (videoData && videoData.url.trim() === raw) return videoData
+    const parsed = parseVideoUrl(raw)
+    if (!parsed) return null
+    return {
+      ...parsed,
+      title: videoData?.title || parsed.title,
+      coverUrl: videoData?.coverUrl || null
+    }
+  })()
+
+  const previewMusicData: BlogPostMusic | null =
+    musicData && musicData.audioUrl.trim()
+      ? {
+          ...musicData,
+          title: musicData.title.trim() || '未命名曲目',
+          artist: musicData.artist.trim() || '未知艺术家',
+          audioUrl: musicData.audioUrl.trim()
+        }
+      : null
+
+  const toggleAttachTab = (tab: Exclude<ComposerAttachTab, 'none'>) => {
+    setActiveAttachTab((prev) => (prev === tab ? 'none' : tab))
+  }
+
+  const attachmentSection = (
+    <div className="blog-p2-attach-section">
+      <div className="blog-p2-attach-tabs" role="tablist" aria-label="多媒体卡片附件">
+        {type === 'moment' && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeAttachTab === 'link'}
+            className={activeAttachTab === 'link' ? 'is-active' : undefined}
+            onClick={() => toggleAttachTab('link')}
+          >
+            <AppIcon name="link" size={14} />
+            <span>外链卡片{previewCardData ? ' · 已配' : ''}</span>
+          </button>
+        )}
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeAttachTab === 'video'}
+          className={activeAttachTab === 'video' ? 'is-active' : undefined}
+          onClick={() => toggleAttachTab('video')}
+        >
+          <AppIcon name="video" size={14} />
+          <span>视频动态{previewVideoData ? ' · 已配' : ''}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeAttachTab === 'music'}
+          className={activeAttachTab === 'music' ? 'is-active' : undefined}
+          onClick={() => toggleAttachTab('music')}
+        >
+          <AppIcon name="music" size={14} />
+          <span>音乐卡片{previewMusicData ? ' · 已配' : ''}</span>
+        </button>
+      </div>
+
+      {type === 'moment' && activeAttachTab === 'link' && (
+        <div className="blog-link-preview-box">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="url"
+              className="blog-input"
+              value={linkUrlInput}
+              onChange={(e) => {
+                const val = e.target.value
+                setLinkUrlInput(val)
+                setLinkCard((prev) =>
+                  prev
+                    ? { ...prev, url: val }
+                    : val.trim()
+                      ? { url: val, title: '', siteName: '', description: '' }
+                      : null
+                )
+              }}
+              placeholder="粘贴网页链接，如 https://example.com/article"
+            />
+            <button
+              type="button"
+              className="blog-btn blog-btn-ghost"
+              disabled={fetchingLink || !linkUrlInput.trim()}
+              onClick={() => void handleFetchLinkPreview()}
+            >
+              {fetchingLink ? '抓取中…' : '抓取预览'}
+            </button>
+          </div>
+
+          <div className="blog-composer-grid">
+            <input
+              type="text"
+              className="blog-input"
+              value={linkCard?.title || ''}
+              onChange={(e) => updateLinkCardField('title', e.target.value)}
+              placeholder="卡片标题"
+            />
+            <input
+              type="text"
+              className="blog-input"
+              value={linkCard?.siteName || ''}
+              onChange={(e) => updateLinkCardField('siteName', e.target.value)}
+              placeholder="站点名称（可选）"
+            />
+          </div>
+
+          <input
+            type="text"
+            className="blog-input"
+            value={linkCard?.description || ''}
+            onChange={(e) => updateLinkCardField('description', e.target.value)}
+            placeholder="卡片简介（可选）"
+          />
+
+          {previewCardData && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div
+                className="blog-share-card"
+                style={{ marginTop: 0, maxWidth: '100%', flex: 1, cursor: 'default' }}
+              >
+                <div className="blog-share-thumb">
+                  {previewCardData.image ? (
+                    <img src={previewCardData.image} alt={previewCardData.title} />
+                  ) : (
+                    <AppIcon name="link" size={20} />
+                  )}
+                </div>
+                <div className="blog-share-info">
+                  <div className="blog-share-title">
+                    {previewCardData.title || extractDomain(previewCardData.url)}
+                  </div>
+                  {previewCardData.description && (
+                    <div className="blog-share-excerpt">{previewCardData.description}</div>
+                  )}
+                  <div className="blog-share-domain">
+                    {previewCardData.siteName || extractDomain(previewCardData.url)}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="blog-btn blog-btn-danger blog-btn-sm"
+                onClick={() => {
+                  setLinkCard(null)
+                  setLinkUrlInput('')
+                }}
+              >
+                移除卡片
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeAttachTab === 'video' && (
+        <div className="blog-link-preview-box">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="blog-btn blog-btn-subtle blog-btn-sm"
+              disabled={uploadingVideo}
+              onClick={() => videoFileInputRef.current?.click()}
+            >
+              <AppIcon name="upload" size={14} />
+              <span>{uploadingVideo ? '上传视频中…' : '上传视频 (.mp4/.mov/.webm)'}</span>
+            </button>
+
+            <input
+              ref={videoFileInputRef}
+              type="file"
+              accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (file) void handleUploadAttachVideo(file)
+              }}
+            />
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 220 }}>
+              <input
+                type="url"
+                className="blog-input"
+                value={videoUrlInput}
+                onChange={(e) => {
+                  const val = e.target.value
+                  setVideoUrlInput(val)
+                  if (!val.trim()) {
+                    setVideoData(null)
+                    return
+                  }
+                  const parsed = parseVideoUrl(val)
+                  if (parsed) {
+                    setVideoData((prev) => ({
+                      ...parsed,
+                      title: prev?.title || parsed.title || '',
+                      coverUrl: prev?.coverUrl || null
+                    }))
+                  }
+                }}
+                placeholder="或粘贴 Bilibili (BV号) / YouTube / 视频直链 URL"
+              />
+              <button
+                type="button"
+                className="blog-btn blog-btn-ghost blog-btn-sm"
+                disabled={!videoUrlInput.trim()}
+                onClick={() => handleParseVideoInput(videoUrlInput, true)}
+              >
+                解析链接
+              </button>
+            </div>
+          </div>
+
+          <div className="blog-composer-grid">
+            <input
+              type="text"
+              className="blog-input"
+              value={videoData?.title || ''}
+              onChange={(e) => {
+                const nextTitle = e.target.value
+                setVideoData((prev) =>
+                  prev
+                    ? { ...prev, title: nextTitle }
+                    : {
+                        source: 'url',
+                        url: videoUrlInput.trim(),
+                        title: nextTitle
+                      }
+                )
+              }}
+              placeholder="视频标题（可选）"
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="url"
+                className="blog-input"
+                value={videoData?.coverUrl || ''}
+                onChange={(e) => {
+                  const nextCover = e.target.value
+                  setVideoData((prev) =>
+                    prev
+                      ? { ...prev, coverUrl: nextCover || null }
+                      : {
+                          source: 'url',
+                          url: videoUrlInput.trim(),
+                          coverUrl: nextCover || null
+                        }
+                  )
+                }}
+                placeholder="视频封面 URL（可选）"
+              />
+              <button
+                type="button"
+                className="blog-btn blog-btn-subtle blog-btn-sm"
+                disabled={uploadingVideoCover}
+                onClick={() => videoCoverInputRef.current?.click()}
+              >
+                {uploadingVideoCover ? '上传中…' : '封面'}
+              </button>
+              <input
+                ref={videoCoverInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (file) void handleUploadVideoCover(file)
+                }}
+              />
+            </div>
+          </div>
+
+          {previewVideoData && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <BlogVideoCard video={previewVideoData} />
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="blog-btn blog-btn-danger blog-btn-sm"
+                  onClick={() => {
+                    setVideoData(null)
+                    setVideoUrlInput('')
+                  }}
+                >
+                  移除视频
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeAttachTab === 'music' && (
+        <div className="blog-link-preview-box">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <select
+              className="blog-input"
+              style={{ flex: 1, minWidth: 200 }}
+              value={musicData?.trackId || ''}
+              onChange={(e) => handleSelectPlaylistTrack(e.target.value)}
+            >
+              <option value="">
+                {tracksLoading
+                  ? '正在加载歌单…'
+                  : playlistTracks.length > 0
+                    ? '从博客歌单选择曲目…'
+                    : '歌单暂无曲目（可上传音频或粘贴链接）'}
+              </option>
+              {playlistTracks.map((track) => (
+                <option key={track.id} value={track.id}>
+                  {track.title}
+                  {track.artist ? ` — ${track.artist}` : ''}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              className="blog-btn blog-btn-subtle blog-btn-sm"
+              disabled={uploadingAudio}
+              onClick={() => musicAudioInputRef.current?.click()}
+            >
+              <AppIcon name="upload" size={14} />
+              <span>{uploadingAudio ? '上传音频中…' : '上传音频'}</span>
+            </button>
+            <input
+              ref={musicAudioInputRef}
+              type="file"
+              accept="audio/mpeg,audio/mp3,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,audio/wav,audio/webm,audio/flac,.mp3,.m4a,.ogg,.wav,.flac,.webm"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (file) void handleUploadAttachAudio(file)
+              }}
+            />
+          </div>
+
+          <input
+            type="url"
+            className="blog-input"
+            value={musicData?.audioUrl || ''}
+            onChange={(e) => updateMusicField('audioUrl', e.target.value)}
+            placeholder="或直接粘贴音频直链 URL（.mp3 / .m4a / .ogg 等）"
+          />
+
+          <div className="blog-composer-grid">
+            <input
+              type="text"
+              className="blog-input"
+              value={musicData?.title || ''}
+              onChange={(e) => updateMusicField('title', e.target.value)}
+              placeholder="歌曲名称"
+            />
+            <input
+              type="text"
+              className="blog-input"
+              value={musicData?.artist || ''}
+              onChange={(e) => updateMusicField('artist', e.target.value)}
+              placeholder="歌手 / 艺术家"
+            />
+          </div>
+
+          <input
+            type="url"
+            className="blog-input"
+            value={musicData?.coverUrl || ''}
+            onChange={(e) => updateMusicField('coverUrl', e.target.value)}
+            placeholder="专辑封面图 URL（可选）"
+          />
+
+          {previewMusicData && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <BlogMusicCard music={previewMusicData} />
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="blog-btn blog-btn-danger blog-btn-sm"
+                  onClick={() => setMusicData(null)}
+                >
+                  移除音乐
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 
   return createPortal(
     <div
@@ -763,7 +1503,10 @@ export function BlogComposerModal({
                 aria-selected={type === 'article'}
                 disabled={isEditing || busy}
                 className={`blog-segmented-btn${type === 'article' ? ' is-active is-accent' : ''}`}
-                onClick={() => setType('article')}
+                onClick={() => {
+                  setType('article')
+                  setActiveAttachTab((prev) => (prev === 'link' ? 'none' : prev))
+                }}
               >
                 <AppIcon name="book" size={14} />
                 <span>写长文章</span>
@@ -940,6 +1683,32 @@ export function BlogComposerModal({
                         <img src={img.thumbUrl || img.url} alt={img.alt || `图片 ${idx + 1}`} />
                         <button
                           type="button"
+                          className={`blog-p2-live-attach-btn${img.liveVideoUrl ? ' is-active' : ''}`}
+                          style={images.length > 1 ? { top: 4, left: 4, bottom: 'auto' } : undefined}
+                          disabled={uploadingLiveIndex !== null}
+                          title={
+                            img.liveVideoUrl
+                              ? '点击移除已配对的实况视频'
+                              : '上传配对短视频（.mp4/.mov/.webm）生成实况图'
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (img.liveVideoUrl) {
+                              handleDetachLiveVideo(idx)
+                            } else {
+                              setLiveTargetIndex(idx)
+                              liveVideoInputRef.current?.click()
+                            }
+                          }}
+                        >
+                          {uploadingLiveIndex === idx
+                            ? '上传中…'
+                            : img.liveVideoUrl
+                              ? '已配实况 ×'
+                              : '实况'}
+                        </button>
+                        <button
+                          type="button"
                           className="blog-upload-remove"
                           aria-label={`移除第 ${idx + 1} 张图片`}
                           onClick={() => handleRemoveImage(idx)}
@@ -1031,134 +1800,23 @@ export function BlogComposerModal({
                       if (files.length) void handleUploadMomentImages(files)
                     }}
                   />
+                  <input
+                    ref={liveVideoInputRef}
+                    type="file"
+                    accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                    hidden
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      e.target.value = ''
+                      if (file && liveTargetIndex !== null) {
+                        void handleUploadLiveVideo(liveTargetIndex, file)
+                      }
+                    }}
+                  />
                 </div>
 
-                {/* Collapsible External Link Card */}
-                <div className="blog-field">
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                    <button
-                      type="button"
-                      className="blog-btn blog-btn-subtle blog-btn-sm"
-                      onClick={() => setLinkSectionOpen((prev) => !prev)}
-                    >
-                      <AppIcon name="link" size={14} />
-                      <span>
-                        {linkSectionOpen
-                          ? '收起外链卡片'
-                          : previewCardData
-                            ? '编辑外链卡片（已附带）'
-                            : '添加外链卡片'}
-                      </span>
-                      <AppIcon name={linkSectionOpen ? 'chevronDown' : 'chevronRight'} size={13} />
-                    </button>
-                    {previewCardData && (
-                      <button
-                        type="button"
-                        className="blog-btn blog-btn-danger blog-btn-sm"
-                        onClick={() => {
-                          setLinkCard(null)
-                          setLinkUrlInput('')
-                          setLinkSectionOpen(false)
-                        }}
-                      >
-                        移除卡片
-                      </button>
-                    )}
-                  </div>
-
-                  {linkSectionOpen && (
-                    <div className="blog-link-preview-box">
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <input
-                          type="url"
-                          className="blog-input"
-                          value={linkUrlInput}
-                          onChange={(e) => {
-                            const val = e.target.value
-                            setLinkUrlInput(val)
-                            setLinkCard((prev) =>
-                              prev
-                                ? { ...prev, url: val }
-                                : val.trim()
-                                  ? { url: val, title: '', siteName: '', description: '' }
-                                  : null
-                            )
-                          }}
-                          placeholder="粘贴网页链接，如 https://example.com/article"
-                        />
-                        <button
-                          type="button"
-                          className="blog-btn blog-btn-ghost"
-                          disabled={fetchingLink || !linkUrlInput.trim()}
-                          onClick={() => void handleFetchLinkPreview()}
-                        >
-                          {fetchingLink ? '抓取中…' : '抓取预览'}
-                        </button>
-                      </div>
-
-                      <div className="blog-composer-grid">
-                        <input
-                          type="text"
-                          className="blog-input"
-                          value={linkCard?.title || ''}
-                          onChange={(e) => updateLinkCardField('title', e.target.value)}
-                          placeholder="卡片标题"
-                        />
-                        <input
-                          type="text"
-                          className="blog-input"
-                          value={linkCard?.siteName || ''}
-                          onChange={(e) => updateLinkCardField('siteName', e.target.value)}
-                          placeholder="站点名称（可选）"
-                        />
-                      </div>
-
-                      <input
-                        type="text"
-                        className="blog-input"
-                        value={linkCard?.description || ''}
-                        onChange={(e) => updateLinkCardField('description', e.target.value)}
-                        placeholder="卡片简介（可选）"
-                      />
-
-                      {previewCardData && (
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                          <div className="blog-share-card" style={{ marginTop: 0, maxWidth: '100%', flex: 1, cursor: 'default' }}>
-                            <div className="blog-share-thumb">
-                              {previewCardData.image ? (
-                                <img src={previewCardData.image} alt={previewCardData.title} />
-                              ) : (
-                                <AppIcon name="link" size={20} />
-                              )}
-                            </div>
-                            <div className="blog-share-info">
-                              <div className="blog-share-title">
-                                {previewCardData.title || extractDomain(previewCardData.url)}
-                              </div>
-                              {previewCardData.description && (
-                                <div className="blog-share-excerpt">{previewCardData.description}</div>
-                              )}
-                              <div className="blog-share-domain">
-                                {previewCardData.siteName || extractDomain(previewCardData.url)}
-                              </div>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="blog-btn blog-btn-icon"
-                            aria-label="移除外链预览"
-                            onClick={() => {
-                              setLinkCard(null)
-                              setLinkUrlInput('')
-                            }}
-                          >
-                            <AppIcon name="trash" size={14} />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                {/* Multi-Media Attachment Toolbar (Link Card / Video / Music) */}
+                {attachmentSection}
 
                 {/* Location & Source Label */}
                 <div className="blog-composer-grid">
@@ -1419,6 +2077,9 @@ export function BlogComposerModal({
                     <span>支持粘贴图片自动上传</span>
                   </div>
                 </div>
+
+                {/* Optional Article Audio / Video Attachments */}
+                {attachmentSection}
               </>
             )}
 

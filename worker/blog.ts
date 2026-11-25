@@ -15,9 +15,39 @@ import type {
   BlogProfile,
   BlogVisibility
 } from '../src/blog-types'
+import {
+  handleBlogPhase2Api,
+  inferAudioMimeAndExt,
+  inferVideoMimeAndExt,
+  isValidPageSlug,
+  MAX_AUDIO_BYTES,
+  MAX_LYRIC_BYTES,
+  MAX_VIDEO_BYTES,
+  parseByteRange,
+  validateCatalogSection,
+  validateMediaKind,
+  validatePageSlug,
+  type ByteRange,
+  type ResolvedMediaSpec
+} from './blog-phase2'
 import { detectImageMime, fetchPageMetadata } from './metadata'
 import { hashPassword, hashToken, parseCookie, verifyPassword } from './security'
 import { ALLOWED_IMAGE_TYPES, ApiError, MAX_IMAGE_BYTES, SESSION_COOKIE, type Env } from './types'
+
+export {
+  inferAudioMimeAndExt,
+  inferVideoMimeAndExt,
+  isValidPageSlug,
+  MAX_AUDIO_BYTES,
+  MAX_LYRIC_BYTES,
+  MAX_VIDEO_BYTES,
+  parseByteRange,
+  validateCatalogSection,
+  validateMediaKind,
+  validatePageSlug,
+  type ByteRange,
+  type ResolvedMediaSpec
+}
 
 type Row = Record<string, unknown>
 
@@ -358,7 +388,7 @@ function parseTagsColumn(raw: unknown): string[] {
   return normalizeTags(parsed)
 }
 
-function sanitizeImageItems(input: unknown): BlogImageItem[] {
+export function sanitizeImageItems(input: unknown): BlogImageItem[] {
   if (!Array.isArray(input)) return []
   const items: BlogImageItem[] = []
   for (const raw of input) {
@@ -373,18 +403,34 @@ function sanitizeImageItems(input: unknown): BlogImageItem[] {
     if (!thumbUrl && mediaId) thumbUrl = blogMediaUrl(mediaId, 'thumb')
     if (thumbUrl && !thumbUrl.startsWith('/') && !/^https?:\/\//i.test(thumbUrl)) thumbUrl = undefined
     const alt = typeof obj.alt === 'string' ? obj.alt.trim().slice(0, 200) : undefined
+    const liveVideoMediaId =
+      typeof obj.liveVideoMediaId === 'string' && obj.liveVideoMediaId.trim()
+        ? obj.liveVideoMediaId.trim().slice(0, 128)
+        : undefined
+    let liveVideoUrl =
+      typeof obj.liveVideoUrl === 'string' ? obj.liveVideoUrl.trim().slice(0, 1000) : undefined
+    if (!liveVideoUrl && liveVideoMediaId) {
+      liveVideoUrl = blogMediaUrl(liveVideoMediaId)
+    }
+    if (liveVideoUrl && !liveVideoUrl.startsWith('/') && !/^https?:\/\//i.test(liveVideoUrl)) {
+      liveVideoUrl = undefined
+    }
     items.push({
       ...(mediaId ? { mediaId } : {}),
       url,
       ...(thumbUrl ? { thumbUrl } : {}),
       width: numberOrNull(obj.width),
       height: numberOrNull(obj.height),
-      ...(alt ? { alt } : {})
+      ...(alt ? { alt } : {}),
+      ...(liveVideoMediaId ? { liveVideoMediaId } : {}),
+      ...(liveVideoUrl ? { liveVideoUrl } : {})
     })
     if (items.length >= 30) break
   }
   return items
 }
+
+export const sanitizeImages = sanitizeImageItems
 
 function sanitizeLinkCard(input: unknown): BlogLinkCard | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null
@@ -864,9 +910,9 @@ export async function handleBlogApi(
   const path = url.pathname
   const method = request.method.toUpperCase()
 
-  // 9. GET /api/blog/media/:id (public, fast path without auth query)
+  // 9. GET /api/blog/media/:id (public, fast path without auth query, supports HTTP Range / 206)
   const mediaItemMatch = path.match(/^\/api\/blog\/media\/([^/]+)$/)
-  if (mediaItemMatch && method === 'GET') {
+  if (mediaItemMatch && (method === 'GET' || method === 'HEAD')) {
     const mediaId = decodeURIComponent(mediaItemMatch[1])
     const row = await env.DB.prepare(
       'SELECT storage_key, thumb_key, mime_type, thumb_mime_type FROM blog_media WHERE id = ?'
@@ -879,17 +925,81 @@ export async function handleBlogApi(
     const contentType = String(
       wantsThumb && hasThumb ? row.thumb_mime_type || row.mime_type : row.mime_type
     )
+    const cacheControl = 'public, max-age=31536000, immutable'
+
+    if (method === 'HEAD') {
+      const headObj = await env.IMAGES.head(key)
+      if (!headObj) throw new ApiError(404, '媒体文件不存在')
+      return new Response(null, {
+        status: 200,
+        headers: {
+          'content-type': contentType,
+          'content-length': String(headObj.size),
+          'accept-ranges': 'bytes',
+          'cache-control': cacheControl,
+          'content-disposition': 'inline',
+          etag: headObj.httpEtag
+        }
+      })
+    }
+
+    const rangeHeader = request.headers.get('range')
+    if (rangeHeader !== null) {
+      const headObj = await env.IMAGES.head(key)
+      if (!headObj) throw new ApiError(404, '媒体文件不存在')
+
+      const range = parseByteRange(rangeHeader, headObj.size)
+      if (!range) {
+        return new Response(null, {
+          status: 416,
+          headers: {
+            'content-range': `bytes */${headObj.size}`,
+            'accept-ranges': 'bytes',
+            'cache-control': 'no-store'
+          }
+        })
+      }
+
+      const rangedObj = await env.IMAGES.get(key, {
+        range: { offset: range.start, length: range.length }
+      })
+      if (!rangedObj || !('body' in rangedObj) || !rangedObj.body) {
+        throw new ApiError(404, '媒体文件不存在')
+      }
+
+      return new Response(rangedObj.body, {
+        status: 206,
+        headers: {
+          'content-type': contentType,
+          'content-range': `bytes ${range.start}-${range.end}/${headObj.size}`,
+          'content-length': String(range.length),
+          'accept-ranges': 'bytes',
+          'cache-control': cacheControl,
+          'content-disposition': 'inline',
+          etag: rangedObj.httpEtag
+        }
+      })
+    }
+
     const obj = await env.IMAGES.get(key, { onlyIf: request.headers })
     if (!obj) throw new ApiError(404, '媒体文件不存在')
 
     const etag = obj.httpEtag
-    const cacheControl = 'public, max-age=31536000, immutable'
     if (!('body' in obj)) {
-      return new Response(null, { status: 304, headers: { etag, 'cache-control': cacheControl } })
+      return new Response(null, {
+        status: 304,
+        headers: {
+          etag,
+          'accept-ranges': 'bytes',
+          'cache-control': cacheControl
+        }
+      })
     }
     return new Response(obj.body, {
       headers: {
         'content-type': contentType,
+        ...(typeof obj.size === 'number' ? { 'content-length': String(obj.size) } : {}),
+        'accept-ranges': 'bytes',
         'cache-control': cacheControl,
         'content-disposition': 'inline',
         etag
@@ -1118,9 +1228,13 @@ export async function handleBlogApi(
     const content = String(body.content || '').slice(0, 200_000)
     const images = sanitizeImageItems(body.images)
     const linkCard = sanitizeLinkCard(body.linkCard)
+    const metadata = parsePlainObject(body.metadata)
+    const metadataJson = JSON.stringify(metadata)
+    if (metadataJson.length > 65_536) throw new ApiError(400, '扩展元数据过大')
+    const hasMediaAttachment = Boolean(metadata.music || metadata.video)
 
-    if (!title && !content.trim() && !images.length && !linkCard) {
-      throw new ApiError(400, '请输入正文内容、标题、图片或链接卡片')
+    if (!title && !content.trim() && !images.length && !linkCard && !hasMediaAttachment) {
+      throw new ApiError(400, '请输入正文内容、标题、图片或多媒体附件')
     }
 
     const visibility = body.visibility !== undefined ? validateVisibility(body.visibility) : 'public'
@@ -1157,9 +1271,6 @@ export async function handleBlogApi(
     const sourceItemId = typeof body.sourceItemId === 'string' && body.sourceItemId.trim()
       ? body.sourceItemId.trim().slice(0, 128)
       : null
-    const metadata = parsePlainObject(body.metadata)
-    const metadataJson = JSON.stringify(metadata)
-    if (metadataJson.length > 65_536) throw new ApiError(400, '扩展元数据过大')
 
     const isPinned = body.isPinned ? 1 : 0
     const now = Date.now()
@@ -1692,11 +1803,211 @@ export async function handleBlogApi(
     return json(bootstrap.profile)
   }
 
-  // 11b. POST /api/blog/media (owner)
+  // 11b. POST /api/blog/media (owner: supports multi-image batch AND single-file audio/video/image/lyric/file)
   if (path === '/api/blog/media' && method === 'POST') {
     const owner = requireOwner(auth)
     const form = await request.formData()
-    let files = form.getAll('images').filter((v): v is File => v instanceof File)
+    const imageBatchFiles = form.getAll('images').filter((v): v is File => v instanceof File)
+    const rawKind = typeof form.get('kind') === 'string' ? String(form.get('kind')).trim() : ''
+    const rawPairedMediaId =
+      typeof form.get('pairedMediaId') === 'string' ? String(form.get('pairedMediaId')).trim() : ''
+    const singleFile = form.get('file')
+
+    // Phase 2 single-file generic upload (audio, video, paired Live Photo video, image, lyric, file)
+    if (!imageBatchFiles.length && (rawKind || rawPairedMediaId) && singleFile instanceof File) {
+      const kind = validateMediaKind(rawKind || 'file')
+      if (!singleFile.size) throw new ApiError(400, '上传的文件内容为空')
+
+      const pairedMediaId = rawPairedMediaId
+        ? await verifyMediaOwnership(env, owner.id, rawPairedMediaId)
+        : null
+
+      const mediaId = crypto.randomUUID()
+      const now = Date.now()
+      const originalName = cleanOriginalName(singleFile.name || kind)
+      const uploadedKeys: string[] = []
+
+      try {
+        if (kind === 'image') {
+          if (singleFile.size > MAX_IMAGE_BYTES) {
+            throw new ApiError(400, '单张图片不能超过 20 MB')
+          }
+          const bytes = new Uint8Array(await singleFile.arrayBuffer())
+          const detectedMime = detectImageMime(bytes)
+          if (!detectedMime || !ALLOWED_IMAGE_TYPES.has(detectedMime)) {
+            throw new ApiError(400, '只支持 PNG、JPEG 和 WebP 图片')
+          }
+          const ext = extensionFor(detectedMime)
+          const storageKey = `blog/${owner.id}/${mediaId}/original.${ext}`
+          let thumbKey: string | null = null
+          let thumbMimeType: string | null = null
+
+          const puts: Promise<unknown>[] = [
+            env.IMAGES.put(storageKey, bytes, {
+              httpMetadata: {
+                contentType: detectedMime,
+                cacheControl: 'public, max-age=31536000, immutable'
+              }
+            })
+          ]
+          uploadedKeys.push(storageKey)
+
+          const thumbs = form.getAll('thumbs').filter((v): v is File => v instanceof File)
+          const meta = parseImageMeta(form.get('imageMeta'))
+          const thumbFile = thumbs[0]
+          if (thumbFile && thumbFile.size > 0 && thumbFile.size <= 5 * 1024 * 1024) {
+            const thumbBytes = new Uint8Array(await thumbFile.arrayBuffer())
+            const detectedThumb = detectImageMime(thumbBytes)
+            if (detectedThumb) {
+              thumbKey = `blog/${owner.id}/${mediaId}/thumb.${extensionFor(detectedThumb)}`
+              thumbMimeType = detectedThumb
+              uploadedKeys.push(thumbKey)
+              puts.push(
+                env.IMAGES.put(thumbKey, thumbBytes, {
+                  httpMetadata: {
+                    contentType: detectedThumb,
+                    cacheControl: 'public, max-age=31536000, immutable'
+                  }
+                })
+              )
+            }
+          }
+
+          await Promise.all(puts)
+
+          const width =
+            typeof meta[0]?.width === 'number' && Number.isFinite(meta[0].width)
+              ? Math.round(meta[0].width as number)
+              : null
+          const height =
+            typeof meta[0]?.height === 'number' && Number.isFinite(meta[0].height)
+              ? Math.round(meta[0].height as number)
+              : null
+
+          await env.DB.prepare(
+            'INSERT INTO blog_media (id, user_id, kind, original_name, storage_key, thumb_key, mime_type, thumb_mime_type, size, width, height, paired_media_id, created_at) ' +
+              'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          )
+            .bind(
+              mediaId,
+              owner.id,
+              kind,
+              originalName,
+              storageKey,
+              thumbKey,
+              detectedMime,
+              thumbMimeType,
+              bytes.byteLength,
+              width,
+              height,
+              pairedMediaId,
+              now
+            )
+            .run()
+
+          const uploaded: BlogMediaUpload = {
+            id: mediaId,
+            kind: 'image',
+            originalName,
+            mimeType: detectedMime,
+            size: bytes.byteLength,
+            width,
+            height,
+            url: blogMediaUrl(mediaId),
+            thumbUrl: blogMediaUrl(mediaId, 'thumb')
+          }
+          return json({ media: [uploaded] }, 201)
+        }
+
+        let mimeType: string
+        let ext: string
+
+        if (kind === 'audio') {
+          if (singleFile.size > MAX_AUDIO_BYTES) {
+            throw new ApiError(400, '音频文件不能超过 40 MB')
+          }
+          const resolved = inferAudioMimeAndExt(singleFile.type, singleFile.name)
+          if (!resolved) {
+            throw new ApiError(
+              400,
+              '不支持的音频格式，请上传 MP3、M4A、AAC、OGG、WAV、FLAC 或 WebM 音频'
+            )
+          }
+          mimeType = resolved.mimeType
+          ext = resolved.ext
+        } else if (kind === 'video') {
+          if (singleFile.size > MAX_VIDEO_BYTES) {
+            throw new ApiError(400, '视频文件不能超过 50 MB')
+          }
+          const resolved = inferVideoMimeAndExt(singleFile.type, singleFile.name)
+          if (!resolved) {
+            throw new ApiError(400, '不支持的视频格式，请上传 MP4、MOV 或 WebM 视频')
+          }
+          mimeType = resolved.mimeType
+          ext = resolved.ext
+        } else if (kind === 'lyric') {
+          if (singleFile.size > MAX_LYRIC_BYTES) {
+            throw new ApiError(400, '歌词文件不能超过 2 MB')
+          }
+          mimeType = 'text/plain; charset=utf-8'
+          ext = /\.txt$/i.test(singleFile.name || '') ? 'txt' : 'lrc'
+        } else {
+          if (singleFile.size > MAX_IMAGE_BYTES) {
+            throw new ApiError(400, '文件不能超过 20 MB')
+          }
+          const rawFileMime = (singleFile.type || '').split(';')[0].trim().toLowerCase()
+          mimeType = rawFileMime || 'application/octet-stream'
+          const extMatch = /\.([a-zA-Z0-9]{1,10})$/.exec(singleFile.name || '')
+          ext = extMatch ? extMatch[1].toLowerCase() : 'bin'
+        }
+
+        const bytes = new Uint8Array(await singleFile.arrayBuffer())
+        const storageKey = `blog/${owner.id}/${mediaId}/original.${ext}`
+        uploadedKeys.push(storageKey)
+
+        await env.IMAGES.put(storageKey, bytes, {
+          httpMetadata: {
+            contentType: mimeType,
+            cacheControl: 'public, max-age=31536000, immutable'
+          }
+        })
+
+        await env.DB.prepare(
+          'INSERT INTO blog_media (id, user_id, kind, original_name, storage_key, thumb_key, mime_type, thumb_mime_type, size, width, height, paired_media_id, created_at) ' +
+            'VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, NULL, NULL, ?, ?)'
+        )
+          .bind(
+            mediaId,
+            owner.id,
+            kind,
+            originalName,
+            storageKey,
+            mimeType,
+            bytes.byteLength,
+            pairedMediaId,
+            now
+          )
+          .run()
+
+        const uploaded: BlogMediaUpload = {
+          id: mediaId,
+          kind,
+          originalName,
+          mimeType,
+          size: bytes.byteLength,
+          width: null,
+          height: null,
+          url: blogMediaUrl(mediaId),
+          thumbUrl: ''
+        }
+        return json({ media: [uploaded] }, 201)
+      } catch (error) {
+        await deleteR2Keys(env, uploadedKeys)
+        throw error
+      }
+    }
+
+    let files = imageBatchFiles
     if (!files.length) {
       files = form.getAll('file').filter((v): v is File => v instanceof File)
     }
@@ -1992,6 +2303,22 @@ export async function handleBlogApi(
 
     return json(draft)
   }
+
+  const phase2Response = await handleBlogPhase2Api(request, env, ctx, auth, {
+    json,
+    readJson,
+    requireOwner,
+    verifyMediaOwnership,
+    blogMediaUrl,
+    sanitizeWebsiteUrl,
+    loadOwnerSettingsRow,
+    defaultNickname: DEFAULT_SETTINGS.nickname,
+    checkCommentRateLimit: (ip: string) => {
+      checkRateLimit(commentAttempts, ip, COMMENT_RATE_LIMIT, '评论过于频繁，请稍后再试')
+      recordRateLimitHit(commentAttempts, ip, COMMENT_RATE_WINDOW_MS)
+    }
+  })
+  if (phase2Response) return phase2Response
 
   return json({ error: '博客接口不存在' }, 404)
 }

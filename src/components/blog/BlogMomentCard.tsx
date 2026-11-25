@@ -8,10 +8,12 @@ import {
   toggleBlogPostLike
 } from '../../blog-api'
 import { formatMomentText } from '../../blog-markdown'
-import type { BlogComment, BlogPostSummary, BlogProfile } from '../../blog-types'
+import type { BlogComment, BlogPostMetadata, BlogPostSummary, BlogProfile } from '../../blog-types'
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
 import { BlogImageGrid } from './BlogImageGrid'
+import { BlogMusicCard } from './BlogMusicCard'
+import { BlogVideoCard } from './BlogVideoCard'
 
 export interface BlogMomentCardProps {
   post: BlogPostSummary
@@ -81,6 +83,7 @@ export function BlogMomentCard({
 
   const authorDisplayName = profile.nickname || profile.siteName || '博主'
   const canComment = profile.allowComments || isOwner
+  const meta = (post.metadata || {}) as BlogPostMetadata
 
   const needsCollapse = useMemo(() => {
     if (post.type !== 'moment' || post.locked) return false
@@ -316,26 +319,30 @@ export function BlogMomentCard({
             </div>
           </a>
         ) : post.type === 'article' ? (
-          <a
-            href={detailHref}
-            className="blog-share-card"
-            onClick={(event) => {
-              event.preventDefault()
-              onOpenArticle(post.shortId)
-            }}
-          >
-            <div className="blog-share-thumb">
-              {post.coverUrl ? (
-                <img src={post.coverUrl} alt={post.title || '文章封面'} loading="lazy" />
-              ) : (
-                <AppIcon name="book" size={26} />
-              )}
-            </div>
-            <div className="blog-share-info">
-              <div className="blog-share-title">{post.title || '无标题文章'}</div>
-              {post.excerpt && <div className="blog-share-excerpt">{post.excerpt}</div>}
-            </div>
-          </a>
+          <>
+            <a
+              href={detailHref}
+              className="blog-share-card"
+              onClick={(event) => {
+                event.preventDefault()
+                onOpenArticle(post.shortId)
+              }}
+            >
+              <div className="blog-share-thumb">
+                {post.coverUrl ? (
+                  <img src={post.coverUrl} alt={post.title || '文章封面'} loading="lazy" />
+                ) : (
+                  <AppIcon name="book" size={26} />
+                )}
+              </div>
+              <div className="blog-share-info">
+                <div className="blog-share-title">{post.title || '无标题文章'}</div>
+                {post.excerpt && <div className="blog-share-excerpt">{post.excerpt}</div>}
+              </div>
+            </a>
+            {meta.video && <BlogVideoCard video={meta.video} />}
+            {meta.music && <BlogMusicCard music={meta.music} />}
+          </>
         ) : (
           <>
             {post.content.trim() && (
@@ -393,6 +400,10 @@ export function BlogMomentCard({
             {post.images.length > 0 && (
               <BlogImageGrid images={post.images} onOpenLightbox={onOpenLightbox} />
             )}
+
+            {meta.video && <BlogVideoCard video={meta.video} />}
+
+            {meta.music && <BlogMusicCard music={meta.music} />}
 
             {post.linkCard && (
               <a

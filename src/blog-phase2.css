@@ -1,0 +1,1624 @@
+/* ==========================================================================
+   Do It Laaaaaater — Phase 2 Rich Media, Global R2 Music & Digital Garden CSS
+   Scoped under .blog-root (supports Light + Dark [data-blog-theme='dark'])
+   Follows DESIGN.md: Achromatic gallery wall + single Electric Indigo (#4d49fc)
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Cover / Bio Navigation Strip (.blog-p2-nav-strip & .blog-p2-nav-link)
+   -------------------------------------------------------------------------- */
+
+.blog-p2-nav-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 24px;
+  background: var(--blog-surface);
+  border-bottom: 1px solid var(--blog-divider);
+}
+
+.blog-p2-nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: var(--blog-radius-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--blog-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.14s var(--blog-ease), color 0.14s var(--blog-ease),
+    border-color 0.14s var(--blog-ease);
+}
+
+.blog-p2-nav-link:hover {
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text);
+  text-decoration: none;
+}
+
+.blog-p2-nav-link.is-active {
+  background: var(--blog-link-soft);
+  border-color: transparent;
+  color: var(--blog-link);
+}
+
+.blog-top-icon-btn.is-music-playing {
+  background: rgba(77, 73, 252, 0.56);
+  border-color: rgba(165, 180, 252, 0.65);
+  color: #ffffff;
+}
+
+.blog-top-icon-btn.is-music-playing:hover {
+  background: rgba(77, 73, 252, 0.76);
+  border-color: rgba(199, 210, 254, 0.85);
+  color: #ffffff;
+}
+
+.blog-shell > header + .blog-sticky-bar {
+  border-radius: 0;
+}
+
+.blog-root.is-embedded .blog-sticky-bar {
+  top: var(--header-height, 64px);
+}
+
+/* --------------------------------------------------------------------------
+   2. Floating Music Pill, Rotating Disc, Lyrics Drawer & Playlist Manager
+   -------------------------------------------------------------------------- */
+
+.blog-root.blog-p2-floating-scope {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  min-height: 0;
+  background: transparent;
+  overflow: visible;
+  z-index: 92;
+  pointer-events: none;
+}
+
+.blog-p2-music-pill {
+  pointer-events: auto;
+  position: fixed;
+  left: 24px;
+  bottom: 28px;
+  z-index: 92;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 300px;
+  height: 50px;
+  padding: 6px 8px 6px 7px;
+  border-radius: var(--blog-radius-pill);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-translucent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--blog-text);
+  box-shadow: var(--blog-shadow-popover);
+  transition: border-color 0.18s var(--blog-ease), transform 0.18s var(--blog-ease),
+    background-color 0.2s var(--blog-ease);
+}
+
+@media (min-width: 1180px) {
+  .blog-p2-music-pill {
+    left: max(20px, calc(50% - 310px - 318px));
+  }
+}
+
+.blog-p2-music-pill:hover {
+  border-color: var(--blog-border-input);
+}
+
+.blog-p2-music-pill.is-playing {
+  border-color: rgba(77, 73, 252, 0.34);
+}
+
+.blog-root[data-blog-theme='dark'] .blog-p2-music-pill.is-playing {
+  border-color: rgba(129, 140, 248, 0.4);
+}
+
+.blog-p2-music-disc {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--blog-divider);
+  background: linear-gradient(135deg, #18181b 0%, #2e2e38 55%, #4d49fc 100%);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  animation: blogDiscSpin 14s linear infinite;
+  animation-play-state: paused;
+}
+
+.blog-p2-music-disc.is-large {
+  width: 52px;
+  height: 52px;
+  cursor: default;
+}
+
+.blog-p2-music-disc.is-playing {
+  animation-play-state: running;
+}
+
+.blog-p2-music-disc img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-p2-music-disc::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--blog-surface);
+  border: 1.5px solid rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+}
+
+.blog-p2-music-pill-body {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  cursor: pointer;
+}
+
+.blog-p2-music-pill-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--blog-text);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-music-pill-lyric {
+  font-size: 11px;
+  color: var(--blog-link);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-music-pill:not(.is-playing) .blog-p2-music-pill-lyric {
+  color: var(--blog-text-muted);
+}
+
+.blog-p2-music-pill-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.blog-p2-music-pill-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  color: var(--blog-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  transition: background-color 0.14s, color 0.14s, border-color 0.14s;
+}
+
+.blog-p2-music-pill-btn:hover {
+  background: var(--blog-surface-subtle);
+}
+
+.blog-p2-music-pill-btn.is-primary {
+  background: #4d49fc;
+  border-color: #4d49fc;
+  color: #ffffff;
+}
+
+.blog-p2-music-pill-btn.is-primary:hover {
+  background: #3c38e0;
+  border-color: #3c38e0;
+}
+
+/* Music & Lyrics Drawer */
+.blog-p2-music-drawer {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  max-height: calc(100dvh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--blog-surface);
+  color: var(--blog-text);
+  border: 1px solid var(--blog-divider);
+  border-radius: var(--blog-radius-md);
+  box-shadow: var(--blog-shadow-float);
+  overflow: hidden;
+  animation: blogModalIn 0.2s var(--blog-ease) both;
+}
+
+.blog-p2-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--blog-divider);
+}
+
+.blog-p2-drawer-now {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.blog-p2-drawer-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.blog-p2-drawer-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--blog-text);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-drawer-artist {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--blog-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-drawer-controls-wrap {
+  padding: 12px 18px;
+  background: var(--blog-surface-subtle);
+  border-bottom: 1px solid var(--blog-divider);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.blog-p2-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.blog-p2-time-mono {
+  font-family: var(--blog-font-mono);
+  font-size: 11px;
+  color: var(--blog-text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.blog-p2-seek-slider {
+  flex: 1;
+  height: 4px;
+  accent-color: #4d49fc;
+  cursor: pointer;
+}
+
+.blog-p2-transport-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.blog-p2-transport-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.blog-p2-play-fab {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 0;
+  background: #4d49fc;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.14s, transform 0.14s;
+}
+
+.blog-p2-play-fab:hover {
+  background: #3c38e0;
+  transform: scale(1.04);
+}
+
+/* Synchronized Scrolling LRC Box */
+.blog-p2-lrc-box {
+  position: relative;
+  height: 210px;
+  overflow-y: auto;
+  padding: 28px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  scroll-behavior: smooth;
+  border-bottom: 1px solid var(--blog-divider);
+}
+
+.blog-p2-lrc-empty {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--blog-text-muted);
+  font-size: 13px;
+}
+
+.blog-p2-lrc-line {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--blog-text-muted);
+  text-align: center;
+  cursor: pointer;
+  transition: color 0.18s var(--blog-ease), background-color 0.18s var(--blog-ease),
+    transform 0.18s var(--blog-ease);
+}
+
+.blog-p2-lrc-line:hover {
+  color: var(--blog-text);
+  background: var(--blog-surface-subtle);
+}
+
+.blog-p2-lrc-line.is-active {
+  color: var(--blog-link);
+  background: var(--blog-link-soft);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Playlist Track Rows (Drawer & Manager) */
+.blog-p2-drawer-playlist {
+  padding: 12px 16px 14px;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.blog-p2-drawer-playlist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--blog-text-muted);
+  padding: 0 4px;
+}
+
+.blog-p2-track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.blog-p2-track-item-wrap {
+  border-radius: 10px;
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  overflow: hidden;
+}
+
+.blog-p2-track-item-wrap.is-current {
+  border-color: var(--blog-link);
+}
+
+.blog-p2-track-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--blog-text);
+  text-align: left;
+  transition: background-color 0.14s var(--blog-ease), color 0.14s var(--blog-ease);
+}
+
+.blog-p2-track-row.is-clickable {
+  cursor: pointer;
+}
+
+.blog-p2-track-row.is-clickable:hover {
+  background: var(--blog-surface-subtle);
+}
+
+.blog-p2-track-row.is-active {
+  background: var(--blog-link-soft);
+}
+
+.blog-p2-track-num {
+  width: 22px;
+  font-family: var(--blog-font-mono);
+  font-size: 11.5px;
+  color: var(--blog-text-muted);
+  flex-shrink: 0;
+}
+
+.blog-p2-track-row.is-active .blog-p2-track-num,
+.blog-p2-track-row.is-active .blog-p2-track-row-title {
+  color: var(--blog-link);
+  font-weight: 600;
+}
+
+.blog-p2-track-row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-track-row-artist {
+  max-width: 120px;
+  font-size: 12px;
+  color: var(--blog-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Owner Playlist Manager Modal */
+.blog-p2-manager-modal {
+  position: relative;
+  width: 100%;
+  max-width: 660px;
+  max-height: calc(100dvh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--blog-surface);
+  color: var(--blog-text);
+  border: 1px solid var(--blog-divider);
+  border-radius: var(--blog-radius-md);
+  box-shadow: var(--blog-shadow-float);
+  overflow: hidden;
+  animation: blogModalIn 0.2s var(--blog-ease) both;
+}
+
+.blog-p2-manager-form {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--blog-surface-subtle);
+  border: 1px solid var(--blog-divider);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.blog-p2-manager-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--blog-text);
+}
+
+.blog-p2-manager-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.blog-p2-manager-cover-slot {
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  color: var(--blog-link);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.blog-p2-manager-cover-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-p2-manager-upload-actions {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.blog-p2-track-play-btn {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text);
+  padding: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.blog-p2-track-play-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-p2-track-index {
+  font-family: var(--blog-font-mono);
+  font-size: 12px;
+  color: var(--blog-text-muted);
+}
+
+.blog-p2-track-play-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.14s;
+}
+
+.blog-p2-track-play-btn:hover .blog-p2-track-play-overlay,
+.blog-p2-track-row.is-active .blog-p2-track-play-overlay {
+  opacity: 1;
+}
+
+.blog-p2-track-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.blog-p2-track-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--blog-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-lrc-tag {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--blog-link-soft);
+  color: var(--blog-link);
+  font-family: var(--blog-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.blog-p2-track-sub {
+  font-size: 12px;
+  color: var(--blog-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-track-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.blog-p2-track-edit-box {
+  padding: 12px;
+  border-top: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.blog-p2-inline-alert {
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--blog-danger-soft);
+  color: var(--blog-danger);
+  font-size: 12.5px;
+}
+
+.blog-p2-empty-hint {
+  padding: 20px 14px;
+  border-radius: 10px;
+  border: 1px dashed var(--blog-divider);
+  text-align: center;
+  font-size: 13px;
+  color: var(--blog-text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   3. Article Sticky Bar Mini Music Pill (.blog-p2-article-music)
+   -------------------------------------------------------------------------- */
+
+.blog-p2-article-music {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 176px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--blog-radius-pill);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background-color 0.14s, border-color 0.14s, color 0.14s;
+}
+
+.blog-p2-article-music span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-article-music:hover {
+  background: var(--blog-surface-hover);
+  color: var(--blog-text);
+}
+
+.blog-p2-article-music.is-playing {
+  background: var(--blog-link-soft);
+  border-color: transparent;
+  color: var(--blog-link);
+}
+
+/* --------------------------------------------------------------------------
+   4. Moment Music Share Card (.blog-p2-music-card)
+   -------------------------------------------------------------------------- */
+
+.blog-p2-music-card {
+  margin-top: 10px;
+  max-width: 360px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px 8px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s var(--blog-ease), background-color 0.16s var(--blog-ease);
+}
+
+.blog-p2-music-card:hover {
+  border-color: var(--blog-link);
+  background: var(--blog-surface-hover);
+}
+
+.blog-p2-music-card.is-playing {
+  border-color: var(--blog-link);
+  background: var(--blog-link-soft);
+}
+
+.blog-p2-music-card-cover {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #1b1d28 0%, #4d49fc 100%);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.blog-p2-music-card-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-p2-music-card-play {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.36);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.14s;
+}
+
+.blog-p2-music-card:hover .blog-p2-music-card-play {
+  background: rgba(77, 73, 252, 0.72);
+}
+
+.blog-p2-music-card-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.blog-p2-music-card-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--blog-text);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-music-card-artist {
+  font-size: 12px;
+  color: var(--blog-text-muted);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-music-card audio {
+  width: 100%;
+  height: 32px;
+  margin-top: 6px;
+}
+
+/* --------------------------------------------------------------------------
+   5. Moment Video Card (.blog-p2-video-card & .blog-p2-video-embed)
+   -------------------------------------------------------------------------- */
+
+.blog-p2-video-card {
+  margin-top: 10px;
+  max-width: 440px;
+  border-radius: 12px;
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  overflow: hidden;
+}
+
+.blog-article .blog-p2-video-card,
+.blog-article .blog-p2-music-card {
+  max-width: 100%;
+}
+
+.blog-p2-video-player {
+  width: 100%;
+  max-height: 400px;
+  display: block;
+  background: #0b0b0e;
+  object-fit: contain;
+}
+
+.blog-p2-video-embed {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(135deg, #14151f 0%, #23253a 100%);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.blog-p2-video-embed iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.blog-p2-video-embed img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-p2-video-embed > button {
+  transition: filter 0.18s var(--blog-ease);
+}
+
+.blog-p2-video-embed > button:hover > span:first-of-type {
+  background: #4d49fc !important;
+  border-color: #4d49fc !important;
+  transform: scale(1.06);
+}
+
+.blog-p2-video-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--blog-text-secondary);
+}
+
+.blog-p2-video-meta a {
+  color: var(--blog-link);
+  font-size: 12px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.blog-p2-video-meta a:hover {
+  text-decoration: underline;
+}
+
+.blog-p2-video-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--blog-link-soft);
+  color: var(--blog-link);
+  font-family: var(--blog-font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   6. iOS Live Photo Overlay (.blog-p2-live-badge & .blog-p2-live-video)
+   -------------------------------------------------------------------------- */
+
+.blog-p2-live-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px 0 6px;
+  border-radius: var(--blog-radius-pill);
+  background: rgba(18, 18, 22, 0.56);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+
+.blog-p2-live-badge::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px dotted #ffffff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
+  flex-shrink: 0;
+}
+
+.blog-img-cell.is-live-playing .blog-p2-live-badge {
+  background: rgba(77, 73, 252, 0.85);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.blog-img-cell.is-live-playing .blog-p2-live-badge::before {
+  background: #ffffff;
+  border-style: solid;
+  animation: blogLivePulse 1.1s ease-in-out infinite;
+}
+
+.blog-p2-live-video {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.24s var(--blog-ease);
+}
+
+.blog-p2-live-video.is-playing {
+  opacity: 1;
+}
+
+.blog-img-cell.is-live-playing img {
+  opacity: 0;
+  transform: scale(1.03);
+  transition: opacity 0.26s var(--blog-ease), transform 0.32s var(--blog-ease);
+}
+
+/* --------------------------------------------------------------------------
+   7. Composer Media Attach Sections (.blog-p2-attach-section / tabs / live)
+   -------------------------------------------------------------------------- */
+
+.blog-p2-attach-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--blog-surface-subtle);
+  border: 1px solid var(--blog-divider);
+}
+
+.blog-p2-attach-tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.blog-p2-attach-tabs button,
+.blog-p2-attach-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--blog-radius-pill);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  color: var(--blog-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.14s, border-color 0.14s, color 0.14s;
+}
+
+.blog-p2-attach-tabs button:hover,
+.blog-p2-attach-tab:hover {
+  background: var(--blog-surface-hover);
+  color: var(--blog-text);
+}
+
+.blog-p2-attach-tabs button.is-active,
+.blog-p2-attach-tab.is-active {
+  background: #4d49fc;
+  border-color: #4d49fc;
+  color: #ffffff;
+}
+
+.blog-p2-attach-tabs button.is-active:hover:not(:disabled),
+.blog-p2-attach-tab.is-active:hover:not(:disabled) {
+  background: #3c38e0;
+  border-color: #3c38e0;
+  color: #ffffff;
+}
+
+.blog-p2-live-attach-btn {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  z-index: 3;
+  max-width: calc(100% - 30px);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--blog-radius-pill);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(18, 18, 22, 0.68);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background-color 0.14s, border-color 0.14s;
+}
+
+.blog-p2-live-attach-btn:hover {
+  background: #4d49fc;
+  border-color: #4d49fc;
+}
+
+.blog-p2-live-attach-btn.is-active,
+.blog-p2-live-attach-btn.has-live {
+  background: #4d49fc;
+  border-color: #4d49fc;
+  color: #ffffff;
+}
+
+/* --------------------------------------------------------------------------
+   8. Standalone Digital Garden Pages (/about, /equipment, /labs, /friends)
+   -------------------------------------------------------------------------- */
+
+.blog-p2-page {
+  padding: 24px 24px 44px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.blog-p2-page-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--blog-divider);
+}
+
+.blog-p2-about-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.blog-p2-about-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  background: #4d49fc;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 500;
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid var(--blog-divider);
+}
+
+.blog-p2-about-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-p2-page-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--blog-text);
+}
+
+.blog-p2-page-subtitle {
+  margin: 5px 0 4px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--blog-text-muted);
+}
+
+.blog-p2-section-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.blog-p2-reply-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--blog-link-soft);
+  color: var(--blog-link);
+  font-size: 12.5px;
+}
+
+/* Equipment Grid & Cards */
+.blog-p2-equip-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.blog-p2-equip-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--blog-radius-md);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  overflow: hidden;
+  transition: border-color 0.16s var(--blog-ease), background-color 0.16s var(--blog-ease);
+}
+
+.blog-p2-equip-card:hover {
+  border-color: var(--blog-border-input);
+}
+
+.blog-p2-equip-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: var(--blog-surface-subtle);
+  border-bottom: 1px solid var(--blog-divider);
+  color: var(--blog-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.blog-p2-equip-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.3s var(--blog-ease);
+}
+
+.blog-p2-equip-card:hover .blog-p2-equip-thumb img {
+  transform: scale(1.03);
+}
+
+.blog-p2-equip-body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.blog-p2-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.blog-p2-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--blog-radius-pill);
+  background: var(--blog-link-soft);
+  color: var(--blog-link);
+  font-family: var(--blog-font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.blog-p2-card-title {
+  margin: 2px 0 0;
+  font-size: 15.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--blog-text);
+}
+
+.blog-p2-card-spec {
+  font-family: var(--blog-font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--blog-text-muted);
+}
+
+.blog-p2-card-desc {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--blog-text-secondary);
+}
+
+.blog-p2-card-footer {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.blog-p2-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--blog-link);
+  text-decoration: none;
+}
+
+.blog-p2-card-link:hover {
+  color: var(--blog-link-hover);
+  text-decoration: underline;
+}
+
+/* Labs Showcase Grid & Cards */
+.blog-p2-labs-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.blog-p2-lab-card {
+  padding: 16px;
+  border-radius: var(--blog-radius-md);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.16s var(--blog-ease), background-color 0.16s var(--blog-ease);
+}
+
+.blog-p2-lab-card:hover {
+  border-color: var(--blog-link);
+}
+
+.blog-p2-lab-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.blog-p2-lab-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+  background: var(--blog-surface-subtle);
+  border: 1px solid var(--blog-divider);
+  color: var(--blog-link);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.blog-p2-lab-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-p2-lab-title-group {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Friends 2-Column Grid & Cards */
+.blog-p2-friends-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.blog-p2-friend-card-wrap {
+  position: relative;
+}
+
+.blog-p2-friend-card {
+  height: 100%;
+  padding: 14px;
+  border-radius: var(--blog-radius-md);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  color: inherit;
+  text-decoration: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  transition: border-color 0.16s var(--blog-ease), background-color 0.16s var(--blog-ease);
+}
+
+.blog-p2-friend-card:hover {
+  border-color: var(--blog-link);
+  background: var(--blog-surface-subtle);
+  text-decoration: none;
+}
+
+.blog-p2-friend-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: #4d49fc;
+  color: #ffffff;
+  border: 1px solid var(--blog-divider);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  font-weight: 500;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.blog-p2-friend-avatar.is-preview {
+  width: 52px;
+  height: 52px;
+}
+
+.blog-p2-friend-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-p2-friend-info {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.blog-p2-friend-name-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.blog-p2-friend-name {
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--blog-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-p2-friend-ext {
+  color: var(--blog-text-muted);
+  opacity: 0;
+  transition: opacity 0.14s, color 0.14s;
+}
+
+.blog-p2-friend-card:hover .blog-p2-friend-ext {
+  opacity: 1;
+  color: var(--blog-link);
+}
+
+.blog-p2-friend-desc {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--blog-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.blog-p2-friend-domain {
+  display: inline-block;
+  width: fit-content;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text-muted);
+  font-family: var(--blog-font-mono);
+  font-size: 10.5px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blog-p2-friend-edit-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  color: var(--blog-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.14s, color 0.14s, border-color 0.14s;
+}
+
+.blog-p2-friend-card-wrap:hover .blog-p2-friend-edit-btn,
+.blog-p2-friend-edit-btn:focus-visible {
+  opacity: 1;
+}
+
+.blog-p2-friend-edit-btn:hover {
+  color: var(--blog-link);
+  border-color: var(--blog-link);
+}
+
+/* --------------------------------------------------------------------------
+   9. Keyframes & Mobile Responsive Breakpoints (<= 768px)
+   -------------------------------------------------------------------------- */
+
+@keyframes blogDiscSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes blogLivePulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.28);
+    opacity: 0.65;
+  }
+}
+
+@media (max-width: 768px) {
+  .blog-p2-nav-strip {
+    padding: 8px 16px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .blog-p2-nav-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .blog-p2-music-pill {
+    left: 12px;
+    bottom: 18px;
+    max-width: calc(100vw - 88px);
+    height: 44px;
+    padding: 4px 6px 4px 5px;
+    gap: 8px;
+  }
+
+  .blog-p2-music-pill.has-bottom-bar {
+    bottom: 72px;
+  }
+
+  .blog-p2-music-disc {
+    width: 32px;
+    height: 32px;
+  }
+
+  .blog-p2-music-drawer,
+  .blog-p2-manager-modal {
+    max-width: 100%;
+    max-height: calc(100dvh - 16px);
+    border-radius: 16px;
+  }
+
+  .blog-p2-article-music {
+    max-width: 118px;
+  }
+
+  .blog-p2-video-card,
+  .blog-p2-music-card {
+    max-width: 100%;
+  }
+
+  .blog-p2-page {
+    padding: 18px 16px 36px;
+  }
+
+  .blog-p2-page-hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .blog-p2-equip-grid,
+  .blog-p2-labs-grid,
+  .blog-p2-friends-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .blog-p2-friend-edit-btn {
+    opacity: 0.88;
+  }
+
+  .blog-p2-manager-upload-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

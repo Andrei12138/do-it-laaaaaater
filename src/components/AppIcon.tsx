@@ -60,6 +60,16 @@ export type AppIconName =
   | 'tag'
   | 'eye'
   | 'eyeOff'
+  | 'music'
+  | 'volume'
+  | 'volumeOff'
+  | 'skipBack'
+  | 'skipForward'
+  | 'video'
+  | 'cpu'
+  | 'flask'
+  | 'users'
+  | 'shuffle'
 
 interface AppIconProps extends SVGProps<SVGSVGElement> {
   name: AppIconName
@@ -211,5 +221,25 @@ export function AppIcon({ name, size = 16, className, ...rest }: AppIconProps) {
       return <svg {...props}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
     case 'eyeOff':
       return <svg {...props}><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" /><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
+    case 'music':
+      return <svg {...props}><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>
+    case 'volume':
+      return <svg {...props}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" /></svg>
+    case 'volumeOff':
+      return <svg {...props}><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" /></svg>
+    case 'skipBack':
+      return <svg {...props}><polygon points="19 20 9 12 19 4 19 20" /><line x1="5" y1="19" x2="5" y2="5" /></svg>
+    case 'skipForward':
+      return <svg {...props}><polygon points="5 4 15 12 5 20 5 4" /><line x1="19" y1="5" x2="19" y2="19" /></svg>
+    case 'video':
+      return <svg {...props}><rect x="2" y="5" width="15" height="14" rx="2" /><polygon points="17 10 22 7 22 17 17 14 17 10" /></svg>
+    case 'cpu':
+      return <svg {...props}><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></svg>
+    case 'flask':
+      return <svg {...props}><path d="M9 3h6" /><path d="M10 3v6.5L4.5 18.2A2 2 0 0 0 6.2 21h11.6a2 2 0 0 0 1.7-2.8L14 9.5V3" /><path d="M7.5 15h9" /></svg>
+    case 'users':
+      return <svg {...props}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+    case 'shuffle':
+      return <svg {...props}><polyline points="16 3 21 3 21 8" /><line x1="4" y1="20" x2="21" y2="3" /><polyline points="21 16 21 21 16 21" /><line x1="15" y1="15" x2="21" y2="21" /><line x1="4" y1="4" x2="9" y2="9" /></svg>
   }
 }

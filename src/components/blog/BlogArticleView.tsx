@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { formatArticleDateTime, toggleBlogPostLike } from '../../blog-api'
 import { formatMomentText, renderArticleMarkdown } from '../../blog-markdown'
+import { useOptionalBlogMusic } from '../../blog-music'
 import type {
   BlogComment,
   BlogPostDetail,
+  BlogPostMetadata,
   BlogPostType,
   BlogProfile
 } from '../../blog-types'
@@ -11,7 +13,9 @@ import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
 import { BlogCommentSection } from './BlogCommentSection'
 import { BlogImageGrid } from './BlogImageGrid'
+import { BlogMusicCard } from './BlogMusicCard'
 import { BlogUnlockCard } from './BlogUnlockCard'
+import { BlogVideoCard } from './BlogVideoCard'
 
 export interface BlogArticleViewProps {
   post: BlogPostDetail
@@ -95,6 +99,8 @@ export function BlogArticleView({
 
   const isArticle = post.type === 'article'
   const headerTitle = post.title || '动态详情'
+  const musicCtx = useOptionalBlogMusic()
+  const meta = (post.metadata || {}) as BlogPostMetadata
 
   const rendered = useMemo(() => {
     if (post.locked || !isArticle) return null
@@ -268,6 +274,47 @@ export function BlogArticleView({
       </div>
 
       <div className="blog-sticky-actions">
+        {musicCtx?.currentTrack && (
+          <div
+            className={`blog-p2-article-music${musicCtx.isPlaying ? ' is-playing' : ''}`}
+            role="group"
+            aria-label="当前播放音乐"
+            onClick={() => musicCtx.openDrawer()}
+            title={`${musicCtx.currentTrack.title} · 点击展开歌词与歌单`}
+          >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                musicCtx.togglePlay()
+              }}
+              aria-label={musicCtx.isPlaying ? '暂停播放' : '继续播放'}
+              style={{
+                border: 0,
+                background: 'transparent',
+                padding: 2,
+                color: 'inherit',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                flexShrink: 0
+              }}
+            >
+              <AppIcon name={musicCtx.isPlaying ? 'pause' : 'play'} size={12} />
+            </button>
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                minWidth: 0
+              }}
+            >
+              {(musicCtx.isPlaying && musicCtx.currentLyricLine) || musicCtx.currentTrack.title}
+            </span>
+          </div>
+        )}
         {isOwner && (
           <button
             type="button"
@@ -393,6 +440,20 @@ export function BlogArticleView({
               />
             )}
 
+            {(meta.video || meta.music) && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 12,
+                  marginBottom: 22
+                }}
+              >
+                {meta.video && <BlogVideoCard video={meta.video} />}
+                {meta.music && <BlogMusicCard music={meta.music} />}
+              </div>
+            )}
+
             <div
               ref={articleContentRef}
               className="blog-article-content"
@@ -503,6 +564,18 @@ export function BlogArticleView({
             {post.images.length > 0 && (
               <div style={{ marginTop: 14 }}>
                 <BlogImageGrid images={post.images} onOpenLightbox={onOpenLightbox} />
+              </div>
+            )}
+
+            {meta.video && (
+              <div style={{ marginTop: 14 }}>
+                <BlogVideoCard video={meta.video} />
+              </div>
+            )}
+
+            {meta.music && (
+              <div style={{ marginTop: 14 }}>
+                <BlogMusicCard music={meta.music} />
               </div>
             )}
 
