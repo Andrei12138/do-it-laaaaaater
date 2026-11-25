@@ -1,12 +1,12 @@
 const CACHE_PREFIX = 'do-it-laaaaaater-shell-'
-const CACHE_NAME = CACHE_PREFIX + '2026-11-25-blog-v4'
+const CACHE_NAME = CACHE_PREFIX + '2026-11-25-blog-v5'
 const APP_SHELL = [
-  '/',
   '/manifest.webmanifest',
   '/icons/app-icon-180.png',
   '/icons/app-icon-192.png',
   '/icons/app-icon-512.png'
 ]
+const NAVIGATE_TIMEOUT_MS = 3000
 
 async function cacheAppShell() {
   const cache = await caches.open(CACHE_NAME)
@@ -17,6 +17,26 @@ async function cacheAppShell() {
   const html = await response.text()
   const assets = [...html.matchAll(/(?:src|href)=["'](\/assets\/[^"']+)["']/g)].map((match) => match[1])
   await Promise.allSettled([...new Set(assets)].map((asset) => cache.add(asset)))
+}
+
+async function handleNavigate(request) {
+  const cache = await caches.open(CACHE_NAME)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), NAVIGATE_TIMEOUT_MS)
+  try {
+    const response = await fetch(request, { signal: controller.signal })
+    if (response.ok) {
+      await cache.put('/', response.clone())
+      return response
+    }
+    const cached = await cache.match('/')
+    return cached || response
+  } catch {
+    const cached = await cache.match('/')
+    return cached || new Response('Offline', { status: 503 })
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 self.addEventListener('install', (event) => {
@@ -42,37 +62,33 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return
 
   if (request.mode === 'navigate') {
-    event.respondWith(
-      caches.open(CACHE_NAME).then(async (cache) => {
-        const cached = await cache.match('/')
-        const networkPromise = fetch(request)
-          .then((response) => {
-            if (response.ok) cache.put('/', response.clone())
-            return response
-          })
-          .catch(() => null)
-        if (cached) {
-          event.waitUntil(networkPromise)
-          return cached
-        }
-        return (await networkPromise) || new Response('Offline', { status: 503 })
-      })
-    )
+    event.respondWith(handleNavigate(request))
     return
   }
 
-  const staticAsset = url.pathname.startsWith('/assets/') ||
-    url.pathname.startsWith('/excalidraw-assets/') ||
+  const staticAsset =
+    url.pathname.startsWith('/assets/') ||
     url.pathname.startsWith('/icons/') ||
     url.pathname === '/manifest.webmanifest'
   if (!staticAsset) return
+
   event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-      const contentType = response.headers.get('content-type') || ''
-      if (response.ok && !contentType.includes('text/html')) {
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()))
+    caches.match(request).then((cached) => {
+      if (cached) {
+        const cachedType = (cached.headers.get('content-type') || '').toLowerCase()
+        if (!cachedType.includes('text/html')) return cached
       }
-      return response
-    }))
+      return fetch(request).then((response) => {
+        const contentType = (response.headers.get('content-type') || '').toLowerCase()
+        if (contentType.includes('text/html')) {
+          return Response.error()
+        }
+        if (response.ok) {
+          const copy = response.clone()
+          void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
+        }
+        return response
+      })
+    })
   )
 })

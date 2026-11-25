@@ -12,6 +12,7 @@ import type {
   BlogImportedItemDraft,
   BlogLikeEntry,
   BlogLinkCard,
+  BlogMediaGcResult,
   BlogMediaKind,
   BlogMediaUpload,
   BlogMusicTrack,
@@ -23,7 +24,8 @@ import type {
   BlogPostsResponse,
   BlogPostVideo,
   BlogProfile,
-  BlogSettingsInput
+  BlogSettingsInput,
+  StorageUsageSnapshot
 } from './blog-types'
 
 export { ApiRequestError } from './api-error'
@@ -221,8 +223,19 @@ function blogJson<T>(path: string, method: string, body?: unknown): Promise<T> {
   })
 }
 
-export function fetchBlogBootstrap(): Promise<BlogBootstrap> {
-  return blogRequest<BlogBootstrap>('/api/blog/bootstrap')
+export function fetchBlogBootstrap(options?: { full?: boolean }): Promise<BlogBootstrap> {
+  return blogRequest<BlogBootstrap>(options?.full ? '/api/blog/bootstrap?full=1' : '/api/blog/bootstrap')
+}
+
+export function fetchStorageUsage(): Promise<StorageUsageSnapshot> {
+  return blogRequest<StorageUsageSnapshot>('/api/storage/usage')
+}
+
+export function runBlogMediaGc(options?: {
+  includeRecent?: boolean
+  includeLegacyMemo?: boolean
+}): Promise<BlogMediaGcResult> {
+  return blogJson<BlogMediaGcResult>('/api/blog/media/gc', 'POST', options || {})
 }
 
 export function fetchBlogPosts(params: FetchBlogPostsParams = {}): Promise<BlogPostsResponse> {

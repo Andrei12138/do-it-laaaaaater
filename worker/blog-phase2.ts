@@ -27,6 +27,9 @@ export interface Phase2SharedHelpers {
   loadOwnerSettingsRow: (env: Env, ownerId: string) => Promise<Row | null>
   defaultNickname: string
   checkCommentRateLimit: (ip: string) => void
+  scheduleMediaCleanup: (ownerId: string, candidateIds: Array<string | null | undefined>) => void
+  extractBlogMediaIdsFromText: (text: unknown) => string[]
+  extractMediaIdFromBlogUrl: (rawUrl: unknown) => string | null
 }
 
 export interface ByteRange {
@@ -176,11 +179,14 @@ export function inferVideoMimeAndExt(
   return null
 }
 
-export function validateMediaKind(raw: unknown): BlogMediaKind {
-  if (raw === 'image' || raw === 'audio' || raw === 'video' || raw === 'lyric' || raw === 'file') {
+export function validateMediaKind(raw: unknown): Exclude<BlogMediaKind, 'file'> {
+  if (raw === 'file') {
+    throw new ApiError(400, '不支持该文件类型')
+  }
+  if (raw === 'image' || raw === 'audio' || raw === 'video' || raw === 'lyric') {
     return raw
   }
-  throw new ApiError(400, '不支持的媒体类型')
+  throw new ApiError(400, '不支持该文件类型')
 }
 
 export function isValidPageSlug(slug: string): boolean {
@@ -222,7 +228,7 @@ function defaultPageMeta(slug: string): { title: string; subtitle: string } {
   }
 }
 
-function serializeMusicTrack(
+export function serializeMusicTrack(
   row: Row,
   blogMediaUrl: (mediaId: string, variant?: 'original' | 'thumb') => string
 ): BlogMusicTrack {
@@ -324,7 +330,7 @@ async function loadPageData(
   }
 }
 
-function serializeCatalogItem(
+export function serializeCatalogItem(
   row: Row,
   blogMediaUrl: (mediaId: string, variant?: 'original' | 'thumb') => string
 ): BlogCatalogItem {
@@ -347,7 +353,7 @@ function serializeCatalogItem(
   }
 }
 
-function serializeFriend(
+export function serializeFriend(
   row: Row,
   blogMediaUrl: (mediaId: string, variant?: 'original' | 'thumb') => string
 ): BlogFriend {
@@ -385,7 +391,10 @@ export async function handleBlogPhase2Api(
     sanitizeWebsiteUrl,
     loadOwnerSettingsRow,
     defaultNickname,
-    checkCommentRateLimit
+    checkCommentRateLimit,
+    scheduleMediaCleanup,
+    extractBlogMediaIdsFromText,
+    extractMediaIdFromBlogUrl
   } = helpers
 
   // --- 1. Music Tracks ---
@@ -531,13 +540,28 @@ export async function handleBlogPhase2Api(
         .bind(trackId, owner.id)
         .first<Row>()
       if (!updated) throw new ApiError(404, '曲目不存在')
+
+      const nextIds = new Set(
+        [
+          updated.audio_media_id ? String(updated.audio_media_id) : '',
+          updated.cover_media_id ? String(updated.cover_media_id) : ''
+        ].filter(Boolean)
+      )
+      const removedIds = [
+        existing.audio_media_id ? String(existing.audio_media_id) : '',
+        existing.cover_media_id ? String(existing.cover_media_id) : ''
+      ].filter((id) => id && !nextIds.has(id))
+      if (removedIds.length) {
+        scheduleMediaCleanup(owner.id, removedIds)
+      }
+
       return json(serializeMusicTrack(updated, blogMediaUrl))
     }
 
     if (method === 'DELETE') {
       const owner = requireOwner(auth)
       const existing = await env.DB.prepare(
-        'SELECT id FROM blog_music_tracks WHERE id = ? AND user_id = ?'
+        'SELECT id, audio_media_id, cover_media_id FROM blog_music_tracks WHERE id = ? AND user_id = ?'
       )
         .bind(trackId, owner.id)
         .first<Row>()
@@ -545,6 +569,10 @@ export async function handleBlogPhase2Api(
       await env.DB.prepare('DELETE FROM blog_music_tracks WHERE id = ? AND user_id = ?')
         .bind(trackId, owner.id)
         .run()
+      scheduleMediaCleanup(owner.id, [
+        existing.audio_media_id ? String(existing.audio_media_id) : null,
+        existing.cover_media_id ? String(existing.cover_media_id) : null
+      ])
       return json({ ok: true })
     }
   }
@@ -725,6 +753,19 @@ export async function handleBlogPhase2Api(
           updatedAt
         )
         .run()
+
+      if (existing) {
+        const nextIds = new Set(
+          [coverMediaId || '', ...extractBlogMediaIdsFromText(content)].filter(Boolean)
+        )
+        const removedIds = [
+          existing.cover_media_id ? String(existing.cover_media_id) : '',
+          ...extractBlogMediaIdsFromText(existing.content)
+        ].filter((id) => id && !nextIds.has(id))
+        if (removedIds.length) {
+          scheduleMediaCleanup(owner.id, removedIds)
+        }
+      }
 
       return json(await loadPageData(env, owner.id, slug, blogMediaUrl))
     }
@@ -918,13 +959,28 @@ export async function handleBlogPhase2Api(
         .bind(param, owner.id)
         .first<Row>()
       if (!updated) throw new ApiError(404, '条目不存在')
+
+      const nextIds = new Set(
+        [
+          updated.image_media_id ? String(updated.image_media_id) : '',
+          extractMediaIdFromBlogUrl(updated.image_url) || ''
+        ].filter(Boolean)
+      )
+      const removedIds = [
+        existing.image_media_id ? String(existing.image_media_id) : '',
+        extractMediaIdFromBlogUrl(existing.image_url) || ''
+      ].filter((id) => id && !nextIds.has(id))
+      if (removedIds.length) {
+        scheduleMediaCleanup(owner.id, removedIds)
+      }
+
       return json(serializeCatalogItem(updated, blogMediaUrl))
     }
 
     if (method === 'DELETE') {
       const owner = requireOwner(auth)
       const existing = await env.DB.prepare(
-        'SELECT id FROM blog_catalog_items WHERE id = ? AND user_id = ?'
+        'SELECT id, image_media_id, image_url FROM blog_catalog_items WHERE id = ? AND user_id = ?'
       )
         .bind(param, owner.id)
         .first<Row>()
@@ -932,6 +988,10 @@ export async function handleBlogPhase2Api(
       await env.DB.prepare('DELETE FROM blog_catalog_items WHERE id = ? AND user_id = ?')
         .bind(param, owner.id)
         .run()
+      scheduleMediaCleanup(owner.id, [
+        existing.image_media_id ? String(existing.image_media_id) : null,
+        extractMediaIdFromBlogUrl(existing.image_url)
+      ])
       return json({ ok: true })
     }
   }
@@ -1078,13 +1138,28 @@ export async function handleBlogPhase2Api(
         .bind(friendId, owner.id)
         .first<Row>()
       if (!updated) throw new ApiError(404, '友链不存在')
+
+      const nextIds = new Set(
+        [
+          updated.avatar_media_id ? String(updated.avatar_media_id) : '',
+          extractMediaIdFromBlogUrl(updated.avatar_url) || ''
+        ].filter(Boolean)
+      )
+      const removedIds = [
+        existing.avatar_media_id ? String(existing.avatar_media_id) : '',
+        extractMediaIdFromBlogUrl(existing.avatar_url) || ''
+      ].filter((id) => id && !nextIds.has(id))
+      if (removedIds.length) {
+        scheduleMediaCleanup(owner.id, removedIds)
+      }
+
       return json(serializeFriend(updated, blogMediaUrl))
     }
 
     if (method === 'DELETE') {
       const owner = requireOwner(auth)
       const existing = await env.DB.prepare(
-        'SELECT id FROM blog_friends WHERE id = ? AND user_id = ?'
+        'SELECT id, avatar_media_id, avatar_url FROM blog_friends WHERE id = ? AND user_id = ?'
       )
         .bind(friendId, owner.id)
         .first<Row>()
@@ -1092,6 +1167,10 @@ export async function handleBlogPhase2Api(
       await env.DB.prepare('DELETE FROM blog_friends WHERE id = ? AND user_id = ?')
         .bind(friendId, owner.id)
         .run()
+      scheduleMediaCleanup(owner.id, [
+        existing.avatar_media_id ? String(existing.avatar_media_id) : null,
+        extractMediaIdFromBlogUrl(existing.avatar_url)
+      ])
       return json({ ok: true })
     }
   }

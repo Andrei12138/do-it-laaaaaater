@@ -91,7 +91,7 @@ export function applyPwaUpdate() {
     if (reloading) return
     reloading = true
     window.location.reload()
-  })
+  }, { once: true })
   waitingWorker.postMessage({ type: 'SKIP_WAITING' })
 }
 

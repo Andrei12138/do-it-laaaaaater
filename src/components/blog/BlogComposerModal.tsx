@@ -10,7 +10,7 @@ import {
   type FormEvent
 } from 'react'
 import { createPortal } from 'react-dom'
-import { api, errorMessage } from '../../api'
+import { errorMessage } from '../../api-error'
 import {
   createBlogPost,
   fetchBlogMusicTracks,
@@ -21,6 +21,7 @@ import {
   uploadBlogFile,
   uploadBlogMedia
 } from '../../blog-api'
+import { discardDraft, loadDraft, saveDraft, type DraftType } from '../../draft-store'
 import { generateExcerpt, renderArticleMarkdown } from '../../blog-markdown'
 import type {
   BlogImageItem,
@@ -93,6 +94,147 @@ function stripMediaExtension(name: string): string {
 }
 
 type ComposerAttachTab = 'none' | 'link' | 'video' | 'music'
+
+const ACTIVE_WORKSPACE_DRAFT_KEY = 'do-it-laaaaaater.active-draft.v1'
+const BLOG_DRAFT_FALLBACK_PREFIX = 'do-it-laaaaaater.blog.draft.v1.'
+
+interface BlogComposerDraftSnapshot {
+  title: string
+  excerpt: string
+  content: string
+  coverMediaId: string | null
+  coverUrl: string
+  category: string
+  tagsText: string
+  images: BlogImageItem[]
+  linkCard: BlogLinkCard | null
+  linkUrlInput: string
+  videoData: BlogPostVideo | null
+  videoUrlInput: string
+  musicData: BlogPostMusic | null
+  activeAttachTab: ComposerAttachTab
+  locationName: string
+  sourceLabel: string
+  sourceItemId: string | null
+  visibility: BlogVisibility
+  isPinned: boolean
+}
+
+function createEmptyComposerSnapshot(): BlogComposerDraftSnapshot {
+  return {
+    title: '',
+    excerpt: '',
+    content: '',
+    coverMediaId: null,
+    coverUrl: '',
+    category: '',
+    tagsText: '',
+    images: [],
+    linkCard: null,
+    linkUrlInput: '',
+    videoData: null,
+    videoUrlInput: '',
+    musicData: null,
+    activeAttachTab: 'none',
+    locationName: '',
+    sourceLabel: '',
+    sourceItemId: null,
+    visibility: 'public',
+    isPinned: false
+  }
+}
+
+function hasMeaningfulComposerSnapshot(snap: Partial<BlogComposerDraftSnapshot>): boolean {
+  return Boolean(
+    (snap.title && snap.title.trim()) ||
+      (snap.content && snap.content.trim()) ||
+      (snap.excerpt && snap.excerpt.trim()) ||
+      (snap.tagsText && snap.tagsText.trim()) ||
+      (snap.locationName && snap.locationName.trim()) ||
+      (snap.coverUrl && snap.coverUrl.trim()) ||
+      (Array.isArray(snap.images) && snap.images.length > 0) ||
+      (snap.linkCard && (snap.linkCard.url?.trim() || snap.linkCard.title?.trim())) ||
+      (snap.linkUrlInput && snap.linkUrlInput.trim()) ||
+      (snap.videoData && snap.videoData.url?.trim()) ||
+      (snap.videoUrlInput && snap.videoUrlInput.trim()) ||
+      (snap.musicData && snap.musicData.audioUrl?.trim())
+  )
+}
+
+async function saveBlogComposerDraft(
+  key: string,
+  draftType: DraftType,
+  itemId: string | undefined,
+  snapshot: BlogComposerDraftSnapshot
+) {
+  let prevActiveWorkspaceDraft: string | null = null
+  try {
+    prevActiveWorkspaceDraft = localStorage.getItem(ACTIVE_WORKSPACE_DRAFT_KEY)
+  } catch {
+    // Ignore storage read errors.
+  }
+
+  await saveDraft({
+    key,
+    type: draftType,
+    itemId,
+    data: snapshot as unknown as Record<string, unknown>,
+    files: []
+  })
+
+  try {
+    if (prevActiveWorkspaceDraft === null) {
+      localStorage.removeItem(ACTIVE_WORKSPACE_DRAFT_KEY)
+    } else {
+      localStorage.setItem(ACTIVE_WORKSPACE_DRAFT_KEY, prevActiveWorkspaceDraft)
+    }
+    localStorage.setItem(
+      `${BLOG_DRAFT_FALLBACK_PREFIX}${key}`,
+      JSON.stringify({ key, updatedAt: Date.now(), data: snapshot })
+    )
+  } catch {
+    // Ignore storage write errors.
+  }
+}
+
+async function loadBlogComposerDraft(
+  key: string
+): Promise<{ key: string; updatedAt: number; data: Partial<BlogComposerDraftSnapshot> } | null> {
+  const fromIdb = await loadDraft(key)
+  if (fromIdb && fromIdb.data && typeof fromIdb.data === 'object') {
+    return {
+      key: fromIdb.key,
+      updatedAt: fromIdb.updatedAt,
+      data: fromIdb.data as Partial<BlogComposerDraftSnapshot>
+    }
+  }
+  try {
+    const raw = localStorage.getItem(`${BLOG_DRAFT_FALLBACK_PREFIX}${key}`)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as {
+      key?: string
+      updatedAt?: number
+      data?: Partial<BlogComposerDraftSnapshot>
+    }
+    if (!parsed || !parsed.data || typeof parsed.data !== 'object') return null
+    return {
+      key: parsed.key || key,
+      updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
+      data: parsed.data
+    }
+  } catch {
+    return null
+  }
+}
+
+async function discardBlogComposerDraft(key: string) {
+  await discardDraft(key)
+  try {
+    localStorage.removeItem(`${BLOG_DRAFT_FALLBACK_PREFIX}${key}`)
+  } catch {
+    // Ignore storage errors.
+  }
+}
 
 function extractClipboardImageFiles(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
   const files: File[] = []
@@ -217,10 +359,93 @@ export function BlogComposerModal({
     return () => media.removeListener(sync)
   }, [])
 
+  const [baselineJson, setBaselineJson] = useState('')
+  const [hydrated, setHydrated] = useState(false)
+  const [recoverableDraft, setRecoverableDraft] = useState<{
+    key: string
+    updatedAt: number
+    data: Partial<BlogComposerDraftSnapshot>
+  } | null>(null)
+
+  const draftKey = editingPost ? `blog-edit-${editingPost.shortId}` : `blog-new-${type}`
+
+  const currentSnapshot = useMemo<BlogComposerDraftSnapshot>(
+    () => ({
+      title,
+      excerpt,
+      content,
+      coverMediaId,
+      coverUrl,
+      category,
+      tagsText,
+      images,
+      linkCard,
+      linkUrlInput,
+      videoData,
+      videoUrlInput,
+      musicData,
+      activeAttachTab,
+      locationName,
+      sourceLabel,
+      sourceItemId,
+      visibility,
+      isPinned
+    }),
+    [
+      title,
+      excerpt,
+      content,
+      coverMediaId,
+      coverUrl,
+      category,
+      tagsText,
+      images,
+      linkCard,
+      linkUrlInput,
+      videoData,
+      videoUrlInput,
+      musicData,
+      activeAttachTab,
+      locationName,
+      sourceLabel,
+      sourceItemId,
+      visibility,
+      isPinned
+    ]
+  )
+
+  const currentSnapshotJson = useMemo(() => JSON.stringify(currentSnapshot), [currentSnapshot])
+  const hasMeaningfulContent = useMemo(
+    () => hasMeaningfulComposerSnapshot(currentSnapshot),
+    [currentSnapshot]
+  )
+  const isDirty =
+    hydrated &&
+    ((Boolean(baselineJson) && currentSnapshotJson !== baselineJson) || Boolean(password.trim()))
+
+  const attemptClose = useCallback(() => {
+    if (busy) return
+    if (isDirty) {
+      const confirmed = window.confirm('当前内容尚未发布，确定关闭吗？（草稿已自动暂存）')
+      if (!confirmed) return
+      if (hasMeaningfulContent) {
+        void saveBlogComposerDraft(
+          draftKey,
+          editingPost ? 'edit' : 'text',
+          editingPost?.shortId,
+          currentSnapshot
+        )
+      }
+    }
+    onClose()
+  }, [busy, isDirty, hasMeaningfulContent, draftKey, editingPost, currentSnapshot, onClose])
+
   // Populate / reset form whenever modal opens
   useEffect(() => {
     if (!open) {
       setTracksLoaded(false)
+      setHydrated(false)
+      setRecoverableDraft(null)
       return
     }
     setBlogTheme(detectBlogTheme())
@@ -240,22 +465,11 @@ export function BlogComposerModal({
           ? { ...editingPost.metadata }
           : {}
       const hydratedMeta = rawMeta as BlogPostMetadata
-      setBaseMetadata(rawMeta)
-      setType(editingPost.type)
-      setTitle(editingPost.title || '')
-      setExcerpt(editingPost.excerpt || '')
-      setContent(editingPost.content || '')
-      setCoverMediaId(editingPost.coverMediaId ?? null)
-      setCoverUrl(editingPost.coverUrl || '')
-      setCategory(editingPost.category || '')
-      setTagsText((editingPost.tags || []).join(', '))
-      setImages(editingPost.images ? editingPost.images.slice(0, MAX_MOMENT_IMAGES) : [])
-      setLinkCard(editingPost.linkCard ? { ...editingPost.linkCard } : null)
-      setLinkUrlInput(editingPost.linkCard?.url || '')
-      setVideoData(hydratedMeta.video ? { ...hydratedMeta.video } : null)
-      setVideoUrlInput(hydratedMeta.video?.url || '')
-      setMusicData(hydratedMeta.music ? { ...hydratedMeta.music } : null)
-      setActiveAttachTab(
+      const initImages = editingPost.images ? editingPost.images.slice(0, MAX_MOMENT_IMAGES) : []
+      const initLinkCard = editingPost.linkCard ? { ...editingPost.linkCard } : null
+      const initVideo = hydratedMeta.video ? { ...hydratedMeta.video } : null
+      const initMusic = hydratedMeta.music ? { ...hydratedMeta.music } : null
+      const initAttachTab: ComposerAttachTab =
         editingPost.type === 'moment' && editingPost.linkCard
           ? 'link'
           : hydratedMeta.video
@@ -263,13 +477,51 @@ export function BlogComposerModal({
             : hydratedMeta.music
               ? 'music'
               : 'none'
-      )
-      setLocationName(editingPost.locationName || '')
-      setSourceLabel(editingPost.sourceLabel || '')
-      setSourceItemId(editingPost.sourceItemId ?? null)
-      setVisibility(editingPost.visibility || 'public')
+      const editSnap: BlogComposerDraftSnapshot = {
+        title: editingPost.title || '',
+        excerpt: editingPost.excerpt || '',
+        content: editingPost.content || '',
+        coverMediaId: editingPost.coverMediaId ?? null,
+        coverUrl: editingPost.coverUrl || '',
+        category: editingPost.category || '',
+        tagsText: (editingPost.tags || []).join(', '),
+        images: initImages,
+        linkCard: initLinkCard,
+        linkUrlInput: editingPost.linkCard?.url || '',
+        videoData: initVideo,
+        videoUrlInput: hydratedMeta.video?.url || '',
+        musicData: initMusic,
+        activeAttachTab: initAttachTab,
+        locationName: editingPost.locationName || '',
+        sourceLabel: editingPost.sourceLabel || '',
+        sourceItemId: editingPost.sourceItemId ?? null,
+        visibility: editingPost.visibility || 'public',
+        isPinned: Boolean(editingPost.isPinned)
+      }
+      setBaseMetadata(rawMeta)
+      setType(editingPost.type)
+      setTitle(editSnap.title)
+      setExcerpt(editSnap.excerpt)
+      setContent(editSnap.content)
+      setCoverMediaId(editSnap.coverMediaId)
+      setCoverUrl(editSnap.coverUrl)
+      setCategory(editSnap.category)
+      setTagsText(editSnap.tagsText)
+      setImages(editSnap.images)
+      setLinkCard(editSnap.linkCard)
+      setLinkUrlInput(editSnap.linkUrlInput)
+      setVideoData(editSnap.videoData)
+      setVideoUrlInput(editSnap.videoUrlInput)
+      setMusicData(editSnap.musicData)
+      setActiveAttachTab(editSnap.activeAttachTab)
+      setLocationName(editSnap.locationName)
+      setSourceLabel(editSnap.sourceLabel)
+      setSourceItemId(editSnap.sourceItemId)
+      setVisibility(editSnap.visibility)
       setPassword('')
-      setIsPinned(Boolean(editingPost.isPinned))
+      setIsPinned(editSnap.isPinned)
+      setBaselineJson(JSON.stringify(editSnap))
+      setHydrated(true)
       return
     }
 
@@ -296,32 +548,127 @@ export function BlogComposerModal({
       setVisibility('public')
       setPassword('')
       setIsPinned(false)
+      setBaselineJson(JSON.stringify(createEmptyComposerSnapshot()))
+      setHydrated(true)
       return
     }
 
+    const emptySnap = createEmptyComposerSnapshot()
     setBaseMetadata({})
     setType(initialType)
-    setTitle('')
-    setExcerpt('')
-    setContent('')
-    setCoverMediaId(null)
-    setCoverUrl('')
-    setCategory('')
-    setTagsText('')
-    setImages([])
-    setLinkCard(null)
-    setLinkUrlInput('')
-    setVideoData(null)
-    setVideoUrlInput('')
-    setMusicData(null)
-    setActiveAttachTab('none')
-    setLocationName('')
-    setSourceLabel('')
-    setSourceItemId(null)
-    setVisibility('public')
+    setTitle(emptySnap.title)
+    setExcerpt(emptySnap.excerpt)
+    setContent(emptySnap.content)
+    setCoverMediaId(emptySnap.coverMediaId)
+    setCoverUrl(emptySnap.coverUrl)
+    setCategory(emptySnap.category)
+    setTagsText(emptySnap.tagsText)
+    setImages(emptySnap.images)
+    setLinkCard(emptySnap.linkCard)
+    setLinkUrlInput(emptySnap.linkUrlInput)
+    setVideoData(emptySnap.videoData)
+    setVideoUrlInput(emptySnap.videoUrlInput)
+    setMusicData(emptySnap.musicData)
+    setActiveAttachTab(emptySnap.activeAttachTab)
+    setLocationName(emptySnap.locationName)
+    setSourceLabel(emptySnap.sourceLabel)
+    setSourceItemId(emptySnap.sourceItemId)
+    setVisibility(emptySnap.visibility)
     setPassword('')
-    setIsPinned(false)
+    setIsPinned(emptySnap.isPinned)
+    setBaselineJson(JSON.stringify(emptySnap))
+    setHydrated(true)
   }, [open, editingPost, importedDraft, initialType])
+
+  // Check for saved unpublished draft on open / type switch
+  useEffect(() => {
+    if (!open || !hydrated || importedDraft) {
+      setRecoverableDraft(null)
+      return
+    }
+    let cancelled = false
+    setRecoverableDraft(null)
+    void loadBlogComposerDraft(draftKey).then((saved) => {
+      if (cancelled || !saved) return
+      if (!hasMeaningfulComposerSnapshot(saved.data)) return
+      const merged: BlogComposerDraftSnapshot = {
+        ...createEmptyComposerSnapshot(),
+        ...saved.data
+      }
+      if (baselineJson && JSON.stringify(merged) === baselineJson) return
+      setRecoverableDraft(saved)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [open, hydrated, draftKey, importedDraft, baselineJson])
+
+  // Debounced 600ms draft autosave whenever user edits meaningful fields
+  useEffect(() => {
+    if (!open || !hydrated || !isDirty || !hasMeaningfulContent) return
+    const timer = window.setTimeout(() => {
+      void saveBlogComposerDraft(
+        draftKey,
+        editingPost ? 'edit' : 'text',
+        editingPost?.shortId,
+        currentSnapshot
+      )
+    }, 600)
+    return () => window.clearTimeout(timer)
+  }, [open, hydrated, isDirty, hasMeaningfulContent, draftKey, editingPost, currentSnapshot])
+
+  // Warn before closing browser tab when open & dirty
+  useEffect(() => {
+    if (!open || !isDirty || typeof window === 'undefined') return
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [open, isDirty])
+
+  const handleRestoreDraft = useCallback(() => {
+    if (!recoverableDraft) return
+    const d = recoverableDraft.data
+    if (typeof d.title === 'string') setTitle(d.title)
+    if (typeof d.excerpt === 'string') setExcerpt(d.excerpt)
+    if (typeof d.content === 'string') setContent(d.content)
+    if (d.coverMediaId !== undefined) setCoverMediaId(d.coverMediaId ?? null)
+    if (typeof d.coverUrl === 'string') setCoverUrl(d.coverUrl)
+    if (typeof d.category === 'string') setCategory(d.category)
+    if (typeof d.tagsText === 'string') setTagsText(d.tagsText)
+    if (Array.isArray(d.images)) setImages(d.images.slice(0, MAX_MOMENT_IMAGES))
+    if (d.linkCard !== undefined) setLinkCard(d.linkCard ? { ...d.linkCard } : null)
+    if (typeof d.linkUrlInput === 'string') setLinkUrlInput(d.linkUrlInput)
+    if (d.videoData !== undefined) setVideoData(d.videoData ? { ...d.videoData } : null)
+    if (typeof d.videoUrlInput === 'string') setVideoUrlInput(d.videoUrlInput)
+    if (d.musicData !== undefined) setMusicData(d.musicData ? { ...d.musicData } : null)
+    if (
+      d.activeAttachTab === 'none' ||
+      d.activeAttachTab === 'link' ||
+      d.activeAttachTab === 'video' ||
+      d.activeAttachTab === 'music'
+    ) {
+      setActiveAttachTab(type === 'article' && d.activeAttachTab === 'link' ? 'none' : d.activeAttachTab)
+    }
+    if (typeof d.locationName === 'string') setLocationName(d.locationName)
+    if (typeof d.sourceLabel === 'string') setSourceLabel(d.sourceLabel)
+    if (d.sourceItemId !== undefined) setSourceItemId(d.sourceItemId ?? null)
+    if (d.visibility === 'public' || d.visibility === 'private' || d.visibility === 'password') {
+      setVisibility(d.visibility)
+    }
+    if (typeof d.isPinned === 'boolean') setIsPinned(d.isPinned)
+    setRecoverableDraft(null)
+    showToast('info', '已恢复未发布草稿')
+  }, [recoverableDraft, type])
+
+  const handleDiscardDraft = useCallback(() => {
+    if (!recoverableDraft) return
+    const keyToDiscard = recoverableDraft.key
+    setRecoverableDraft(null)
+    void discardBlogComposerDraft(keyToDiscard)
+  }, [recoverableDraft])
 
   // Lazy-load R2 music tracks when Music attachment tab opens
   useEffect(() => {
@@ -352,7 +699,7 @@ export function BlogComposerModal({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !busy) {
         event.preventDefault()
-        onClose()
+        attemptClose()
       }
     }
     document.addEventListener('keydown', onKeyDown)
@@ -362,14 +709,28 @@ export function BlogComposerModal({
       document.removeEventListener('keydown', onKeyDown)
       document.body.style.overflow = prevOverflow
     }
-  }, [open, busy, onClose])
+  }, [open, busy, attemptClose])
 
   // Lazy-load reading list items when import picker opens
   useEffect(() => {
     if (!open || !importPickerOpen || importLoaded || importLoading) return
     let cancelled = false
     setImportLoading(true)
-    api<LibraryItem[]>('/api/items?trash=active&status=all')
+    fetch('/api/items?trash=active&status=all', { credentials: 'same-origin' })
+      .then(async (response) => {
+        const contentType = response.headers.get('content-type') || ''
+        const parsed = contentType.includes('application/json') ? await response.json() : null
+        if (!response.ok) {
+          const payload =
+            parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null
+          const message =
+            (typeof payload?.error === 'string' && payload.error) ||
+            (typeof payload?.message === 'string' && payload.message) ||
+            '加载稍后阅读列表失败'
+          throw new Error(message)
+        }
+        return parsed as LibraryItem[]
+      })
       .then((items) => {
         if (cancelled) return
         setImportItems(Array.isArray(items) ? items : [])
@@ -1034,6 +1395,8 @@ export function BlogComposerModal({
       const saved = editingPost
         ? await updateBlogPost(editingPost.shortId, payload)
         : await createBlogPost(payload)
+      await discardBlogComposerDraft(draftKey)
+      setRecoverableDraft(null)
       showToast(
         'success',
         editingPost ? '修改已保存' : type === 'article' ? '文章已发布' : '动态已发布'
@@ -1469,7 +1832,7 @@ export function BlogComposerModal({
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) {
-          onClose()
+          attemptClose()
         }
       }}
     >
@@ -1530,7 +1893,7 @@ export function BlogComposerModal({
                 className="blog-btn blog-btn-icon"
                 aria-label="关闭"
                 disabled={busy}
-                onClick={onClose}
+                onClick={attemptClose}
               >
                 <AppIcon name="close" size={16} />
               </button>
@@ -1539,6 +1902,31 @@ export function BlogComposerModal({
 
           {/* Body */}
           <div className="blog-modal-body">
+            {recoverableDraft && !isDirty && (
+              <div className="blog-draft-banner" role="status">
+                <div className="blog-draft-banner-text">
+                  <AppIcon name="edit" size={14} />
+                  <span>发现未发布草稿</span>
+                </div>
+                <div className="blog-draft-banner-actions">
+                  <button
+                    type="button"
+                    className="blog-btn blog-btn-primary blog-btn-sm"
+                    onClick={handleRestoreDraft}
+                  >
+                    恢复草稿
+                  </button>
+                  <button
+                    type="button"
+                    className="blog-btn blog-btn-ghost blog-btn-sm"
+                    onClick={handleDiscardDraft}
+                  >
+                    丢弃
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Inline Reading-List Import Picker */}
             {!isEditing && importPickerOpen && (
               <div className="blog-import-picker">
@@ -2225,7 +2613,7 @@ export function BlogComposerModal({
                   : '发布后立即展示在动态时间线'}
             </span>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <button type="button" className="blog-btn blog-btn-ghost" disabled={busy} onClick={onClose}>
+              <button type="button" className="blog-btn blog-btn-ghost" disabled={busy} onClick={attemptClose}>
                 取消
               </button>
               <button type="submit" className="blog-btn blog-btn-primary" disabled={busy}>

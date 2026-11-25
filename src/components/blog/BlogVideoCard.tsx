@@ -139,11 +139,15 @@ export function BlogVideoCard({ video }: BlogVideoCardProps) {
               )}
               <button
                 type="button"
+                className="blog-p2-video-play-btn"
                 onClick={() => setEmbedActive(true)}
                 aria-label={video.title ? `播放视频：${video.title}` : `播放 ${platformLabel} 视频`}
+                title={video.title ? `点击播放：${video.title}` : `播放 · ${platformLabel}`}
               >
-                <AppIcon name="play" size={18} />
-                <span>{video.title ? '点击播放' : `播放 · ${platformLabel}`}</span>
+                <AppIcon name="play" size={22} />
+                <span className="sr-only">
+                  {video.title ? '点击播放' : `播放 · ${platformLabel}`}
+                </span>
               </button>
             </>
           )}

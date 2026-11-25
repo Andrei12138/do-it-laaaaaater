@@ -22,7 +22,8 @@ import type {
   BlogPageData,
   BlogPostMusic,
   BlogPostType,
-  BlogProfile
+  BlogProfile,
+  BlogRailSummary
 } from '../../blog-types'
 import { AppIcon } from '../AppIcon'
 
@@ -99,6 +100,8 @@ export interface BlogSideRailDataProps {
     | 'friends'
   hiddenWidgets: BlogSidebarWidgetId[]
   refreshTick: number
+  initialSummary?: BlogRailSummary | null
+  summaryLoading?: boolean
   onNavigate: (path: string) => void
   onOpenLightbox: (images: Array<{ url: string; alt?: string }>, index: number) => void
   onOpenCompose: (type?: BlogPostType) => void
@@ -110,7 +113,9 @@ export interface BlogLeftRailProps extends BlogSideRailDataProps {
   onJumpHeading?: (id: string) => void
 }
 
-// Lightweight session cache keyed by refreshTick so route switches stay flicker-free.
+// Lightweight session cache keyed by owner/guest scope and refreshTick so route switches stay flicker-free.
+type RailCacheScope = 'owner' | 'guest'
+
 interface RailDataCache {
   about?: { tick: number; data: BlogPageData }
   archives?: { tick: number; items: BlogArchiveItem[] }
@@ -119,7 +124,14 @@ interface RailDataCache {
   friends?: { tick: number; items: BlogFriend[] }
 }
 
-const railCache: RailDataCache = {}
+const railCache: Record<RailCacheScope, RailDataCache> = {
+  owner: {},
+  guest: {}
+}
+
+function getRailScope(isOwner: boolean): RailCacheScope {
+  return isOwner ? 'owner' : 'guest'
+}
 
 function getMonogram(name: string, fallback = 'B'): string {
   const trimmed = (name || '').trim()
@@ -279,15 +291,25 @@ function AboutRailWidget({
   isOwner,
   activeRoute,
   refreshTick,
+  initialSummary,
+  summaryLoading = false,
   onNavigate
 }: BlogSideRailDataProps) {
+  const scope = getRailScope(isOwner)
   const [aboutPage, setAboutPage] = useState<BlogPageData | null>(
-    () => railCache.about?.data ?? null
+    () => railCache[scope].about?.data ?? null
   )
 
   useEffect(() => {
-    if (railCache.about && railCache.about.tick === refreshTick) {
-      setAboutPage(railCache.about.data)
+    if (refreshTick === 0 && initialSummary) {
+      return
+    }
+    if (refreshTick === 0 && summaryLoading) {
+      return
+    }
+    const cached = railCache[scope].about
+    if (cached && cached.tick === refreshTick) {
+      setAboutPage(cached.data)
       return
     }
     let cancelled = false
@@ -295,7 +317,7 @@ function AboutRailWidget({
       try {
         const data = await fetchBlogPage('about')
         if (cancelled) return
-        railCache.about = { tick: refreshTick, data }
+        railCache[scope].about = { tick: refreshTick, data }
         setAboutPage(data)
       } catch {
         // Keep profile fallback if /api/blog/pages/about is unavailable
@@ -304,18 +326,30 @@ function AboutRailWidget({
     return () => {
       cancelled = true
     }
-  }, [refreshTick])
+  }, [refreshTick, initialSummary, summaryLoading, scope])
+
+  const useSummaryAbout =
+    refreshTick === 0 &&
+    Boolean(initialSummary) &&
+    !(railCache[scope].about && railCache[scope].about?.tick === refreshTick)
 
   const displayName = profile.nickname || profile.siteName || '个人博客'
-  const subtitle = aboutPage?.subtitle?.trim() || profile.siteName || ''
+  const subtitle = useSummaryAbout
+    ? initialSummary?.aboutSubtitle?.trim() || profile.siteName || ''
+    : aboutPage?.subtitle?.trim() || profile.siteName || ''
   const aboutExcerpt = useMemo(() => {
+    if (useSummaryAbout && initialSummary) {
+      if (initialSummary.aboutExcerpt?.trim()) return initialSummary.aboutExcerpt.trim()
+      if (profile.bio?.trim()) return profile.bio.trim()
+      return isOwner ? '点击右上角详情完善「关于我」独立页面…' : '记录日常片段、阅读与思考。'
+    }
     if (aboutPage?.content?.trim()) {
       const stripped = generateExcerpt(aboutPage.content, 110)
       if (stripped) return stripped
     }
     if (profile.bio?.trim()) return profile.bio.trim()
     return isOwner ? '点击右上角详情完善「关于我」独立页面…' : '记录日常片段、阅读与思考。'
-  }, [aboutPage?.content, profile.bio, isOwner])
+  }, [useSummaryAbout, initialSummary, aboutPage?.content, profile.bio, isOwner])
 
   const isCurrent = activeRoute === 'about'
 
@@ -417,18 +451,31 @@ function AlbumRailWidget({
   isOwner,
   activeRoute,
   refreshTick,
+  initialSummary,
+  summaryLoading = false,
   onNavigate,
   onOpenLightbox,
   onOpenCompose
 }: BlogSideRailDataProps) {
+  const scope = getRailScope(isOwner)
   const [archiveItems, setArchiveItems] = useState<BlogArchiveItem[]>(
-    () => railCache.archives?.items ?? []
+    () => railCache[scope].archives?.items ?? []
   )
-  const [loaded, setLoaded] = useState<boolean>(() => Boolean(railCache.archives))
+  const [loaded, setLoaded] = useState<boolean>(
+    () => Boolean(railCache[scope].archives) || (refreshTick === 0 && Boolean(initialSummary))
+  )
 
   useEffect(() => {
-    if (railCache.archives && railCache.archives.tick === refreshTick) {
-      setArchiveItems(railCache.archives.items)
+    if (refreshTick === 0 && initialSummary) {
+      setLoaded(true)
+      return
+    }
+    if (refreshTick === 0 && summaryLoading) {
+      return
+    }
+    const cached = railCache[scope].archives
+    if (cached && cached.tick === refreshTick) {
+      setArchiveItems(cached.items)
       setLoaded(true)
       return
     }
@@ -438,7 +485,7 @@ function AlbumRailWidget({
         const res = await fetchBlogArchives()
         if (cancelled) return
         const items = Array.isArray(res?.items) ? res.items : []
-        railCache.archives = { tick: refreshTick, items }
+        railCache[scope].archives = { tick: refreshTick, items }
         setArchiveItems(items)
       } catch {
         // Keep existing or empty state on network failure
@@ -449,9 +496,23 @@ function AlbumRailWidget({
     return () => {
       cancelled = true
     }
-  }, [refreshTick])
+  }, [refreshTick, initialSummary, summaryLoading, scope])
 
-  const photos = useMemo(() => extractRecentAlbumPhotos(archiveItems, 9), [archiveItems])
+  const useSummaryPhotos =
+    refreshTick === 0 &&
+    Boolean(initialSummary) &&
+    !(railCache[scope].archives && railCache[scope].archives?.tick === refreshTick)
+
+  const photos = useMemo<ExtractedAlbumPhoto[]>(() => {
+    if (useSummaryPhotos && initialSummary) {
+      return (initialSummary.recentAlbumPhotos || []).slice(0, 9).map((item) => ({
+        url: item.url,
+        thumbUrl: (item.thumbUrl || item.url).trim(),
+        alt: item.alt?.trim() || '相册照片'
+      }))
+    }
+    return extractRecentAlbumPhotos(archiveItems, 9)
+  }, [useSummaryPhotos, initialSummary, archiveItems])
   const lightboxImages = useMemo(
     () => photos.map((photo) => ({ url: photo.url, alt: photo.alt })),
     [photos]
@@ -784,16 +845,33 @@ function EquipmentRailWidget({
   isOwner,
   activeRoute,
   refreshTick,
+  initialSummary,
+  summaryLoading = false,
   onNavigate
 }: BlogSideRailDataProps) {
-  const [items, setItems] = useState<BlogCatalogItem[]>(
-    () => railCache.equipment?.items ?? []
+  const scope = getRailScope(isOwner)
+  const [items, setItems] = useState<BlogCatalogItem[]>(() => {
+    if (refreshTick === 0 && initialSummary) {
+      return Array.isArray(initialSummary.equipment) ? initialSummary.equipment : []
+    }
+    return railCache[scope].equipment?.items ?? []
+  })
+  const [loaded, setLoaded] = useState<boolean>(
+    () => Boolean(railCache[scope].equipment) || (refreshTick === 0 && Boolean(initialSummary))
   )
-  const [loaded, setLoaded] = useState<boolean>(() => Boolean(railCache.equipment))
 
   useEffect(() => {
-    if (railCache.equipment && railCache.equipment.tick === refreshTick) {
-      setItems(railCache.equipment.items)
+    if (refreshTick === 0 && initialSummary) {
+      setItems(Array.isArray(initialSummary.equipment) ? initialSummary.equipment : [])
+      setLoaded(true)
+      return
+    }
+    if (refreshTick === 0 && summaryLoading) {
+      return
+    }
+    const cached = railCache[scope].equipment
+    if (cached && cached.tick === refreshTick) {
+      setItems(cached.items)
       setLoaded(true)
       return
     }
@@ -803,7 +881,7 @@ function EquipmentRailWidget({
         const res = await fetchBlogCatalog('equipment')
         if (cancelled) return
         const nextItems = Array.isArray(res?.items) ? res.items : []
-        railCache.equipment = { tick: refreshTick, items: nextItems }
+        railCache[scope].equipment = { tick: refreshTick, items: nextItems }
         setItems(nextItems)
       } catch {
         // Silent fallback
@@ -814,7 +892,7 @@ function EquipmentRailWidget({
     return () => {
       cancelled = true
     }
-  }, [refreshTick])
+  }, [refreshTick, initialSummary, summaryLoading, scope])
 
   if (items.length === 0 && !isOwner) {
     return null
@@ -934,16 +1012,33 @@ function LabsRailWidget({
   isOwner,
   activeRoute,
   refreshTick,
+  initialSummary,
+  summaryLoading = false,
   onNavigate
 }: BlogSideRailDataProps) {
-  const [items, setItems] = useState<BlogCatalogItem[]>(
-    () => railCache.labs?.items ?? []
+  const scope = getRailScope(isOwner)
+  const [items, setItems] = useState<BlogCatalogItem[]>(() => {
+    if (refreshTick === 0 && initialSummary) {
+      return Array.isArray(initialSummary.labs) ? initialSummary.labs : []
+    }
+    return railCache[scope].labs?.items ?? []
+  })
+  const [loaded, setLoaded] = useState<boolean>(
+    () => Boolean(railCache[scope].labs) || (refreshTick === 0 && Boolean(initialSummary))
   )
-  const [loaded, setLoaded] = useState<boolean>(() => Boolean(railCache.labs))
 
   useEffect(() => {
-    if (railCache.labs && railCache.labs.tick === refreshTick) {
-      setItems(railCache.labs.items)
+    if (refreshTick === 0 && initialSummary) {
+      setItems(Array.isArray(initialSummary.labs) ? initialSummary.labs : [])
+      setLoaded(true)
+      return
+    }
+    if (refreshTick === 0 && summaryLoading) {
+      return
+    }
+    const cached = railCache[scope].labs
+    if (cached && cached.tick === refreshTick) {
+      setItems(cached.items)
       setLoaded(true)
       return
     }
@@ -953,7 +1048,7 @@ function LabsRailWidget({
         const res = await fetchBlogCatalog('labs')
         if (cancelled) return
         const nextItems = Array.isArray(res?.items) ? res.items : []
-        railCache.labs = { tick: refreshTick, items: nextItems }
+        railCache[scope].labs = { tick: refreshTick, items: nextItems }
         setItems(nextItems)
       } catch {
         // Silent fallback
@@ -964,7 +1059,7 @@ function LabsRailWidget({
     return () => {
       cancelled = true
     }
-  }, [refreshTick])
+  }, [refreshTick, initialSummary, summaryLoading, scope])
 
   if (items.length === 0 && !isOwner) {
     return null
@@ -1111,20 +1206,42 @@ function FriendsRailWidget({
   isOwner,
   activeRoute,
   refreshTick,
+  initialSummary,
+  summaryLoading = false,
   onNavigate
 }: BlogSideRailDataProps) {
-  const [friends, setFriends] = useState<BlogFriend[]>(
-    () => railCache.friends?.items ?? []
+  const scope = getRailScope(isOwner)
+  const [friends, setFriends] = useState<BlogFriend[]>(() => {
+    if (refreshTick === 0 && initialSummary) {
+      return Array.isArray(initialSummary.friends) ? initialSummary.friends : []
+    }
+    return railCache[scope].friends?.items ?? []
+  })
+  const [displayFriends, setDisplayFriends] = useState<BlogFriend[]>(() => {
+    if (refreshTick === 0 && initialSummary) {
+      return Array.isArray(initialSummary.friends) ? initialSummary.friends : []
+    }
+    return railCache[scope].friends?.items ?? []
+  })
+  const [loaded, setLoaded] = useState<boolean>(
+    () => Boolean(railCache[scope].friends) || (refreshTick === 0 && Boolean(initialSummary))
   )
-  const [displayFriends, setDisplayFriends] = useState<BlogFriend[]>(
-    () => railCache.friends?.items ?? []
-  )
-  const [loaded, setLoaded] = useState<boolean>(() => Boolean(railCache.friends))
 
   useEffect(() => {
-    if (railCache.friends && railCache.friends.tick === refreshTick) {
-      setFriends(railCache.friends.items)
-      setDisplayFriends(railCache.friends.items)
+    if (refreshTick === 0 && initialSummary) {
+      const nextFriends = Array.isArray(initialSummary.friends) ? initialSummary.friends : []
+      setFriends(nextFriends)
+      setDisplayFriends(nextFriends)
+      setLoaded(true)
+      return
+    }
+    if (refreshTick === 0 && summaryLoading) {
+      return
+    }
+    const cached = railCache[scope].friends
+    if (cached && cached.tick === refreshTick) {
+      setFriends(cached.items)
+      setDisplayFriends(cached.items)
       setLoaded(true)
       return
     }
@@ -1134,7 +1251,7 @@ function FriendsRailWidget({
         const res = await fetchBlogFriends()
         if (cancelled) return
         const nextFriends = Array.isArray(res?.friends) ? res.friends : []
-        railCache.friends = { tick: refreshTick, items: nextFriends }
+        railCache[scope].friends = { tick: refreshTick, items: nextFriends }
         setFriends(nextFriends)
         setDisplayFriends(nextFriends)
       } catch {
@@ -1146,7 +1263,7 @@ function FriendsRailWidget({
     return () => {
       cancelled = true
     }
-  }, [refreshTick])
+  }, [refreshTick, initialSummary, summaryLoading, scope])
 
   const handleShuffle = useCallback(() => {
     setDisplayFriends((prev) => shuffleFriends(prev.length > 0 ? prev : friends))

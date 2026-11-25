@@ -4383,7 +4383,7 @@ img {
   position: fixed;
   right: 20px;
   bottom: 20px;
-  z-index: 280;
+  z-index: 1300;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4448,7 +4448,7 @@ img {
   position: fixed;
   top: 76px;
   right: 24px;
-  z-index: 350;
+  z-index: 1400;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -4463,13 +4463,52 @@ img {
   gap: 10px;
   padding: 11px 16px;
   font-size: 13px;
+  font-weight: 500;
   line-height: 1.4;
   color: var(--text-primary);
   background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid rgba(0, 0, 0, 0.14);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-float);
   animation: fig-toast-in 0.18s var(--ease);
+}
+
+body:has(.blog-root[data-blog-theme='dark']) .fig-toast,
+.blog-root[data-blog-theme='dark'] .fig-toast {
+  color: #f4f4f5;
+  background: #232329;
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.56);
+}
+
+body:has(.blog-root[data-blog-theme='dark']) .fig-toast-success .fig-toast-dot,
+.blog-root[data-blog-theme='dark'] .fig-toast-success .fig-toast-dot {
+  background: #4ade80;
+}
+
+body:has(.blog-root[data-blog-theme='dark']) .fig-toast-error .fig-toast-dot,
+.blog-root[data-blog-theme='dark'] .fig-toast-error .fig-toast-dot {
+  background: #f87171;
+}
+
+body:has(.blog-root[data-blog-theme='dark']) .fig-toast-info .fig-toast-dot,
+.blog-root[data-blog-theme='dark'] .fig-toast-info .fig-toast-dot {
+  background: #818cf8;
+}
+
+body:has(.blog-root[data-blog-theme='dark']) .pwa-update-banner {
+  color: #f4f4f5;
+  background: #232329;
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.56);
+}
+
+body:has(.blog-root[data-blog-theme='dark']) .pwa-update-text strong {
+  color: #f4f4f5;
+}
+
+body:has(.blog-root[data-blog-theme='dark']) .pwa-update-text span {
+  color: #a1a1aa;
 }
 
 .fig-toast-dot {

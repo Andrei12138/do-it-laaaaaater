@@ -3,7 +3,9 @@ import { parseVideoUrl } from '../src/blog-api'
 import { parseLrc } from '../src/blog-music'
 import { parseBlogRoute } from '../src/components/blog/BlogApp'
 import type { BlogCatalogItem, BlogComment, BlogFriend, BlogMusicTrack, BlogPageData, BlogPostDetail } from '../src/blog-types'
+import workerEntry from '../worker/index'
 import {
+  collectReferencedBlogMediaIds,
   handleBlogApi,
   inferAudioMimeAndExt,
   inferVideoMimeAndExt,
@@ -11,6 +13,7 @@ import {
   parseByteRange,
   sanitizeImages,
   validateCatalogSection,
+  validateMediaKind,
   validatePageSlug
 } from '../worker/blog'
 import { hashToken } from '../worker/security'
@@ -310,6 +313,10 @@ function createPhase2TestEnv() {
   const pageCommentRows = new Map<string, Record<string, unknown>>()
   const catalogRows = new Map<string, Record<string, unknown>>()
   const friendRows = new Map<string, Record<string, unknown>>()
+  const settingsRows = new Map<string, Record<string, unknown>>()
+  const memoCanvasRows = new Map<string, Record<string, unknown>>()
+  const memoAssetRows = new Map<string, Record<string, unknown>>()
+  const pendingWaitUntil: Promise<unknown>[] = []
 
   const owner = { id: 'owner-1', email: 'owner@example.com' }
   let sessionHash = ''
@@ -381,10 +388,35 @@ function createPhase2TestEnv() {
           }
           return null
         }
-        if (normalized.startsWith('SELECT id, email FROM users')) {
+        if (normalized.startsWith('SELECT id, email FROM users') || normalized.startsWith('SELECT id FROM users')) {
           return { id: owner.id, email: owner.email } as unknown as T
         }
         if (normalized.includes('FROM blog_settings WHERE user_id = ?')) {
+          return (settingsRows.get(String(bound[0])) as unknown as T) || null
+        }
+        if (normalized.includes('SUM(size)') && normalized.includes('FROM assets WHERE user_id = ?')) {
+          return { total: 1024 } as unknown as T
+        }
+        if (normalized.includes('SUM(size)') && normalized.includes('FROM memo_assets WHERE user_id = ?')) {
+          const rows = [...memoAssetRows.values()].filter((r) => r.user_id === bound[0])
+          const total = rows.reduce((s, r) => s + Number(r.size || 0), 0)
+          return { total, count: rows.length } as unknown as T
+        }
+        if (normalized.includes('COUNT(*)') && normalized.includes('FROM memo_canvas WHERE user_id = ?')) {
+          return { count: memoCanvasRows.has(String(bound[0])) ? 1 : 0 } as unknown as T
+        }
+        if (normalized.includes('FROM memo_canvas WHERE user_id = ?')) {
+          return (memoCanvasRows.get(String(bound[0])) as unknown as T) || null
+        }
+        if (normalized.includes('COUNT(*)') && normalized.includes('FROM blog_comments')) {
+          return { count: 0 } as unknown as T
+        }
+        if (normalized.includes('FROM blog_posts WHERE user_id = ? AND short_id = ?')) {
+          for (const row of postRows.values()) {
+            if (row.user_id === bound[0] && row.short_id === bound[1]) {
+              return row as unknown as T
+            }
+          }
           return null
         }
         if (normalized.includes('FROM blog_media WHERE id = ? AND user_id = ?')) {
@@ -432,8 +464,51 @@ function createPhase2TestEnv() {
         return null
       },
       async all<T = Record<string, unknown>>(): Promise<{ results: T[] }> {
+        if (normalized.startsWith('SELECT id FROM users')) {
+          return { results: [{ id: owner.id } as unknown as T] }
+        }
+        if (normalized.includes('FROM blog_media WHERE user_id = ?')) {
+          let results = [...mediaRows.values()].filter((r) => r.user_id === bound[0])
+          if (normalized.includes('AND paired_media_id IS NOT NULL')) {
+            results = results.filter((r) => Boolean(r.paired_media_id))
+          } else if (normalized.includes('AND paired_media_id = ?')) {
+            results = results.filter((r) => r.paired_media_id === bound[1])
+          } else if (normalized.includes('AND (id IN')) {
+            const half = (bound.length - 1) / 2
+            const setA = new Set(bound.slice(1, 1 + half).map(String))
+            const setB = new Set(bound.slice(1 + half).map(String))
+            results = results.filter(
+              (r) => setA.has(String(r.id)) || (r.paired_media_id && setB.has(String(r.paired_media_id)))
+            )
+          } else if (normalized.includes('AND id IN')) {
+            const ids = new Set(bound.slice(1).map(String))
+            results = results.filter((r) => ids.has(String(r.id)))
+          }
+          return { results: results as unknown as T[] }
+        }
         if (normalized.includes('FROM blog_posts WHERE user_id = ?')) {
-          const results = [...postRows.values()].filter((r) => r.user_id === bound[0])
+          let results = [...postRows.values()].filter((r) => r.user_id === bound[0])
+          if (normalized.includes("visibility <> 'private'")) {
+            results = results.filter((r) => r.visibility !== 'private')
+          }
+          if (normalized.includes('AND id IN')) {
+            const ids = new Set(bound.slice(1).map(String))
+            results = results.filter((r) => ids.has(String(r.id)))
+          }
+          results.sort(
+            (a, b) =>
+              Number(b.is_pinned || 0) - Number(a.is_pinned || 0) ||
+              Number(b.published_at || 0) - Number(a.published_at || 0) ||
+              Number(b.created_at || 0) - Number(a.created_at || 0)
+          )
+          return { results: results as unknown as T[] }
+        }
+        if (normalized.includes('FROM blog_pages WHERE user_id = ?')) {
+          const results = [...pageRows.values()].filter((r) => r.user_id === bound[0])
+          return { results: results as unknown as T[] }
+        }
+        if (normalized.includes('FROM memo_assets WHERE user_id = ?')) {
+          const results = [...memoAssetRows.values()].filter((r) => r.user_id === bound[0])
           return { results: results as unknown as T[] }
         }
         if (normalized.includes('FROM blog_likes WHERE post_id IN')) {
@@ -458,6 +533,22 @@ function createPhase2TestEnv() {
           const results = [...catalogRows.values()]
             .filter((r) => r.user_id === bound[0] && r.section === bound[1])
             .sort((a, b) => Number(a.sort_order) - Number(b.sort_order) || Number(b.created_at) - Number(a.created_at))
+          return { results: results as unknown as T[] }
+        }
+        if (normalized.includes("FROM blog_catalog_items WHERE user_id = ? AND section = 'equipment'")) {
+          const results = [...catalogRows.values()]
+            .filter((r) => r.user_id === bound[0] && r.section === 'equipment')
+            .sort((a, b) => Number(a.sort_order) - Number(b.sort_order) || Number(b.created_at) - Number(a.created_at))
+          return { results: results as unknown as T[] }
+        }
+        if (normalized.includes("FROM blog_catalog_items WHERE user_id = ? AND section = 'labs'")) {
+          const results = [...catalogRows.values()]
+            .filter((r) => r.user_id === bound[0] && r.section === 'labs')
+            .sort((a, b) => Number(a.sort_order) - Number(b.sort_order) || Number(b.created_at) - Number(a.created_at))
+          return { results: results as unknown as T[] }
+        }
+        if (normalized.includes('FROM blog_catalog_items WHERE user_id = ?')) {
+          const results = [...catalogRows.values()].filter((r) => r.user_id === bound[0])
           return { results: results as unknown as T[] }
         }
         if (normalized.includes('FROM blog_friends WHERE user_id = ?')) {
@@ -708,6 +799,42 @@ function createPhase2TestEnv() {
           friendRows.delete(String(bound[0]))
           return { success: true }
         }
+        if (normalized.startsWith('DELETE FROM blog_posts')) {
+          postRows.delete(String(bound[0]))
+          return { success: true }
+        }
+        if (normalized.startsWith('DELETE FROM blog_media WHERE user_id = ? AND id IN')) {
+          for (const id of bound.slice(1)) {
+            mediaRows.delete(String(id))
+          }
+          return { success: true }
+        }
+        if (normalized.startsWith('INSERT INTO blog_settings')) {
+          const [userId, siteName, nickname, bio, avatarMediaId, coverMediaId, footerText, allowComments, extensionsJson, updatedAt] = bound
+          settingsRows.set(String(userId), {
+            user_id: userId,
+            site_name: siteName,
+            nickname,
+            bio,
+            avatar_media_id: avatarMediaId,
+            cover_media_id: coverMediaId,
+            footer_text: footerText,
+            allow_comments: allowComments,
+            extensions_json: extensionsJson,
+            updated_at: updatedAt
+          })
+          return { success: true }
+        }
+        if (normalized.startsWith('DELETE FROM memo_assets WHERE user_id = ?')) {
+          for (const [k, v] of memoAssetRows.entries()) {
+            if (v.user_id === bound[0]) memoAssetRows.delete(k)
+          }
+          return { success: true }
+        }
+        if (normalized.startsWith('DELETE FROM memo_canvas WHERE user_id = ?')) {
+          memoCanvasRows.delete(String(bound[0]))
+          return { success: true }
+        }
         return { success: true }
       }
     }
@@ -727,15 +854,44 @@ function createPhase2TestEnv() {
     }
   }
 
+  const assetsFetcher = {
+    async fetch(req: Request) {
+      const u = new URL(req.url)
+      if (u.pathname === '/assets/chunk-ok.js') {
+        return new Response('console.log("ok")', {
+          status: 200,
+          headers: { 'content-type': 'application/javascript; charset=utf-8' }
+        })
+      }
+      // Simulate Cloudflare SPA fallback returning index.html for missing assets & HTML routes
+      return new Response(
+        '<!doctype html><html><head><meta charset="UTF-8"><title>Do It Laaaaaater</title></head><body><div id="root"></div></body></html>',
+        { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }
+      )
+    }
+  }
+
   const ctx = {
-    waitUntil() {},
+    waitUntil(promise: Promise<unknown>) {
+      pendingWaitUntil.push(promise)
+    },
     passThroughOnException() {}
   } as unknown as ExecutionContext
 
   return {
-    env: { DB: db, IMAGES: images, ASSETS: {} } as unknown as Env,
+    env: { DB: db, IMAGES: images, ASSETS: assetsFetcher } as unknown as Env,
     ctx,
+    r2Store,
     mediaRows,
+    postRows,
+    memoCanvasRows,
+    memoAssetRows,
+    async flushWaitUntil() {
+      while (pendingWaitUntil.length) {
+        const batch = pendingWaitUntil.splice(0, pendingWaitUntil.length)
+        await Promise.all(batch)
+      }
+    },
     async ownerCookie() {
       const rawToken = 'test-owner-session-token'
       sessionHash = await hashToken(rawToken)
@@ -1100,5 +1256,272 @@ describe('Phase 2 Worker 接口集成测试', () => {
       ctx
     )
     expect(delFriendRes.status).toBe(200)
+  })
+
+  it('拒绝 kind=file 上传并下发媒体沙箱头、全局安全头，且支持私密/加密媒体门控', async () => {
+    const { env, ctx, ownerCookie } = createPhase2TestEnv()
+    const cookie = await ownerCookie()
+
+    expect(() => validateMediaKind('file')).toThrow('不支持该文件类型')
+
+    const htmlForm = new FormData()
+    htmlForm.append('file', new File(['<script>alert(1)</script>'], 'xss.html', { type: 'text/html' }))
+    htmlForm.append('kind', 'file')
+
+    await expect(
+      handleBlogApi(
+        new Request('https://blog.example.com/api/blog/media', {
+          method: 'POST',
+          headers: { cookie },
+          body: htmlForm
+        }),
+        env,
+        ctx
+      )
+    ).rejects.toMatchObject({ status: 400, message: '不支持该文件类型' })
+
+    // 上传两段音频分别挂载到私密动态与加密动态
+    const uploadAudio = async (name: string) => {
+      const f = new FormData()
+      f.append('file', new File([new Uint8Array([9, 8, 7, 6])], name, { type: 'audio/mpeg' }))
+      f.append('kind', 'audio')
+      const res = await handleBlogApi(
+        new Request('https://blog.example.com/api/blog/media', { method: 'POST', headers: { cookie }, body: f }),
+        env,
+        ctx
+      )
+      return ((await res.json()) as { media: Array<{ id: string; url: string }> }).media[0]
+    }
+
+    const privateMedia = await uploadAudio('private.mp3')
+    const passwordMedia = await uploadAudio('password.mp3')
+
+    await handleBlogApi(
+      new Request('https://blog.example.com/api/blog/posts', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'moment',
+          content: `私密音频 ![a](${privateMedia.url})`,
+          visibility: 'private'
+        })
+      }),
+      env,
+      ctx
+    )
+
+    const pwPostRes = await handleBlogApi(
+      new Request('https://blog.example.com/api/blog/posts', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'moment',
+          content: `加密音频 ![b](${passwordMedia.url})`,
+          visibility: 'password',
+          password: 'secret-pass-123'
+        })
+      }),
+      env,
+      ctx
+    )
+    const pwPost = (await pwPostRes.json()) as BlogPostDetail
+
+    // 未登录访客访问私密媒体 -> 404；博主本人访问 -> 200 + private, no-store + CSP sandbox
+    await expect(
+      handleBlogApi(new Request(`https://blog.example.com${privateMedia.url}`), env, ctx)
+    ).rejects.toMatchObject({ status: 404 })
+
+    const ownerPrivateRes = await handleBlogApi(
+      new Request(`https://blog.example.com${privateMedia.url}`, { headers: { cookie } }),
+      env,
+      ctx
+    )
+    expect(ownerPrivateRes.status).toBe(200)
+    expect(ownerPrivateRes.headers.get('cache-control')).toBe('private, no-store')
+    expect(ownerPrivateRes.headers.get('content-security-policy')).toBe('sandbox')
+    expect(ownerPrivateRes.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(ownerPrivateRes.headers.get('x-frame-options')).toBe('DENY')
+    expect(ownerPrivateRes.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin')
+
+    // 未解锁访客访问加密媒体 -> 403；解锁获得 Path=/api/blog/ Cookie 后 -> 200 + private, no-store
+    await expect(
+      handleBlogApi(new Request(`https://blog.example.com${passwordMedia.url}`), env, ctx)
+    ).rejects.toMatchObject({ status: 403 })
+
+    const unlockRes = await handleBlogApi(
+      new Request(`https://blog.example.com/api/blog/posts/${pwPost.shortId}/unlock`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: 'secret-pass-123' })
+      }),
+      env,
+      ctx
+    )
+    const setCookieHeader = unlockRes.headers.get('set-cookie') || ''
+    expect(setCookieHeader).toContain('Path=/api/blog/')
+    const cookiePair = setCookieHeader.split(';')[0]
+
+    const unlockedMediaRes = await handleBlogApi(
+      new Request(`https://blog.example.com${passwordMedia.url}`, {
+        headers: { cookie: cookiePair }
+      }),
+      env,
+      ctx
+    )
+    expect(unlockedMediaRes.status).toBe(200)
+    expect(unlockedMediaRes.headers.get('cache-control')).toBe('private, no-store')
+    expect(unlockedMediaRes.headers.get('content-security-policy')).toBe('sandbox')
+  })
+
+  it('支持删帖立即回收未引用媒体、手动/定时 GC、容量统计、bootstrap?full=1、/assets/* 真 404 与 HTML OG 注入', async () => {
+    const { env, ctx, r2Store, mediaRows, memoCanvasRows, memoAssetRows, flushWaitUntil, ownerCookie } =
+      createPhase2TestEnv()
+    const cookie = await ownerCookie()
+
+    // 上传 2 段音频：1 段绑定文章正文 Markdown，1 段作为孤儿草稿
+    const uploadAudio = async (name: string) => {
+      const f = new FormData()
+      f.append('file', new File([new Uint8Array(64)], name, { type: 'audio/mpeg' }))
+      f.append('kind', 'audio')
+      const res = await handleBlogApi(
+        new Request('https://blog.example.com/api/blog/media', { method: 'POST', headers: { cookie }, body: f }),
+        env,
+        ctx
+      )
+      return ((await res.json()) as { media: Array<{ id: string; url: string }> }).media[0]
+    }
+
+    const linkedMedia = await uploadAudio('linked.mp3')
+    const orphanMedia = await uploadAudio('orphan.mp3')
+
+    const postCreateRes = await handleBlogApi(
+      new Request('https://blog.example.com/api/blog/posts', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'article',
+          title: '公开测试文章',
+          excerpt: '用于验证 OG 注入与媒体回收',
+          content: `正文引用 [音频](${linkedMedia.url})`,
+          visibility: 'public'
+        })
+      }),
+      env,
+      ctx
+    )
+    const createdPost = (await postCreateRes.json()) as BlogPostDetail
+
+    // 验证 collectReferencedBlogMediaIds 能扫描到 Markdown 引用，但孤儿不在集合内
+    const referenced = await collectReferencedBlogMediaIds(env, 'owner-1')
+    expect(referenced.has(linkedMedia.id)).toBe(true)
+    expect(referenced.has(orphanMedia.id)).toBe(false)
+
+    // 模拟遗留 Memo 数据，验证 GET /api/storage/usage 统计
+    memoCanvasRows.set('owner-1', { user_id: 'owner-1', scene_json: '{"elements":[],"appState":{}}' })
+    memoAssetRows.set('owner-1:f1', {
+      file_id: 'f1',
+      user_id: 'owner-1',
+      storage_key: 'memo/owner-1/f1.png',
+      size: 512
+    })
+    await env.IMAGES.put('memo/owner-1/f1.png', new Uint8Array(16))
+
+    const usageRes = await workerEntry.fetch(
+      new Request('https://blog.example.com/api/storage/usage', { headers: { cookie } }),
+      env,
+      ctx
+    )
+    expect(usageRes.status).toBe(200)
+    const usage = (await usageRes.json()) as Record<string, number>
+    expect(usage).toMatchObject({
+      libraryAssetsBytes: 1024,
+      blogMediaBytes: 128,
+      memoAssetsBytes: 512,
+      totalBytes: 1664,
+      quotaBytes: 10 * 1024 * 1024 * 1024,
+      orphanBlogMediaCount: 1,
+      orphanBlogMediaBytes: 64,
+      legacyMemoCount: 2
+    })
+
+    // 验证 bootstrap?full=1 一次性返回 initialPosts / tracks / railSummary
+    const fullBootstrapRes = await handleBlogApi(
+      new Request('https://blog.example.com/api/blog/bootstrap?full=1'),
+      env,
+      ctx
+    )
+    const fullBootstrap = (await fullBootstrapRes.json()) as {
+      initialPosts: { posts: unknown[]; limit: number }
+      tracks: unknown[]
+      railSummary: { aboutSubtitle: string; equipment: unknown[]; labs: unknown[]; friends: unknown[] }
+    }
+    expect(fullBootstrap.initialPosts.limit).toBe(15)
+    expect(fullBootstrap.initialPosts.posts).toHaveLength(1)
+    expect(Array.isArray(fullBootstrap.tracks)).toBe(true)
+    expect(fullBootstrap.railSummary.aboutSubtitle).toBeTruthy()
+
+    // 验证 /assets/* 缺失 chunk 返回真 404 而非 SPA HTML，有效 JS 正常返回 200
+    const missingAssetRes = await workerEntry.fetch(
+      new Request('https://blog.example.com/assets/BlogApp-oldhash.js'),
+      env,
+      ctx
+    )
+    expect(missingAssetRes.status).toBe(404)
+    expect(missingAssetRes.headers.get('cache-control')).toBe('no-store')
+
+    const validAssetRes = await workerEntry.fetch(
+      new Request('https://blog.example.com/assets/chunk-ok.js'),
+      env,
+      ctx
+    )
+    expect(validAssetRes.status).toBe(200)
+    expect(validAssetRes.headers.get('x-content-type-options')).toBe('nosniff')
+
+    // 验证公开文章 HTML 自动注入 OG / Twitter / RSS 标签
+    const htmlPageRes = await workerEntry.fetch(
+      new Request(`https://blog.example.com/articles/${createdPost.shortId}`),
+      env,
+      ctx
+    )
+    expect(htmlPageRes.status).toBe(200)
+    const injectedHtml = await htmlPageRes.text()
+    expect(injectedHtml).toContain('<title>公开测试文章 · 朋友圈博客</title>')
+    expect(injectedHtml).toContain('property="og:type" content="article"')
+    expect(injectedHtml).toContain('href="/api/blog/feed.xml"')
+
+    // 删除公开文章 -> waitUntil 立即清理只被该文章引用的 linkedMedia (D1 + R2)
+    await handleBlogApi(
+      new Request(`https://blog.example.com/api/blog/posts/${createdPost.shortId}`, {
+        method: 'DELETE',
+        headers: { cookie }
+      }),
+      env,
+      ctx
+    )
+    await flushWaitUntil()
+    expect(mediaRows.has(linkedMedia.id)).toBe(false)
+    expect([...r2Store.keys()].some((k) => k.includes(linkedMedia.id))).toBe(false)
+
+    // 手动触发 POST /api/blog/media/gc (includeRecent + includeLegacyMemo) 回收近期孤儿与遗留 Memo
+    const gcRes = await handleBlogApi(
+      new Request('https://blog.example.com/api/blog/media/gc', {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ includeRecent: true, includeLegacyMemo: true })
+      }),
+      env,
+      ctx
+    )
+    expect(gcRes.status).toBe(200)
+    const gcStats = (await gcRes.json()) as Record<string, number>
+    expect(gcStats).toMatchObject({
+      deletedCount: 1,
+      freedBytes: 64,
+      legacyMemoDeletedCount: 2,
+      legacyMemoFreedBytes: 512
+    })
+    expect(mediaRows.has(orphanMedia.id)).toBe(false)
+    expect(memoCanvasRows.size).toBe(0)
+    expect(memoAssetRows.size).toBe(0)
   })
 })

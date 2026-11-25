@@ -1,12 +1,85 @@
-import { Suspense, lazy, useCallback, useEffect, useState, type FormEvent } from 'react'
-import { api, errorMessage, jsonRequest, readCachedAuthStatus } from './api'
+import {
+  Component,
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useState,
+  type FormEvent,
+  type ReactNode
+} from 'react'
+import { api, jsonRequest, readCachedAuthStatus } from './api'
+import { errorMessage } from './api-error'
 import { BrandMark } from './components/AppIcon'
-import { Dashboard } from './components/Dashboard'
-import { QuickCapture } from './components/QuickCapture'
 import type { AuthStatus } from './types'
 
 const BlogApp = lazy(() =>
   import('./components/blog/BlogApp').then((module) => ({ default: module.BlogApp }))
+)
+
+const Dashboard = lazy(() =>
+  import('./components/Dashboard').then((module) => ({ default: module.Dashboard }))
+)
+
+const QuickCapture = lazy(() =>
+  import('./components/QuickCapture').then((module) => ({ default: module.QuickCapture }))
+)
+
+interface RouteErrorBoundaryProps {
+  resetKey?: string
+  children: ReactNode
+}
+
+interface RouteErrorBoundaryState {
+  error: Error | null
+}
+
+class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBoundaryState> {
+  state: RouteErrorBoundaryState = { error: null }
+
+  static getDerivedStateFromError(error: Error): RouteErrorBoundaryState {
+    return { error }
+  }
+
+  componentDidUpdate(prevProps: RouteErrorBoundaryProps) {
+    if (this.state.error && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null })
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="center-page">
+          <section className="auth-card auth-error-card" role="alert">
+            <div className="auth-brand-mark">
+              <BrandMark size={24} />
+              <span className="auth-kicker">RECOVERY</span>
+            </div>
+            <h1 className="auth-title">页面加载遇到问题</h1>
+            <p className="auth-subtitle">
+              网络连接不稳定或站点刚刚更新，请重新加载页面以获取最新资源。
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary btn-lg"
+              onClick={() => window.location.reload()}
+            >
+              重新加载
+            </button>
+          </section>
+        </main>
+      )
+    }
+
+    return this.props.children
+  }
+}
+
+const routeFallback = (
+  <main className="center-page">
+    <div className="spinner" aria-label="加载中" />
+  </main>
 )
 
 function isAppPath(pathname: string): boolean {
@@ -177,7 +250,7 @@ export default function App() {
     return currentPath
   })
   const [postLoginRedirect, setPostLoginRedirect] = useState<string | null>(null)
-  const [initialDashboardTab, setInitialDashboardTab] = useState<'list' | 'plan' | 'memo' | undefined>(
+  const [initialDashboardTab, setInitialDashboardTab] = useState<'list' | 'plan' | undefined>(
     undefined
   )
   const [pendingBlogImportItemId, setPendingBlogImportItemId] = useState<string | null>(null)
@@ -233,31 +306,27 @@ export default function App() {
 
   if (!isAppPath(pathname) && !hasWorkspaceIntent && !status?.setupRequired) {
     return (
-      <Suspense
-        fallback={
-          <main className="center-page">
-            <div className="spinner" aria-label="加载中" />
-          </main>
-        }
-      >
-        <BlogApp
-          path={pathname}
-          embedded={Boolean(status?.authenticated)}
-          pendingImportItemId={pendingBlogImportItemId}
-          onConsumePendingImport={handleConsumePendingImport}
-          onNavigate={navigate}
-          onRequestLogin={() => {
-            const clean = pathname.replace(/\/+$/, '') || '/'
-            setPostLoginRedirect(clean === '/' || clean === '/blog' ? '/app' : pathname)
-            navigate('/app')
-          }}
-          onBackToWorkspace={() => navigate('/app')}
-          onSwitchWorkspaceTab={(tab) => {
-            setInitialDashboardTab(tab)
-            navigate('/app')
-          }}
-        />
-      </Suspense>
+      <RouteErrorBoundary resetKey={pathname}>
+        <Suspense fallback={routeFallback}>
+          <BlogApp
+            path={pathname}
+            embedded={Boolean(status?.authenticated)}
+            pendingImportItemId={pendingBlogImportItemId}
+            onConsumePendingImport={handleConsumePendingImport}
+            onNavigate={navigate}
+            onRequestLogin={() => {
+              const clean = pathname.replace(/\/+$/, '') || '/'
+              setPostLoginRedirect(clean === '/' || clean === '/blog' ? '/app' : pathname)
+              navigate('/app')
+            }}
+            onBackToWorkspace={() => navigate('/app')}
+            onSwitchWorkspaceTab={(tab) => {
+              setInitialDashboardTab(tab)
+              navigate('/app')
+            }}
+          />
+        </Suspense>
+      </RouteErrorBoundary>
     )
   }
 
@@ -284,11 +353,7 @@ export default function App() {
   }
 
   if (!status) {
-    return (
-      <main className="center-page">
-        <div className="spinner" aria-label="加载中" />
-      </main>
-    )
+    return routeFallback
   }
 
   if (status.setupRequired) return <AuthScreen mode="setup" onComplete={handleAuthComplete} />
@@ -304,20 +369,32 @@ export default function App() {
       />
     )
   }
-  if (isQuickCapture) return <QuickCapture />
+  if (isQuickCapture) {
+    return (
+      <RouteErrorBoundary resetKey="quick-capture">
+        <Suspense fallback={routeFallback}>
+          <QuickCapture />
+        </Suspense>
+      </RouteErrorBoundary>
+    )
+  }
 
   return (
-    <Dashboard
-      userEmail={status.user?.email || ''}
-      onSessionChange={refreshStatus}
-      initialTab={initialDashboardTab}
-      onConsumeInitialTab={handleConsumeInitialTab}
-      onOpenBlog={(opts) => {
-        if (opts?.importItemId) {
-          setPendingBlogImportItemId(opts.importItemId)
-        }
-        navigate(opts?.path || '/')
-      }}
-    />
+    <RouteErrorBoundary resetKey="dashboard">
+      <Suspense fallback={routeFallback}>
+        <Dashboard
+          userEmail={status.user?.email || ''}
+          onSessionChange={refreshStatus}
+          initialTab={initialDashboardTab}
+          onConsumeInitialTab={handleConsumeInitialTab}
+          onOpenBlog={(opts) => {
+            if (opts?.importItemId) {
+              setPendingBlogImportItemId(opts.importItemId)
+            }
+            navigate(opts?.path || '/')
+          }}
+        />
+      </Suspense>
+    </RouteErrorBoundary>
   )
 }

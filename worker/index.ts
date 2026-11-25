@@ -1,5 +1,14 @@
 import { generateAiPosterCover, listAiModels, maskApiKey } from './ai-cover'
-import { handleBlogApi } from './blog'
+import {
+  applyGlobalSecurityHeaders,
+  collectReferencedBlogMediaIds,
+  handleBlogApi,
+  matchBlogHtmlRoute,
+  MEDIA_SECURITY_HEADERS,
+  renderBlogOgHeadHtml,
+  resolveBlogOgMeta,
+  runBlogMediaGc
+} from './blog'
 import { detectImageMime, fetchImage, fetchPageMetadata, normalizeUrl } from './metadata'
 import {
   buildClearSessionCookie,
@@ -19,7 +28,6 @@ import {
   DEFAULT_CATEGORIES,
   MAX_IMAGE_BYTES,
   MAX_IMAGES_PER_ITEM,
-  MAX_MEMO_SCENE_BYTES,
   SESSION_COOKIE,
   SESSION_DURATION_MS,
   type Env
@@ -30,8 +38,8 @@ type ItemKind = 'link' | 'text' | 'image_group'
 type AssetRole = 'web_cover' | 'attachment' | 'gallery'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const MEMO_FILE_ID = /^[a-zA-Z0-9_-]{1,128}$/
 const TRASH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+const STORAGE_QUOTA_BYTES = 10 * 1024 * 1024 * 1024
 
 const loginAttempts = new Map<string, { count: number; resetAt: number }>()
 const lastTrashPurge = new Map<string, number>()
@@ -609,46 +617,6 @@ async function buildPatchStatement(
   return env.DB.prepare(`UPDATE items SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`).bind(...values)
 }
 
-async function memoCanvasSnapshot(env: Env, userId: string) {
-  const [canvasRes, assetsRes] = await env.DB.batch([
-    env.DB.prepare('SELECT scene_json, background, color_mode, updated_at FROM memo_canvas WHERE user_id = ?').bind(userId),
-    env.DB.prepare('SELECT file_id, mime_type, size, created_at FROM memo_assets WHERE user_id = ? ORDER BY created_at').bind(userId)
-  ])
-  const row = (canvasRes.results as Row[])[0]
-  let scene: { elements: unknown[]; appState: Record<string, unknown> } = { elements: [], appState: {} }
-  if (row?.scene_json) {
-    try {
-      const rawScene = String(row.scene_json)
-      let sceneText = rawScene
-      if (rawScene.startsWith('r2:')) {
-        const obj = await env.IMAGES.get(rawScene.slice(3))
-        sceneText = obj ? await obj.text() : ''
-      }
-      if (sceneText) {
-        const parsed = JSON.parse(sceneText)
-        if (parsed && Array.isArray(parsed.elements) && parsed.appState && typeof parsed.appState === 'object') {
-          scene = parsed
-        }
-      }
-    } catch {
-      // ignore corrupted scene json
-    }
-  }
-  return {
-    scene,
-    background: row?.background || 'solid',
-    colorMode: row?.color_mode || 'light',
-    updatedAt: row?.updated_at ? Number(row.updated_at) : 0,
-    assets: (assetsRes.results as Row[]).map((asset) => ({
-      fileId: String(asset.file_id),
-      mimeType: String(asset.mime_type),
-      size: Number(asset.size),
-      createdAt: Number(asset.created_at),
-      url: `/api/memo-assets/${encodeURIComponent(String(asset.file_id))}`
-    }))
-  }
-}
-
 async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url)
   const path = url.pathname
@@ -949,151 +917,56 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     })
   }
 
-  // --- MEMO CANVAS ---
-  if (path === '/api/memo-canvas' && method === 'GET') {
-    return json(await memoCanvasSnapshot(env, user.id))
-  }
-
-  if (path === '/api/memo-canvas' && method === 'PUT') {
-    const body = await readJson(request)
-    if (!body.scene || typeof body.scene !== 'object' || Array.isArray(body.scene)) {
-      throw new ApiError(400, '画布内容无效')
-    }
-    const scene = body.scene as Record<string, unknown>
-    if (!Array.isArray(scene.elements) || scene.elements.length > 100_000) {
-      throw new ApiError(400, '画布元素过多或格式无效')
-    }
-    if (!scene.appState || typeof scene.appState !== 'object' || Array.isArray(scene.appState)) {
-      throw new ApiError(400, '画布视图设置无效')
-    }
-    const serialized = JSON.stringify({ elements: scene.elements, appState: scene.appState })
-    const sceneBytes = new TextEncoder().encode(serialized).byteLength
-    if (sceneBytes > MAX_MEMO_SCENE_BYTES) {
-      throw new ApiError(400, '画布内容超过 12 MB 限制')
-    }
-    let storedSceneValue = serialized
-    const r2SceneKey = `memo/${user.id}/scene.json`
-    if (sceneBytes > 512 * 1024) {
-      await env.IMAGES.put(r2SceneKey, serialized, {
-        httpMetadata: { contentType: 'application/json; charset=utf-8' }
-      })
-      storedSceneValue = `r2:${r2SceneKey}`
-    }
-    const background = body.background
-    if (background !== 'solid' && background !== 'grid' && background !== 'dots' && background !== 'lines') {
-      throw new ApiError(400, '画布背景无效')
-    }
-    const colorMode = body.colorMode
-    if (colorMode !== 'light' && colorMode !== 'dark') throw new ApiError(400, '画布昼夜模式无效')
-    if (!Array.isArray(body.fileIds) || body.fileIds.length > 10_000) throw new ApiError(400, '画布图片清单无效')
-    const fileIds = body.fileIds.map(String)
-    if (new Set(fileIds).size !== fileIds.length || fileIds.some((id) => !MEMO_FILE_ID.test(id))) {
-      throw new ApiError(400, '画布图片清单无效')
-    }
-
-    const storedRes = await env.DB.prepare('SELECT file_id, storage_key FROM memo_assets WHERE user_id = ?')
-      .bind(user.id).all<Row>()
-    const storedIds = storedRes.results.map((r) => String(r.file_id))
-    if (fileIds.some((id) => !storedIds.includes(id))) throw new ApiError(400, '画布图片尚未上传完成')
-
-    const staleRows = storedRes.results.filter((r) => !fileIds.includes(String(r.file_id)))
-    const statements: D1PreparedStatement[] = [
-      env.DB.prepare(
-        'INSERT INTO memo_canvas (user_id, scene_json, background, color_mode, updated_at) VALUES (?, ?, ?, ?, ?) ' +
-        'ON CONFLICT(user_id) DO UPDATE SET scene_json = excluded.scene_json, background = excluded.background, color_mode = excluded.color_mode, updated_at = excluded.updated_at'
-      ).bind(user.id, storedSceneValue, background, colorMode, Date.now())
-    ]
-    if (staleRows.length) {
-      for (const batch of chunkIds(staleRows.map((r) => String(r.file_id)))) {
-        statements.push(
-          env.DB.prepare(
-            `DELETE FROM memo_assets WHERE user_id = ? AND file_id IN (${batch.map(() => '?').join(',')})`
-          ).bind(user.id, ...batch)
+  // --- STORAGE USAGE ---
+  if (path === '/api/storage/usage' && method === 'GET') {
+    const [assetsSumRow, blogMediaRes, memoSumRow, memoCanvasRow, referencedMediaIds] =
+      await Promise.all([
+        env.DB.prepare('SELECT COALESCE(SUM(size), 0) AS total FROM assets WHERE user_id = ?')
+          .bind(user.id)
+          .first<Row>(),
+        env.DB.prepare('SELECT id, size FROM blog_media WHERE user_id = ?')
+          .bind(user.id)
+          .all<Row>(),
+        env.DB.prepare(
+          'SELECT COALESCE(SUM(size), 0) AS total, COUNT(*) AS count FROM memo_assets WHERE user_id = ?'
         )
-      }
-    }
-    await env.DB.batch(statements)
-    if (staleRows.length) {
-      ctx.waitUntil(deleteR2Keys(env, staleRows.map((r) => String(r.storage_key))))
-    }
-    return json(await memoCanvasSnapshot(env, user.id))
-  }
+          .bind(user.id)
+          .first<Row>(),
+        env.DB.prepare('SELECT COUNT(*) AS count FROM memo_canvas WHERE user_id = ?')
+          .bind(user.id)
+          .first<Row>(),
+        collectReferencedBlogMediaIds(env, user.id)
+      ])
 
-  if (path === '/api/memo-assets' && method === 'POST') {
-    const form = await request.formData()
-    const fileId = String(form.get('fileId') || '')
-    if (!MEMO_FILE_ID.test(fileId)) throw new ApiError(400, '画布图片编号无效')
-    const existing = await env.DB.prepare(
-      'SELECT file_id, mime_type, size, created_at FROM memo_assets WHERE user_id = ? AND file_id = ?'
-    ).bind(user.id, fileId).first<Row>()
-    if (existing) {
-      return json({
-        fileId,
-        mimeType: String(existing.mime_type),
-        size: Number(existing.size),
-        createdAt: Number(existing.created_at),
-        url: `/api/memo-assets/${encodeURIComponent(fileId)}`
-      })
-    }
-    const file = form.get('file')
-    if (!(file instanceof File) || !file.size) throw new ApiError(400, '请选择画布图片')
-    if (file.size > MAX_IMAGE_BYTES) throw new ApiError(400, '单张图片不能超过 20 MB')
-    const bytes = new Uint8Array(await file.arrayBuffer())
-    const mimeType = detectImageMime(bytes)
-    if (!mimeType || !ALLOWED_IMAGE_TYPES.has(mimeType)) {
-      throw new ApiError(400, '画布图片只支持 PNG、JPEG、WebP，且单张不能超过 20 MB')
-    }
-    const storageKey = `memo/${user.id}/${fileId}.${extensionFor(mimeType)}`
-    await env.IMAGES.put(storageKey, bytes, {
-      httpMetadata: { contentType: mimeType, cacheControl: 'private, max-age=31536000, immutable' }
-    })
-    const createdAt = clientCreatedAt(form.get('createdAt'))
-    const insertRes = await env.DB.prepare(
-      'INSERT OR IGNORE INTO memo_assets (file_id, user_id, storage_key, mime_type, size, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(fileId, user.id, storageKey, mimeType, bytes.byteLength, createdAt).run()
-    if (!insertRes.meta.changes) {
-      const winner = await env.DB.prepare(
-        'SELECT file_id, mime_type, size, created_at FROM memo_assets WHERE user_id = ? AND file_id = ?'
-      ).bind(user.id, fileId).first<Row>()
-      if (winner) {
-        return json({
-          fileId,
-          mimeType: String(winner.mime_type),
-          size: Number(winner.size),
-          createdAt: Number(winner.created_at),
-          url: `/api/memo-assets/${encodeURIComponent(fileId)}`
-        })
+    const libraryAssetsBytes = Number(assetsSumRow?.total || 0)
+    const memoAssetsBytes = Number(memoSumRow?.total || 0)
+    const legacyMemoCount =
+      Number(memoSumRow?.count || 0) + Number(memoCanvasRow?.count || 0)
+
+    let blogMediaBytes = 0
+    let orphanBlogMediaCount = 0
+    let orphanBlogMediaBytes = 0
+
+    for (const row of blogMediaRes.results) {
+      const size = Number(row.size || 0)
+      blogMediaBytes += size
+      if (!referencedMediaIds.has(String(row.id || ''))) {
+        orphanBlogMediaCount += 1
+        orphanBlogMediaBytes += size
       }
     }
+
+    const totalBytes = libraryAssetsBytes + blogMediaBytes + memoAssetsBytes
+
     return json({
-      fileId,
-      mimeType,
-      size: bytes.byteLength,
-      createdAt,
-      url: `/api/memo-assets/${encodeURIComponent(fileId)}`
-    }, 201)
-  }
-
-  const memoAssetMatch = path.match(/^\/api\/memo-assets\/([^/]+)$/)
-  if (memoAssetMatch && method === 'GET') {
-    const fileId = decodeURIComponent(memoAssetMatch[1])
-    const row = await env.DB.prepare(
-      'SELECT storage_key, mime_type FROM memo_assets WHERE user_id = ? AND file_id = ?'
-    ).bind(user.id, fileId).first<Row>()
-    if (!row) throw new ApiError(404, '画布图片不存在')
-    const obj = await env.IMAGES.get(String(row.storage_key), { onlyIf: request.headers })
-    if (!obj) throw new ApiError(404, '画布图片文件不存在')
-    const etag = obj.httpEtag
-    if (!('body' in obj)) {
-      return new Response(null, { status: 304, headers: { etag, 'cache-control': 'private, max-age=31536000, immutable' } })
-    }
-    return new Response(obj.body, {
-      headers: {
-        'content-type': String(row.mime_type),
-        'cache-control': 'private, max-age=31536000, immutable',
-        'content-disposition': 'inline',
-        etag
-      }
+      libraryAssetsBytes,
+      blogMediaBytes,
+      memoAssetsBytes,
+      totalBytes,
+      quotaBytes: STORAGE_QUOTA_BYTES,
+      orphanBlogMediaCount,
+      orphanBlogMediaBytes,
+      legacyMemoCount
     })
   }
 
@@ -1770,14 +1643,22 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       if (!obj) throw new ApiError(404, '图片文件不存在')
       const etag = obj.httpEtag
       if (!('body' in obj)) {
-        return new Response(null, { status: 304, headers: { etag, 'cache-control': 'private, max-age=31536000, immutable' } })
+        return new Response(null, {
+          status: 304,
+          headers: {
+            etag,
+            'cache-control': 'private, max-age=31536000, immutable',
+            ...MEDIA_SECURITY_HEADERS
+          }
+        })
       }
       return new Response(obj.body, {
         headers: {
           'content-type': contentType,
           'cache-control': 'private, max-age=31536000, immutable',
           'content-disposition': 'inline',
-          etag
+          etag,
+          ...MEDIA_SECURITY_HEADERS
         }
       })
     }
@@ -1806,21 +1687,118 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
   return json({ error: '功能不存在' }, 404)
 }
 
+async function injectBlogHtmlMeta(
+  assetResponse: Response,
+  env: Env,
+  requestUrl: URL,
+  method: string
+): Promise<Response> {
+  let headHtml: string
+  try {
+    const meta = await resolveBlogOgMeta(env, requestUrl)
+    headHtml = renderBlogOgHeadHtml(meta)
+  } catch {
+    return assetResponse
+  }
+
+  if (typeof HTMLRewriter !== 'undefined') {
+    return new HTMLRewriter()
+      .on('title', {
+        element(el) {
+          el.remove()
+        }
+      })
+      .on('head', {
+        element(el) {
+          el.append(`\n    ${headHtml}\n  `, { html: true })
+        }
+      })
+      .transform(assetResponse)
+  }
+
+  // Fallback for non-Workerd test runtimes (e.g. Node Vitest)
+  const headers = new Headers(assetResponse.headers)
+  headers.delete('content-length')
+  headers.delete('etag')
+  if (method === 'HEAD') {
+    return new Response(null, {
+      status: assetResponse.status,
+      statusText: assetResponse.statusText,
+      headers
+    })
+  }
+  const rawHtml = await assetResponse.text()
+  const withoutTitle = rawHtml.replace(/<title>[\s\S]*?<\/title>/i, '')
+  const transformed = withoutTitle.includes('</head>')
+    ? withoutTitle.replace('</head>', `  ${headHtml}\n  </head>`)
+    : `${headHtml}\n${withoutTitle}`
+  return new Response(transformed, {
+    status: assetResponse.status,
+    statusText: assetResponse.statusText,
+    headers
+  })
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
+    const method = request.method.toUpperCase()
+
     if (url.pathname.startsWith('/api/')) {
       try {
-        return await handleApi(request, env, ctx)
+        return applyGlobalSecurityHeaders(await handleApi(request, env, ctx))
       } catch (error) {
         if (error instanceof ApiError) {
-          return json({ error: error.message, details: error.details }, error.status)
+          return applyGlobalSecurityHeaders(
+            json({ error: error.message, details: error.details }, error.status)
+          )
         }
         const message = error instanceof Error ? error.message : '操作失败，请稍后重试'
         console.error(error)
-        return json({ error: message }, 500)
+        return applyGlobalSecurityHeaders(json({ error: message }, 500))
       }
     }
-    return env.ASSETS.fetch(request)
+
+    if (url.pathname.startsWith('/assets/')) {
+      const assetRes = await env.ASSETS.fetch(request)
+      const contentType = (assetRes.headers.get('content-type') || '').toLowerCase()
+      if (contentType.includes('text/html')) {
+        return applyGlobalSecurityHeaders(
+          new Response('Asset Not Found', {
+            status: 404,
+            headers: {
+              'content-type': 'text/plain; charset=utf-8',
+              'cache-control': 'no-store'
+            }
+          })
+        )
+      }
+      return applyGlobalSecurityHeaders(assetRes)
+    }
+
+    if ((method === 'GET' || method === 'HEAD') && matchBlogHtmlRoute(url.pathname) !== null) {
+      const htmlRes = await env.ASSETS.fetch(request)
+      const contentType = (htmlRes.headers.get('content-type') || '').toLowerCase()
+      if (htmlRes.status === 200 && contentType.includes('text/html')) {
+        const rewritten = await injectBlogHtmlMeta(htmlRes, env, url, method)
+        return applyGlobalSecurityHeaders(rewritten)
+      }
+      return applyGlobalSecurityHeaders(htmlRes)
+    }
+
+    return applyGlobalSecurityHeaders(await env.ASSETS.fetch(request))
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const job = (async () => {
+      await env.DB.prepare('DELETE FROM sessions WHERE expires_at <= ?').bind(Date.now()).run()
+      const usersRes = await env.DB.prepare('SELECT id FROM users').all<Row>()
+      for (const userRow of usersRes.results) {
+        if (!userRow.id) continue
+        await runBlogMediaGc(env, String(userRow.id), { minAgeMs: 24 * 60 * 60 * 1000 })
+      }
+    })()
+    ctx.waitUntil(job)
+    await job
   }
 }

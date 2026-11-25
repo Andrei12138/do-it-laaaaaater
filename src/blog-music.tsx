@@ -11,6 +11,7 @@ import {
   type ReactNode
 } from 'react'
 import { createPortal } from 'react-dom'
+import { errorMessage } from './api-error'
 import {
   createBlogMusicTrack,
   deleteBlogMusicTrack,
@@ -28,15 +29,18 @@ export interface LrcLine {
   text: string
 }
 
-export interface BlogMusicContextValue {
+export interface BlogMusicProgressValue {
+  currentTime: number
+  duration: number
+  currentLyricLine: string
+}
+
+export interface BlogMusicStableValue {
   tracks: BlogMusicTrack[]
   loading: boolean
   currentTrack: BlogPostMusic | null
   isPlaying: boolean
-  currentTime: number
-  duration: number
   muted: boolean
-  currentLyricLine: string
   refreshTracks: () => Promise<void>
   playTrack: (track: BlogPostMusic) => void
   togglePlay: () => void
@@ -48,7 +52,16 @@ export interface BlogMusicContextValue {
   openManager: () => void
 }
 
-const BlogMusicContext = createContext<BlogMusicContextValue | null>(null)
+export interface BlogMusicContextValue extends BlogMusicStableValue, BlogMusicProgressValue {}
+
+const DEFAULT_MUSIC_PROGRESS: BlogMusicProgressValue = {
+  currentTime: 0,
+  duration: 0,
+  currentLyricLine: ''
+}
+
+export const BlogMusicContext = createContext<BlogMusicStableValue | null>(null)
+export const BlogMusicProgressContext = createContext<BlogMusicProgressValue>(DEFAULT_MUSIC_PROGRESS)
 
 const LRC_TIMESTAMP_GLOBAL_RE = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g
 const LRC_TIMESTAMP_STRIP_RE = /\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\]/g
@@ -94,20 +107,39 @@ export function parseLrc(lrcText: string): Array<{ time: number; text: string }>
   return entries
 }
 
-export function useOptionalBlogMusic(): BlogMusicContextValue | null {
+export function useBlogMusicProgress(): BlogMusicProgressValue {
+  return useContext(BlogMusicProgressContext)
+}
+
+export function useOptionalBlogMusicActions(): BlogMusicStableValue | null {
   return useContext(BlogMusicContext)
 }
 
-export function useBlogMusic(): BlogMusicContextValue {
+export function useBlogMusicActions(): BlogMusicStableValue {
   const ctx = useContext(BlogMusicContext)
   if (!ctx) {
-    throw new Error('useBlogMusic must be used within a BlogMusicProvider')
+    throw new Error('useBlogMusicActions must be used within a BlogMusicProvider')
   }
   return ctx
 }
 
+export function useOptionalBlogMusic(): BlogMusicContextValue | null {
+  const stable = useContext(BlogMusicContext)
+  const progress = useContext(BlogMusicProgressContext)
+  return useMemo(() => (stable ? { ...stable, ...progress } : null), [stable, progress])
+}
+
+export function useBlogMusic(): BlogMusicContextValue {
+  const stable = useContext(BlogMusicContext)
+  const progress = useContext(BlogMusicProgressContext)
+  if (!stable) {
+    throw new Error('useBlogMusic must be used within a BlogMusicProvider')
+  }
+  return useMemo(() => ({ ...stable, ...progress }), [stable, progress])
+}
+
 function getErrorMessage(err: unknown, fallback = '操作失败，请稍后重试'): string {
-  if (err instanceof Error && err.message) return err.message
+  if (err instanceof Error && err.message) return errorMessage(err)
   return fallback
 }
 
@@ -180,8 +212,14 @@ function readCurrentBlogTheme(): 'light' | 'dark' {
     try {
       const stored = window.localStorage.getItem('do-it-laaaaaater.blog.theme.v1')
       if (stored === 'dark') return 'dark'
+      if (stored === 'light') return 'light'
     } catch {
       // Ignore storage access errors.
+    }
+    try {
+      if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) return 'dark'
+    } catch {
+      // Ignore matchMedia errors.
     }
   }
   return 'light'
@@ -955,16 +993,26 @@ export function BlogMusicProvider({
   isOwner,
   hasBottomBar = false,
   desktopRailActive = false,
+  initialTracks,
+  deferInitialFetch = false,
   children
 }: {
   isOwner: boolean
   hasBottomBar?: boolean
   desktopRailActive?: boolean
+  initialTracks?: BlogMusicTrack[]
+  deferInitialFetch?: boolean
   children: ReactNode
 }) {
-  const [tracks, setTracks] = useState<BlogMusicTrack[]>([])
-  const [loading, setLoading] = useState(true)
-  const [currentTrack, setCurrentTrack] = useState<BlogPostMusic | null>(null)
+  const [tracks, setTracks] = useState<BlogMusicTrack[]>(() =>
+    Array.isArray(initialTracks) ? initialTracks : []
+  )
+  const [loading, setLoading] = useState<boolean>(() => !Array.isArray(initialTracks))
+  const [currentTrack, setCurrentTrack] = useState<BlogPostMusic | null>(() =>
+    Array.isArray(initialTracks) && initialTracks.length > 0
+      ? trackToPostMusic(initialTracks[0])
+      : null
+  )
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -977,11 +1025,19 @@ export function BlogMusicProvider({
   const activeLrcLineRef = useRef<HTMLButtonElement | null>(null)
   const pendingAutoPlayRef = useRef(false)
   const userInitiatedRef = useRef(false)
+  const hydratedInitialRef = useRef<boolean>(Array.isArray(initialTracks))
+  const manualRefreshCountRef = useRef(0)
+  const durationRef = useRef(0)
+  durationRef.current = duration
 
   const showFloatingUi = tracks.length > 0 || currentTrack !== null || drawerOpen || managerOpen
   const blogTheme = useSyncedBlogTheme(showFloatingUi)
 
-  const refreshTracks = useCallback(async () => {
+  const fetchAndApplyTracks = useCallback(async (isManual: boolean) => {
+    if (isManual) {
+      manualRefreshCountRef.current += 1
+    }
+    hydratedInitialRef.current = true
     try {
       const res = await fetchBlogMusicTracks()
       const nextTracks = Array.isArray(res.tracks) ? res.tracks : []
@@ -1012,9 +1068,28 @@ export function BlogMusicProvider({
     }
   }, [])
 
+  const refreshTracks = useCallback(async () => {
+    await fetchAndApplyTracks(true)
+  }, [fetchAndApplyTracks])
+
   useEffect(() => {
-    void refreshTracks()
-  }, [refreshTracks])
+    if (Array.isArray(initialTracks)) {
+      if (manualRefreshCountRef.current === 0) {
+        hydratedInitialRef.current = true
+        setTracks(initialTracks)
+        setCurrentTrack((prev) => {
+          if (prev) return prev
+          return initialTracks.length > 0 ? trackToPostMusic(initialTracks[0]) : null
+        })
+        setLoading(false)
+      }
+      return
+    }
+    if (deferInitialFetch || hydratedInitialRef.current) {
+      return
+    }
+    void fetchAndApplyTracks(false)
+  }, [initialTracks, deferInitialFetch, fetchAndApplyTracks])
 
   // Enrich standalone Moment music card tracks with playlist LRC/cover if matching audioUrl or trackId
   const resolveTrackWithLibrary = useCallback(
@@ -1163,18 +1238,15 @@ export function BlogMusicProvider({
     playTrack(trackToPostMusic(tracks[prevIdx]))
   }, [findCurrentPlaylistIndex, playTrack, tracks])
 
-  const seekTo = useCallback(
-    (seconds: number) => {
-      const audio = audioRef.current
-      const maxDur = duration > 0 ? duration : audio?.duration || 0
-      const clamped = Math.max(0, maxDur > 0 ? Math.min(seconds, maxDur) : seconds)
-      if (audio) {
-        audio.currentTime = clamped
-      }
-      setCurrentTime(clamped)
-    },
-    [duration]
-  )
+  const seekTo = useCallback((seconds: number) => {
+    const audio = audioRef.current
+    const maxDur = durationRef.current > 0 ? durationRef.current : audio?.duration || 0
+    const clamped = Math.max(0, maxDur > 0 ? Math.min(seconds, maxDur) : seconds)
+    if (audio) {
+      audio.currentTime = clamped
+    }
+    setCurrentTime(clamped)
+  }, [])
 
   const openDrawer = useCallback(() => setDrawerOpen(true), [])
   const openManager = useCallback(() => {
@@ -1204,7 +1276,7 @@ export function BlogMusicProvider({
 
   const currentLyricLine = activeLyricIndex >= 0 ? parsedLyrics[activeLyricIndex].text : ''
 
-  // Keep active lyric centered smoothly inside .blog-p2-lrc-box when drawer is open
+  // Keep active lyric centered inside .blog-p2-lrc-box when drawer is open
   useEffect(() => {
     if (!drawerOpen) return
     const box = lrcBoxRef.current
@@ -1212,9 +1284,13 @@ export function BlogMusicProvider({
     if (!box || !activeEl) return
     const targetScrollTop =
       activeEl.offsetTop - box.clientHeight / 2 + activeEl.clientHeight / 2
+    const reducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
     box.scrollTo({
       top: Math.max(0, targetScrollTop),
-      behavior: 'smooth'
+      behavior: reducedMotion ? 'auto' : 'smooth'
     })
   }, [activeLyricIndex, drawerOpen])
 
@@ -1231,16 +1307,13 @@ export function BlogMusicProvider({
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [drawerOpen, managerOpen])
 
-  const contextValue = useMemo<BlogMusicContextValue>(
+  const stableContextValue = useMemo<BlogMusicStableValue>(
     () => ({
       tracks,
       loading,
       currentTrack,
       isPlaying,
-      currentTime,
-      duration,
       muted,
-      currentLyricLine,
       refreshTracks,
       playTrack,
       togglePlay,
@@ -1256,10 +1329,7 @@ export function BlogMusicProvider({
       loading,
       currentTrack,
       isPlaying,
-      currentTime,
-      duration,
       muted,
-      currentLyricLine,
       refreshTracks,
       playTrack,
       togglePlay,
@@ -1272,6 +1342,15 @@ export function BlogMusicProvider({
     ]
   )
 
+  const progressContextValue = useMemo<BlogMusicProgressValue>(
+    () => ({
+      currentTime,
+      duration,
+      currentLyricLine
+    }),
+    [currentTime, duration, currentLyricLine]
+  )
+
   const displayTrack =
     currentTrack || (tracks.length > 0 ? trackToPostMusic(tracks[0]) : null)
   const showPill = Boolean(displayTrack)
@@ -1281,8 +1360,9 @@ export function BlogMusicProvider({
       : tracks.find((t) => t.id === displayTrack?.trackId)?.durationSec || 0
 
   return (
-    <BlogMusicContext.Provider value={contextValue}>
-      {children}
+    <BlogMusicContext.Provider value={stableContextValue}>
+      <BlogMusicProgressContext.Provider value={progressContextValue}>
+        {children}
 
       {/* Persistent Global Audio Element — never unmounts across SPA blog routes */}
       <audio
@@ -1588,6 +1668,7 @@ export function BlogMusicProvider({
           onTracksChanged={refreshTracks}
         />
       )}
+      </BlogMusicProgressContext.Provider>
     </BlogMusicContext.Provider>
   )
 }

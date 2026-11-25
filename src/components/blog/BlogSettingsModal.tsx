@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { errorMessage } from '../../api'
-import { updateBlogSettings, uploadBlogMedia } from '../../blog-api'
-import type { BlogProfile } from '../../blog-types'
+import { errorMessage } from '../../api-error'
+import {
+  fetchStorageUsage,
+  runBlogMediaGc,
+  updateBlogSettings,
+  uploadBlogMedia
+} from '../../blog-api'
+import type { BlogProfile, StorageUsageSnapshot } from '../../blog-types'
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
 import {
@@ -25,6 +30,19 @@ export interface BlogSettingsModalProps {
   profile: BlogProfile
   onClose: () => void
   onSaved: (profile: BlogProfile) => void
+}
+
+const DEFAULT_R2_QUOTA_BYTES = 10 * 1024 * 1024 * 1024
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${Math.round(bytes)} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb >= 10 ? kb.toFixed(0) : kb.toFixed(1)} KB`
+  const mb = kb / 1024
+  if (mb < 1024) return `${mb >= 100 ? mb.toFixed(0) : mb >= 10 ? mb.toFixed(1) : mb.toFixed(2)} MB`
+  const gb = mb / 1024
+  return `${gb.toFixed(2)} GB`
 }
 
 function detectBlogTheme(): 'light' | 'dark' {
@@ -56,10 +74,29 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
   const [copiedRss, setCopiedRss] = useState(false)
   const [error, setError] = useState('')
 
+  const [storageUsage, setStorageUsage] = useState<StorageUsageSnapshot | null>(null)
+  const [loadingStorage, setLoadingStorage] = useState(false)
+  const [storageError, setStorageError] = useState('')
+  const [runningGc, setRunningGc] = useState(false)
+  const [includeRecentGc, setIncludeRecentGc] = useState(false)
+
   const coverInputRef = useRef<HTMLInputElement | null>(null)
   const avatarInputRef = useRef<HTMLInputElement | null>(null)
 
-  const busy = saving || uploadingCover || uploadingAvatar
+  const busy = saving || uploadingCover || uploadingAvatar || runningGc
+
+  const loadStorageUsage = useCallback(async () => {
+    setLoadingStorage(true)
+    setStorageError('')
+    try {
+      const snapshot = await fetchStorageUsage()
+      setStorageUsage(snapshot)
+    } catch (err) {
+      setStorageError(errorMessage(err))
+    } finally {
+      setLoadingStorage(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -75,8 +112,10 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
     setAvatarMediaId(profile.avatarMediaId ?? null)
     setAvatarUrl(profile.avatarUrl ?? null)
     setCopiedRss(false)
+    setIncludeRecentGc(false)
     setError('')
-  }, [open, profile])
+    void loadStorageUsage()
+  }, [open, profile, loadStorageUsage])
 
   useEffect(() => {
     if (!open) return
@@ -163,6 +202,45 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
       prev.includes(widgetId) ? prev.filter((item) => item !== widgetId) : [...prev, widgetId]
     )
   }, [])
+
+  const handleRunMediaGc = useCallback(async () => {
+    if (runningGc) return
+    if (
+      includeRecentGc &&
+      !window.confirm(
+        '已勾选「包含近期未引用上传」：若其他页面有刚上传但尚未发布的图片/音视频，也会一并清理。确定继续吗？'
+      )
+    ) {
+      return
+    }
+    setRunningGc(true)
+    setStorageError('')
+    try {
+      const hasLegacyMemo = Boolean(storageUsage && storageUsage.legacyMemoCount > 0)
+      const res = await runBlogMediaGc({
+        includeRecent: includeRecentGc,
+        includeLegacyMemo: hasLegacyMemo
+      })
+      const totalDeleted = (res.deletedCount || 0) + (res.legacyMemoDeletedCount || 0)
+      const totalFreed = (res.freedBytes || 0) + (res.legacyMemoFreedBytes || 0)
+      if (totalDeleted > 0 || totalFreed > 0) {
+        showToast(
+          'success',
+          `清理完成，回收 ${totalDeleted} 个文件 · 释放 ${formatBytes(totalFreed)}`
+        )
+      } else {
+        showToast('info', '未发现可清理的孤儿媒体')
+      }
+      setIncludeRecentGc(false)
+      await loadStorageUsage()
+    } catch (err) {
+      const msg = errorMessage(err)
+      setStorageError(msg)
+      showToast('error', msg)
+    } finally {
+      setRunningGc(false)
+    }
+  }, [runningGc, includeRecentGc, storageUsage, loadStorageUsage])
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -462,6 +540,133 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
                     </div>
                   )
                 })}
+              </div>
+            </div>
+
+            {/* R2 Storage Usage & One-Click GC Panel */}
+            <div className="blog-field">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span className="blog-field-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <AppIcon name="cpu" size={13} />
+                  <span>R2 存储空间与清理</span>
+                </span>
+                <button
+                  type="button"
+                  className="blog-filter-reset"
+                  disabled={loadingStorage || runningGc}
+                  onClick={() => void loadStorageUsage()}
+                >
+                  {loadingStorage ? '统计中…' : '刷新统计'}
+                </button>
+              </div>
+
+              <div className="blog-storage-card">
+                {storageUsage ? (
+                  <>
+                    {(() => {
+                      const quota =
+                        storageUsage.quotaBytes > 0 ? storageUsage.quotaBytes : DEFAULT_R2_QUOTA_BYTES
+                      const rawPct = (storageUsage.totalBytes / quota) * 100
+                      const fillWidth =
+                        storageUsage.totalBytes > 0 ? Math.min(100, Math.max(1.2, rawPct)) : 0
+                      const toneClass =
+                        rawPct > 90 ? ' is-danger' : rawPct > 75 ? ' is-warning' : ''
+                      return (
+                        <>
+                          <div className="blog-storage-head">
+                            <span className="blog-storage-usage-label">
+                              已用 <strong>{formatBytes(storageUsage.totalBytes)}</strong> / 10 GB
+                            </span>
+                            <span className="blog-storage-usage-mono">
+                              {rawPct < 0.01 && storageUsage.totalBytes > 0
+                                ? '< 0.01%'
+                                : `${rawPct.toFixed(rawPct >= 10 ? 1 : 2)}%`}
+                            </span>
+                          </div>
+                          <div
+                            className="blog-storage-bar"
+                            role="progressbar"
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={Math.min(100, Math.round(rawPct))}
+                            aria-label="R2 存储空间占用"
+                          >
+                            <div
+                              className={`blog-storage-bar-fill${toneClass}`}
+                              style={{ width: `${fillWidth}%` }}
+                            />
+                          </div>
+                        </>
+                      )
+                    })()}
+
+                    <div className="blog-storage-breakdown">
+                      <div className="blog-storage-stat">
+                        <span className="blog-storage-stat-label">稍后阅读图库</span>
+                        <span className="blog-storage-stat-val">
+                          {formatBytes(storageUsage.libraryAssetsBytes)}
+                        </span>
+                      </div>
+                      <div className="blog-storage-stat">
+                        <span className="blog-storage-stat-label">博客媒体</span>
+                        <span className="blog-storage-stat-val">
+                          {formatBytes(storageUsage.blogMediaBytes)}
+                        </span>
+                      </div>
+                      <div className="blog-storage-stat">
+                        <span className="blog-storage-stat-label">可回收孤儿媒体</span>
+                        <span className="blog-storage-stat-val is-accent">
+                          {storageUsage.orphanBlogMediaCount} 个 ·{' '}
+                          {formatBytes(storageUsage.orphanBlogMediaBytes)}
+                        </span>
+                      </div>
+                      {storageUsage.legacyMemoCount > 0 && (
+                        <div className="blog-storage-stat">
+                          <span className="blog-storage-stat-label">已废弃画布残留</span>
+                          <span className="blog-storage-stat-val is-warning">
+                            {storageUsage.legacyMemoCount} 项 ·{' '}
+                            {formatBytes(storageUsage.memoAssetsBytes)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="blog-storage-actions">
+                      <label className="blog-storage-recent-opt">
+                        <input
+                          type="checkbox"
+                          checked={includeRecentGc}
+                          disabled={runningGc}
+                          onChange={(e) => setIncludeRecentGc(e.target.checked)}
+                        />
+                        <span>同时清理近期未关联上传</span>
+                      </label>
+                      <button
+                        type="button"
+                        className="blog-btn blog-btn-subtle blog-btn-sm"
+                        disabled={runningGc || loadingStorage}
+                        onClick={() => void handleRunMediaGc()}
+                      >
+                        <AppIcon name="trash" size={13} />
+                        <span>{runningGc ? '正在清理…' : '清理孤儿媒体'}</span>
+                      </button>
+                    </div>
+                  </>
+                ) : loadingStorage ? (
+                  <div className="blog-field-hint" style={{ textAlign: 'center', padding: '10px 0' }}>
+                    正在读取 R2 存储空间用量…
+                  </div>
+                ) : (
+                  <div className="blog-field-hint" style={{ textAlign: 'center', padding: '8px 0' }}>
+                    {storageError || '暂无法获取存储统计'}
+                  </div>
+                )}
+
+                {storageError && storageUsage && (
+                  <div className="blog-unlock-error" role="alert" style={{ textAlign: 'left' }}>
+                    {storageError}
+                  </div>
+                )}
               </div>
             </div>
 

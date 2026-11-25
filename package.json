@@ -15,7 +15,6 @@
     "check": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
-    "@excalidraw/excalidraw": "0.18.1",
     "classnames": "2.5.1",
     "fflate": "^0.8.2",
     "react": "^19.1.1",

@@ -1564,6 +1564,67 @@ img.blog-share-thumb {
   color: var(--blog-text);
 }
 
+.blog-sticky-toc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--blog-radius-pill);
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  color: var(--blog-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.14s, border-color 0.14s, color 0.14s;
+}
+
+.blog-sticky-toc-btn:hover {
+  background: var(--blog-surface-hover);
+  color: var(--blog-text);
+}
+
+.blog-sticky-toc-btn.is-active {
+  background: var(--blog-link-soft);
+  border-color: var(--blog-link);
+  color: var(--blog-link);
+}
+
+.blog-mobile-toc-panel {
+  position: sticky;
+  top: 52px;
+  z-index: 24;
+  padding: 12px 20px 14px;
+  background: var(--blog-surface);
+  border-bottom: 1px solid var(--blog-divider);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.08);
+  animation: blogSlideDown 0.16s var(--blog-ease) both;
+}
+
+.blog-root[data-blog-theme='dark'] .blog-mobile-toc-panel {
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.42);
+}
+
+.blog-root.is-embedded .blog-mobile-toc-panel {
+  top: calc(var(--header-height, 64px) + 52px);
+}
+
+.blog-mobile-toc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.blog-mobile-toc-list {
+  max-height: min(50vh, 280px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .blog-article {
   padding: 28px 28px 96px;
 }
@@ -1941,12 +2002,12 @@ img.blog-share-thumb {
   white-space: pre;
 }
 
-/* Desktop Floating TOC (>= 1160px) */
+/* Desktop Floating TOC (>= 1240px fallback) */
 .blog-toc {
   display: none;
 }
 
-@media (min-width: 1160px) {
+@media (min-width: 1240px) {
   .blog-toc {
     display: block;
     position: fixed;
@@ -3154,6 +3215,166 @@ img.blog-share-thumb {
   transform: translateX(18px);
 }
 
+/* Composer Unpublished Draft Recovery Banner */
+.blog-draft-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--blog-link-soft);
+  border: 1px solid rgba(77, 73, 252, 0.24);
+}
+
+.blog-root[data-blog-theme='dark'] .blog-draft-banner {
+  border-color: rgba(129, 140, 248, 0.3);
+}
+
+.blog-draft-banner-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--blog-link);
+}
+
+.blog-draft-banner-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* R2 Storage Usage & GC Panel inside BlogSettingsModal */
+.blog-storage-card {
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.blog-storage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.blog-storage-usage-label {
+  font-size: 13px;
+  color: var(--blog-text-secondary);
+}
+
+.blog-storage-usage-label strong {
+  font-family: var(--blog-font-mono);
+  font-weight: 600;
+  color: var(--blog-text);
+}
+
+.blog-storage-usage-mono {
+  font-family: var(--blog-font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--blog-text-muted);
+}
+
+.blog-storage-bar {
+  width: 100%;
+  height: 7px;
+  border-radius: var(--blog-radius-pill);
+  background: var(--blog-divider);
+  overflow: hidden;
+}
+
+.blog-storage-bar-fill {
+  height: 100%;
+  border-radius: var(--blog-radius-pill);
+  background: #4d49fc;
+  transition: width 0.28s var(--blog-ease), background-color 0.2s var(--blog-ease);
+}
+
+.blog-storage-bar-fill.is-warning {
+  background: var(--blog-warning);
+}
+
+.blog-storage-bar-fill.is-danger {
+  background: var(--blog-danger);
+}
+
+.blog-storage-breakdown {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.blog-storage-stat {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--blog-divider);
+  background: var(--blog-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.blog-storage-stat-label {
+  font-size: 11.5px;
+  color: var(--blog-text-muted);
+}
+
+.blog-storage-stat-val {
+  font-family: var(--blog-font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--blog-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.blog-storage-stat-val.is-accent {
+  color: var(--blog-link);
+}
+
+.blog-storage-stat-val.is-warning {
+  color: var(--blog-warning);
+}
+
+.blog-storage-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+.blog-storage-recent-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--blog-text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.blog-storage-recent-opt input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #4d49fc;
+  cursor: pointer;
+}
+
 /* --------------------------------------------------------------------------
    10. Empty State, Load More & Footer
    -------------------------------------------------------------------------- */
@@ -3395,7 +3616,8 @@ img.blog-share-thumb {
   }
 
   .blog-article-bottom-bar {
-    padding: 0 14px;
+    height: calc(58px + env(safe-area-inset-bottom, 0px));
+    padding: 0 14px env(safe-area-inset-bottom, 0px);
     border-radius: 0;
   }
 
@@ -3413,12 +3635,12 @@ img.blog-share-thumb {
 
   .blog-floating-dock {
     right: 14px;
-    bottom: 18px;
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
     gap: 8px;
   }
 
   .blog-floating-dock.has-bottom-bar {
-    bottom: 72px;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
 
   .blog-dock-btn {
@@ -3445,7 +3667,8 @@ img.blog-share-thumb {
   }
 
   .blog-md-split,
-  .blog-composer-grid {
+  .blog-composer-grid,
+  .blog-storage-breakdown {
     grid-template-columns: 1fr;
   }
 

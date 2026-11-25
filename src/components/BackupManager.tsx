@@ -134,8 +134,7 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
   }
 
   const imageCount = backup
-    ? backup.manifest.items.reduce((sum, item) => sum + item.assets.filter((asset) => asset.path).length, 0) +
-      (backup.manifest.memoCanvas?.assets.filter((asset) => asset.path).length || 0)
+    ? backup.manifest.items.reduce((sum, item) => sum + item.assets.filter((asset) => asset.path).length, 0)
     : 0
   const percent = progressPercent(progress)
 
@@ -146,7 +145,7 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
         <div>
           <h3>数据备份与恢复</h3>
           <p className="field-hint">
-            备份包含类别、条目、状态、日期、星标、计划日期、图片顺序、默认类别与备忘录画布，不包含密码或登录凭证。
+            备份包含类别、条目、状态、日期、星标、计划日期、图片顺序与默认类别，不包含密码或登录凭证。
           </p>
         </div>
       </div>
@@ -226,7 +225,7 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
             <div className="backup-summary">
               <strong>{sourceName}</strong>
               <span className="mono">
-                {backup.manifest.items.length} 条内容 · {backup.manifest.categories.length} 个类别 · {imageCount} 张原图 · {backup.manifest.memoCanvas ? '含备忘录画布' : '不含画布'}
+                {backup.manifest.items.length} 条内容 · {backup.manifest.categories.length} 个类别 · {imageCount} 张原图
               </span>
               <span className="field-hint mono">解压后原图约 {formatBytes(backup.totalBytes)}</span>
             </div>
@@ -277,7 +276,6 @@ export function BackupManager({ onRestored }: { onRestored: () => Promise<void> 
         <div className="notice notice-info restore-report">
           <strong className="mono">
             恢复报告：新增 {report.added} · 跳过 {report.skipped} · 失败 {report.failed.length}
-            {report.canvas === 'restored' ? ' · 画布已恢复' : report.canvas === 'skipped' ? ' · 现有画布已保留' : ''}
           </strong>
           {report.failed.length > 0 && (
             <ul className="restore-report-errors">

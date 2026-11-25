@@ -64,13 +64,7 @@ function addDateKey(value: string, days: number) {
 
 test('从首次建号到直接粘贴网页、文字和图片的完整流程', async ({ page, context }) => {
   const pageErrors: string[] = []
-  const memoAssetFailures: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
-  page.on('response', (response) => {
-    if (response.url().includes('/excalidraw-assets/') && !response.ok()) {
-      memoAssetFailures.push(`${response.status()} ${response.url()}`)
-    }
-  })
   await page.addInitScript(() => {
     delete (window as Window & { showOpenFilePicker?: unknown }).showOpenFilePicker
   })
@@ -659,330 +653,6 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   expect(iconMetadata).toMatchObject({ width: 512, height: 512 })
   expect(iconStats.channels[3]?.min ?? 255).toBe(255)
 
-  const memoFontResponse = await page.request.get('/excalidraw-assets/fonts/Assistant/Assistant-Regular.woff2')
-  expect(memoFontResponse.ok()).toBe(true)
-  await page.locator('.app-header').getByRole('button', { name: '备忘录' }).click()
-  let memoDialog = page.getByRole('dialog', { name: '备忘录无限画布' })
-  await expect(memoDialog).toBeVisible()
-  await expect(memoDialog.getByText('画布已同步')).toBeVisible({ timeout: 15_000 })
-  await expect(memoDialog.locator('[data-testid="toolbar-selection"]')).toBeVisible()
-  await expect(memoDialog.locator('[data-testid="toolbar-text"]')).toBeVisible()
-  await expect(memoDialog.locator('[data-testid="toolbar-freedraw"]')).toBeVisible()
-  await expect(memoDialog.locator('[data-testid="toolbar-eraser"]')).toBeVisible()
-  await expect(memoDialog.locator('[data-testid="toolbar-image"]')).toBeVisible()
-
-  const backgroundGroup = memoDialog.getByRole('group', { name: '画布背景' })
-  await backgroundGroup.getByRole('button', { name: '网格' }).click()
-  await expect(memoDialog.locator('.memo-canvas-stage')).toHaveClass(/memo-bg-grid/)
-  await expect(backgroundGroup.getByRole('button', { name: '网格' })).toHaveAttribute('aria-pressed', 'true')
-  await backgroundGroup.getByRole('button', { name: '点阵' }).click()
-  await expect(memoDialog.locator('.memo-canvas-stage')).toHaveClass(/memo-bg-dots/)
-  await expect(memoDialog.locator('.memo-pattern-layer')).toHaveCSS('z-index', '0')
-  await backgroundGroup.getByRole('button', { name: '横线' }).click()
-  await expect(memoDialog.locator('.memo-canvas-stage')).toHaveClass(/memo-bg-lines/)
-  await backgroundGroup.getByRole('button', { name: '纯色' }).click()
-  await expect(memoDialog.locator('.memo-pattern-layer')).toHaveCount(0)
-  await backgroundGroup.getByRole('button', { name: '点阵' }).click()
-  await memoDialog.getByRole('button', { name: '切换到夜间画布' }).click()
-  await expect(memoDialog).toHaveClass(/memo-mode-dark/)
-  await expect(memoDialog.getByRole('button', { name: '切换到昼间画布' })).toBeVisible()
-
-  await memoDialog.getByRole('button', { name: '资料库' }).click()
-  const memoLibrary = memoDialog.locator('.memo-library-pane')
-  await expect(memoLibrary).toBeVisible()
-  await expect(memoLibrary.getByRole('combobox', { name: '优先级' })).toContainText('计划处理')
-  const memoLibrarySearch = memoLibrary.getByRole('searchbox', { name: '搜索资料库' })
-  await memoLibrarySearch.fill('回家后整理这段纯文字')
-  const textLibraryCard = memoLibrary.locator('.memo-library-results article').filter({ hasText: '回家后整理这段纯文字' })
-  await expect(textLibraryCard).not.toHaveClass(/has-cover/)
-  await expect(textLibraryCard.locator('strong')).toHaveCSS('white-space', 'normal')
-  expect(await textLibraryCard.locator('strong').evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(true)
-  const compactAddButton = textLibraryCard.getByRole('button', { name: '放到画布' })
-  expect((await compactAddButton.boundingBox())?.width).toBeLessThanOrEqual(40)
-  expect(await compactAddButton.innerText()).toBe('')
-  await memoLibrarySearch.fill('图片组')
-  await memoLibrary.getByRole('button', { name: '放到画布' }).click()
-  await expect(memoDialog.locator('.memo-reference-card')).toHaveCount(1)
-  let memoInspector = memoDialog.locator('.memo-inspector-pane')
-  await expect(memoInspector.getByRole('heading', { name: '图片组' })).toBeVisible()
-  await expect(memoDialog.getByRole('button', { name: '重置缩放' })).toContainText('100%')
-
-  const referenceCard = memoDialog.locator('.memo-reference-card')
-  const referenceInitial = await referenceCard.boundingBox()
-  expect(referenceInitial).toBeTruthy()
-  expect((referenceInitial?.width || 0) / (referenceInitial?.height || 1)).toBeGreaterThan(3.2)
-  await memoInspector.getByRole('button', { name: '选中卡片并调整位置、大小或角度' }).click()
-  await expect(referenceCard).toHaveClass(/is-selected/)
-  const referenceBefore = await referenceCard.boundingBox()
-  expect(referenceBefore).toBeTruthy()
-  await page.mouse.move(
-    (referenceBefore?.x || 0) + (referenceBefore?.width || 0) * 0.56,
-    (referenceBefore?.y || 0) + (referenceBefore?.height || 0) * 0.25
-  )
-  await page.mouse.down()
-  await page.mouse.move(
-    (referenceBefore?.x || 0) + (referenceBefore?.width || 0) * 0.56 + 70,
-    (referenceBefore?.y || 0) + (referenceBefore?.height || 0) * 0.25 + 35,
-    { steps: 8 }
-  )
-  await page.mouse.up()
-  await expect.poll(async () => (await referenceCard.boundingBox())?.x || 0).toBeGreaterThan((referenceBefore?.x || 0) + 30)
-
-  await memoInspector.getByRole('button', { name: '选中卡片并调整位置、大小或角度' }).click()
-  const referenceMoved = await referenceCard.boundingBox()
-  expect(referenceMoved).toBeTruthy()
-  const referenceTitle = referenceCard.locator('.memo-reference-copy strong')
-  const referenceTag = referenceCard.locator('.memo-reference-tags span').first()
-  const titleFontBeforeResize = await referenceTitle.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
-  const tagFontBeforeResize = await referenceTag.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
-  const tagBoxBeforeResize = await referenceTag.boundingBox()
-  await page.mouse.move(
-    (referenceMoved?.x || 0) + (referenceMoved?.width || 0) + 8,
-    (referenceMoved?.y || 0) + (referenceMoved?.height || 0) + 8
-  )
-  await page.mouse.down()
-  await page.mouse.move(
-    (referenceMoved?.x || 0) + (referenceMoved?.width || 0) + 78,
-    (referenceMoved?.y || 0) + (referenceMoved?.height || 0) + 53,
-    { steps: 8 }
-  )
-  await page.mouse.up()
-  await expect.poll(async () => (await referenceCard.boundingBox())?.width || 0).toBeGreaterThan((referenceMoved?.width || 0) + 30)
-  await expect.poll(
-    () => referenceTitle.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
-  ).toBeGreaterThan(titleFontBeforeResize + 1)
-  await expect.poll(
-    () => referenceTag.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
-  ).toBeGreaterThan(tagFontBeforeResize + .5)
-  await expect.poll(
-    async () => (await referenceTag.boundingBox())?.height || 0
-  ).toBeGreaterThan((tagBoxBeforeResize?.height || 0) + 1)
-
-  const titleFontAfterCornerResize = await referenceTitle.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
-  const tagFontAfterCornerResize = await referenceTag.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))
-  const tagBoxAfterCornerResize = await referenceTag.boundingBox()
-  await memoInspector.getByRole('button', { name: '选中卡片并调整位置、大小或角度' }).click()
-  const referenceBeforeEdgeResize = await referenceCard.boundingBox()
-  expect(referenceBeforeEdgeResize).toBeTruthy()
-  await page.mouse.move(
-    (referenceBeforeEdgeResize?.x || 0) - 8,
-    (referenceBeforeEdgeResize?.y || 0) + (referenceBeforeEdgeResize?.height || 0) / 2
-  )
-  await page.mouse.down()
-  await page.mouse.move(
-    (referenceBeforeEdgeResize?.x || 0) - 98,
-    (referenceBeforeEdgeResize?.y || 0) + (referenceBeforeEdgeResize?.height || 0) / 2,
-    { steps: 8 }
-  )
-  await page.mouse.up()
-  await expect.poll(async () => (await referenceCard.boundingBox())?.width || 0).toBeGreaterThan((referenceBeforeEdgeResize?.width || 0) + 50)
-  await expect.poll(
-    async () => Math.abs(
-      await referenceTitle.evaluate((element) => parseFloat(getComputedStyle(element).fontSize)) -
-      titleFontAfterCornerResize
-    )
-  ).toBeLessThan(0.1)
-  await expect.poll(
-    async () => Math.abs(
-      await referenceTag.evaluate((element) => parseFloat(getComputedStyle(element).fontSize)) -
-      tagFontAfterCornerResize
-    )
-  ).toBeLessThan(0.1)
-  await expect.poll(
-    async () => Math.abs(((await referenceTag.boundingBox())?.height || 0) - (tagBoxAfterCornerResize?.height || 0))
-  ).toBeLessThan(0.2)
-  await page.screenshot({ path: 'test-results/memo-card-corner-scale-edge-boundary.png' })
-
-  await memoInspector.getByRole('button', { name: '选中卡片并调整位置、大小或角度' }).click()
-  const referenceResized = await referenceCard.boundingBox()
-  expect(referenceResized).toBeTruthy()
-  await page.mouse.move(
-    (referenceResized?.x || 0) + (referenceResized?.width || 0) / 2,
-    (referenceResized?.y || 0) - 24
-  )
-  await page.mouse.down()
-  await page.mouse.move(
-    (referenceResized?.x || 0) + (referenceResized?.width || 0) / 2 + 80,
-    (referenceResized?.y || 0) + 26,
-    { steps: 8 }
-  )
-  await page.mouse.up()
-  await expect.poll(async () => {
-    const rotated = await referenceCard.boundingBox()
-    if (!rotated || !referenceResized) return 0
-    return Math.max(
-      Math.abs(rotated.width - referenceResized.width),
-      Math.abs(rotated.height - referenceResized.height)
-    )
-  }).toBeGreaterThan(10)
-
-  await memoInspector.getByRole('button', { name: '查看图片' }).click()
-  const memoPreview = page.locator('[role="dialog"]').filter({ has: page.locator('.lightbox') })
-  await expect(memoPreview.locator('.lightbox img')).toBeVisible()
-  await memoPreview.getByRole('button', { name: '关闭' }).click()
-  await memoInspector.getByLabel('修改类别').selectOption({ label: '生活' })
-  await expect(memoInspector.getByLabel('修改类别')).toHaveValue(/.+/)
-  await memoInspector.getByRole('button', { name: '加星标' }).click()
-  await expect(memoInspector.getByRole('button', { name: '取消星标' })).toBeVisible()
-  await memoInspector.getByRole('button', { name: '取消星标' }).click()
-  await memoInspector.getByRole('button', { name: '已完成' }).click()
-  await expect(memoInspector.getByRole('button', { name: '恢复待处理' })).toBeVisible()
-  await memoInspector.getByRole('button', { name: '恢复待处理' }).click()
-  await memoInspector.getByRole('button', { name: '安排处理' }).click()
-  const memoScheduleDialog = page.getByRole('dialog', { name: '安排处理日期' })
-  await expect(memoScheduleDialog).toBeVisible()
-  expect(await memoScheduleDialog.evaluate((panel) => {
-    const box = panel.getBoundingClientRect()
-    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + 24)
-    return Boolean(hit && panel.contains(hit))
-  })).toBe(true)
-  await memoScheduleDialog.locator(`[data-date="${tomorrowDate}"]`).click()
-  await expect(memoInspector.getByRole('button', { name: '明天' })).toBeVisible()
-  await memoInspector.getByRole('button', { name: '明天' }).click()
-  await page.getByRole('dialog', { name: '安排处理日期' }).getByRole('button', { name: '取消计划' }).click()
-
-  await memoInspector.getByRole('button', { name: '编辑标题、网址或图片' }).click()
-  const memoEditDialog = page.getByRole('dialog', { name: '编辑条目' })
-  await expect(memoEditDialog).toBeVisible()
-  await memoEditDialog.getByLabel('标题').fill('图片组（画布同步）')
-  await memoEditDialog.getByRole('button', { name: '保存修改' }).click()
-  await expect(memoInspector.getByRole('heading', { name: '图片组（画布同步）' })).toBeVisible()
-  await memoInspector.getByRole('button', { name: '移到回收站' }).click()
-  await expect(memoInspector.getByText('回收站')).toBeVisible()
-  await memoInspector.getByRole('button', { name: '恢复条目' }).click()
-  await expect(memoInspector.getByRole('button', { name: '移到回收站' })).toBeVisible()
-
-  await memoInspector.getByRole('button', { name: '从画布移除' }).click()
-  await expect(memoDialog.locator('.memo-reference-card')).toHaveCount(0)
-  await memoDialog.getByRole('button', { name: '资料库' }).click()
-  await memoDialog.locator('.memo-library-pane').getByRole('button', { name: '放到画布' }).click()
-  await expect(memoDialog.locator('.memo-reference-card')).toHaveCount(1)
-  await memoDialog.getByRole('button', { name: '资料库' }).click()
-  await memoDialog.locator('.memo-library-pane').getByRole('button', { name: '放到画布' }).click()
-  await expect(memoDialog.locator('.memo-reference-card')).toHaveCount(1)
-  await memoDialog.getByRole('button', { name: '关闭编辑面板' }).click()
-
-  const memoStage = memoDialog.locator('.memo-canvas-stage')
-  const memoStageBox = await memoStage.boundingBox()
-  expect(memoStageBox).toBeTruthy()
-  await memoDialog.locator('[data-testid="toolbar-text"]').check({ force: true })
-  await page.mouse.click(
-    (memoStageBox?.x || 0) + (memoStageBox?.width || 0) * 0.72,
-    (memoStageBox?.y || 0) + (memoStageBox?.height || 0) * 0.32
-  )
-  await page.keyboard.type('画布内文字')
-  await page.keyboard.press('Escape')
-  await memoDialog.locator('[data-testid="toolbar-freedraw"]').check({ force: true })
-  await page.mouse.move(
-    (memoStageBox?.x || 0) + (memoStageBox?.width || 0) * 0.56,
-    (memoStageBox?.y || 0) + (memoStageBox?.height || 0) * 0.60
-  )
-  await page.mouse.down()
-  await page.mouse.move(
-    (memoStageBox?.x || 0) + (memoStageBox?.width || 0) * 0.72,
-    (memoStageBox?.y || 0) + (memoStageBox?.height || 0) * 0.72,
-    { steps: 8 }
-  )
-  await page.mouse.up()
-  await expect(memoDialog.getByRole('button', { name: '撤销' })).toBeEnabled()
-  await memoDialog.getByRole('button', { name: '撤销' }).click()
-  await expect(memoDialog.getByRole('button', { name: '重做' })).toBeEnabled()
-  await memoDialog.getByRole('button', { name: '重做' }).click()
-
-  const canvasImageBuffer = await sharp({
-    create: {
-      width: 120,
-      height: 80,
-      channels: 4,
-      background: { r: 240, g: 140, b: 40, alpha: 1 }
-    }
-  }).png().toBuffer()
-  const canvasFileChooser = page.waitForEvent('filechooser')
-  await memoDialog.locator('[data-testid="toolbar-image"]').locator('..').click()
-  await (await canvasFileChooser).setFiles({
-    name: 'canvas-note.png',
-    mimeType: 'image/png',
-    buffer: canvasImageBuffer
-  })
-  await page.mouse.click(
-    (memoStageBox?.x || 0) + (memoStageBox?.width || 0) * 0.76,
-    (memoStageBox?.y || 0) + (memoStageBox?.height || 0) * 0.62
-  )
-  await page.keyboard.press('Escape')
-  await expect(memoDialog.getByText('画布已同步')).toBeVisible({ timeout: 15_000 })
-
-  type MemoTestSnapshot = {
-    scene: { elements: Array<{ type?: string; text?: string; isDeleted?: boolean }> }
-    background: string
-    colorMode: string
-    assets: unknown[]
-  }
-  await expect.poll(async () => {
-    const response = await page.request.get('/api/memo-canvas')
-    const snapshot = await response.json() as MemoTestSnapshot
-    return snapshot.assets.length
-  }, { timeout: 15_000 }).toBe(1)
-  const memoSnapshot = await (await page.request.get('/api/memo-canvas')).json() as MemoTestSnapshot
-  expect(memoSnapshot.background).toBe('dots')
-  expect(memoSnapshot.colorMode).toBe('dark')
-  expect(memoSnapshot.scene.elements.some((element) => !element.isDeleted && element.type === 'embeddable')).toBe(true)
-  expect(memoSnapshot.scene.elements.some((element) => !element.isDeleted && element.type === 'text' && element.text === '画布内文字')).toBe(true)
-  expect(memoSnapshot.scene.elements.some((element) => !element.isDeleted && element.type === 'freedraw')).toBe(true)
-  expect(memoSnapshot.scene.elements.some((element) => !element.isDeleted && element.type === 'image')).toBe(true)
-  expect(memoAssetFailures).toEqual([])
-  await page.screenshot({ path: 'test-results/flat-memo-canvas-dark-dots.png' })
-
-  await page.setViewportSize({ width: 430, height: 932 })
-  await memoDialog.getByRole('button', { name: '资料库' }).click()
-  const mobileMemoAdd = memoDialog.locator('.memo-library-pane').getByRole('button', { name: '放到画布' })
-  expect((await mobileMemoAdd.boundingBox())?.width).toBeLessThanOrEqual(40)
-  await mobileMemoAdd.click()
-  memoInspector = memoDialog.locator('.memo-inspector-pane')
-  await expect(memoInspector).toBeVisible()
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  const mobileMemoControls = await memoDialog.locator('.memo-canvas-controls').boundingBox()
-  const mobileMemoStatus = await memoDialog.locator('.memo-save-state').boundingBox()
-  expect(mobileMemoStatus?.y).toBeGreaterThanOrEqual(
-    (mobileMemoControls?.y || 0) + (mobileMemoControls?.height || 0) - 1
-  )
-  await page.screenshot({ path: 'test-results/flat-memo-canvas-mobile.png' })
-  await memoDialog.getByRole('button', { name: '关闭备忘录' }).click()
-
-  await page.setViewportSize({ width: 1440, height: 900 })
-  await expect(page.locator('.item-card').filter({ hasText: '图片组（画布同步）' })).toContainText('生活')
-  await page.locator('.app-header').getByRole('button', { name: '设计风格' }).click()
-  const memoThemeDialog = page.getByRole('dialog', { name: '选择设计风格' })
-  await memoThemeDialog.getByRole('radio', { name: /Animal Island UI/ }).click()
-  await memoThemeDialog.getByRole('button', { name: '关闭' }).click()
-  await page.locator('.app-header').getByRole('button', { name: '添加', exact: true }).click()
-  await expect(page.getByRole('menu', { name: '选择添加类型' })).not.toHaveCSS('border-radius', '0px')
-  await page.keyboard.press('Escape')
-  await page.locator('.app-header').getByRole('button', { name: '备忘录' }).click()
-  memoDialog = page.getByRole('dialog', { name: '备忘录无限画布' })
-  await expect(memoDialog).toHaveClass(/memo-site-animal-island/)
-  await expect(memoDialog).toHaveClass(/memo-mode-dark/)
-  await memoDialog.getByRole('button', { name: '资料库' }).click()
-  await expect(memoDialog.locator('.memo-library-pane')).not.toHaveCSS('border-radius', '0px')
-  await memoDialog.locator('.memo-library-pane').getByRole('searchbox', { name: '搜索资料库' }).fill('图片组')
-  const animalMemoAdd = memoDialog.locator('.memo-library-pane').getByRole('button', { name: '放到画布' })
-  expect((await animalMemoAdd.boundingBox())?.width).toBeLessThanOrEqual(40)
-  await animalMemoAdd.click()
-  await expect(memoDialog.locator('.memo-reference-card')).not.toHaveCSS('border-radius', '0px')
-  await page.screenshot({ path: 'test-results/animal-memo-canvas-dark-dots.png' })
-  await page.setViewportSize({ width: 430, height: 932 })
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  const animalMobileInspector = await memoDialog.locator('.memo-inspector-pane').boundingBox()
-  expect(animalMobileInspector?.height).toBeLessThanOrEqual(570)
-  await page.screenshot({ path: 'test-results/animal-memo-canvas-mobile.png' })
-  await page.setViewportSize({ width: 1440, height: 900 })
-  await memoDialog.getByRole('button', { name: '切换到昼间画布' }).click()
-  await expect(memoDialog).toHaveClass(/memo-mode-light/)
-  await expect(memoDialog.getByText('画布已同步')).toBeVisible({ timeout: 15_000 })
-  await memoDialog.getByRole('button', { name: '关闭备忘录' }).click()
-  await page.locator('.app-header').getByRole('button', { name: '设计风格' }).click()
-  await page.getByRole('dialog', { name: '选择设计风格' }).getByRole('radio', { name: /Flat Design 2013/ }).click()
-  await page.getByRole('dialog', { name: '选择设计风格' }).getByRole('button', { name: '关闭' }).click()
-
   await page.evaluate(() => {
     Object.defineProperty(window, 'showSaveFilePicker', { configurable: true, value: undefined })
   })
@@ -1001,22 +671,11 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
     version: number
     includeOriginals: boolean
     items: unknown[]
-    memoCanvas: {
-      background: string
-      colorMode: string
-      scene: { elements: Array<{ type?: string }> }
-      assets: Array<{ path: string }>
-    }
   }
   expect(fullManifest.version).toBe(3)
   expect(fullManifest.includeOriginals).toBe(true)
   expect(fullManifest.items).toHaveLength(4)
   expect(Object.keys(fullArchive).some((name) => name.startsWith('images/'))).toBe(true)
-  expect(fullManifest.memoCanvas.background).toBe('dots')
-  expect(fullManifest.memoCanvas.colorMode).toBe('light')
-  expect(fullManifest.memoCanvas.scene.elements.some((element) => element.type === 'image')).toBe(true)
-  expect(fullManifest.memoCanvas.assets).toHaveLength(1)
-  expect(fullArchive[fullManifest.memoCanvas.assets[0].path]).toBeTruthy()
 
   const includeOriginalsCheckbox = backupDialog.getByRole('checkbox', { name: '包含全部原图（推荐）' })
   await includeOriginalsCheckbox.uncheck()
@@ -1028,11 +687,8 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   const compactArchive = unzipSync(new Uint8Array(await readFile(compactBackupPath as string)))
   const compactManifest = JSON.parse(strFromU8(compactArchive['manifest.json'])) as {
     includeOriginals: boolean
-    memoCanvas: { scene: { elements: Array<{ type?: string }> }; assets: unknown[] }
   }
   expect(compactManifest.includeOriginals).toBe(false)
-  expect(compactManifest.memoCanvas.scene.elements.some((element) => element.type === 'image')).toBe(false)
-  expect(compactManifest.memoCanvas.assets).toHaveLength(0)
   expect(Object.keys(compactArchive)).toEqual(['manifest.json'])
   await includeOriginalsCheckbox.check()
 
@@ -1056,16 +712,6 @@ test('从首次建号到直接粘贴网页、文字和图片的完整流程', as
   await expect(backupDialog.getByText(/恢复处理完成：新增 4 条，跳过 0 条/)).toBeVisible({ timeout: 15_000 })
   await backupDialog.getByRole('button', { name: '关闭' }).first().click()
   await expect(page.locator('.item-card')).toHaveCount(4)
-  const restoredMemoResponse = await page.request.get('/api/memo-canvas')
-  const restoredMemo = await restoredMemoResponse.json() as {
-    background: string
-    colorMode: string
-    scene: { elements: Array<{ type?: string }> }
-    assets: unknown[]
-  }
-  expect(restoredMemo).toMatchObject({ background: 'dots', colorMode: 'light' })
-  expect(restoredMemo.assets).toHaveLength(1)
-  expect(restoredMemo.scene.elements.some((element) => element.type === 'image')).toBe(true)
 
   await openDesktopAdd(page, '网页')
   const draftDialog = page.getByRole('dialog', { name: '添加网页' })

@@ -1,14 +1,10 @@
 import { strFromU8, strToU8, unzipSync, Zip, zipSync, ZipPassThrough } from 'fflate'
 import { api, jsonRequest } from './api'
-import { fetchMemoCanvas } from './memo-api'
 import type {
   AppPreferences,
   Category,
   ImageAsset,
-  LibraryItem,
-  MemoBackground,
-  MemoCanvasScene,
-  MemoColorMode
+  LibraryItem
 } from './types'
 
 export const BACKUP_FORMAT = 'do-it-laaaaaater-backup'
@@ -43,22 +39,6 @@ export interface BackupItem {
   assets: BackupAsset[]
 }
 
-export interface BackupMemoAsset {
-  fileId: string
-  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
-  size: number
-  createdAt: number
-  path: string | null
-}
-
-export interface BackupMemoCanvas {
-  scene: MemoCanvasScene
-  background: MemoBackground
-  colorMode: MemoColorMode
-  updatedAt: number
-  assets: BackupMemoAsset[]
-}
-
 export interface BackupManifest {
   format: typeof BACKUP_FORMAT
   version: BackupManifestVersion
@@ -68,7 +48,6 @@ export interface BackupManifest {
   preferences: { quickSaveCategoryName: string | null }
   categories: Array<{ id: string; name: string; color: string; sortOrder: number }>
   items: BackupItem[]
-  memoCanvas: BackupMemoCanvas | null
 }
 
 export interface ValidatedBackup {
@@ -88,15 +67,12 @@ export interface RestoreReport {
   added: number
   skipped: number
   failed: Array<{ title: string; error: string }>
-  canvas: 'restored' | 'skipped' | 'none'
 }
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 const MAX_IMAGES_PER_GROUP = 30
 const MAX_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024
 const ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
-const MEMO_FILE_ID = /^[a-zA-Z0-9_-]{1,128}$/
-const MAX_MEMO_SCENE_BYTES = 12 * 1024 * 1024
 
 interface BackupBinarySource {
   originalName: string
@@ -118,20 +94,6 @@ function imagePath(itemId: string, asset: ImageAsset) {
   return `images/${safeSegment(itemId)}/${safeSegment(asset.id)}.${extensionFor(asset.mimeType)}`
 }
 
-function memoImagePath(fileId: string, mimeType: string) {
-  return `memo/images/${safeSegment(fileId)}.${extensionFor(mimeType)}`
-}
-
-function sceneWithoutImages(scene: MemoCanvasScene) {
-  return {
-    ...scene,
-    elements: scene.elements.filter((value) => {
-      if (!value || typeof value !== 'object') return true
-      return (value as { type?: unknown }).type !== 'image'
-    })
-  }
-}
-
 function filenameTimestamp() {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai',
@@ -147,11 +109,10 @@ function assertNotCancelled(signal?: AbortSignal) {
 }
 
 async function loadManifest(includeOriginals: boolean) {
-  const [categories, items, preferences, memoCanvas] = await Promise.all([
+  const [categories, items, preferences] = await Promise.all([
     api<Category[]>('/api/categories'),
     api<LibraryItem[]>('/api/items?status=all&sort=newest&trash=all'),
-    api<AppPreferences>('/api/preferences'),
-    fetchMemoCanvas()
+    api<AppPreferences>('/api/preferences')
   ])
   const quickCategory = categories.find((category) => category.id === preferences.quickSaveCategoryId)
   const manifest: BackupManifest = {
@@ -186,22 +147,7 @@ async function loadManifest(includeOriginals: boolean) {
         sortOrder: asset.sortOrder,
         path: includeOriginals ? imagePath(item.id, asset) : null
       }))
-    })),
-    memoCanvas: {
-      scene: includeOriginals ? memoCanvas.scene : sceneWithoutImages(memoCanvas.scene),
-      background: memoCanvas.background,
-      colorMode: memoCanvas.colorMode,
-      updatedAt: memoCanvas.updatedAt,
-      assets: includeOriginals
-        ? memoCanvas.assets.map((asset) => ({
-            fileId: asset.fileId,
-            mimeType: asset.mimeType,
-            size: asset.size,
-            createdAt: asset.createdAt,
-            path: memoImagePath(asset.fileId, asset.mimeType)
-          }))
-        : []
-    }
+    }))
   }
   const assetSources = new Map<string, BackupBinarySource>()
   if (includeOriginals) {
@@ -210,11 +156,6 @@ async function loadManifest(includeOriginals: boolean) {
       originalUrl: asset.originalUrl,
       size: asset.size
     })))
-    memoCanvas.assets.forEach((asset) => assetSources.set(memoImagePath(asset.fileId, asset.mimeType), {
-      originalName: `画布图片 ${asset.fileId}`,
-      originalUrl: asset.url,
-      size: asset.size
-    }))
   }
   return { manifest, assetSources }
 }
@@ -372,57 +313,6 @@ function finiteTimestamp(value: unknown, field: string) {
   return result
 }
 
-function validateMemoCanvas(value: unknown, sourceVersion: number): BackupMemoCanvas | null {
-  if (sourceVersion < 3 || value === null || value === undefined) return null
-  const entry = objectValue(value)
-  const background = entry.background
-  const colorMode = entry.colorMode
-  if (background !== 'solid' && background !== 'grid' && background !== 'dots' && background !== 'lines') {
-    throw new Error('备忘录画布背景无效')
-  }
-  if (colorMode !== 'light' && colorMode !== 'dark') throw new Error('备忘录画布昼夜模式无效')
-  const scene = objectValue(entry.scene)
-  if (!Array.isArray(scene.elements) || scene.elements.length > 100_000) throw new Error('备忘录画布元素无效')
-  if (!scene.appState || typeof scene.appState !== 'object' || Array.isArray(scene.appState)) {
-    throw new Error('备忘录画布视图设置无效')
-  }
-  const normalizedScene: MemoCanvasScene = {
-    elements: scene.elements,
-    appState: scene.appState as Record<string, unknown>
-  }
-  if (strToU8(JSON.stringify(normalizedScene)).length > MAX_MEMO_SCENE_BYTES) {
-    throw new Error('备忘录画布内容超过 12 MB 限制')
-  }
-  if (!Array.isArray(entry.assets) || entry.assets.length > 10_000) throw new Error('备忘录画布图片清单无效')
-  const assets = entry.assets.map((assetValue): BackupMemoAsset => {
-    const asset = objectValue(assetValue)
-    const fileId = String(asset.fileId || '')
-    const mimeType = String(asset.mimeType || '')
-    const size = Number(asset.size)
-    const path = asset.path === null || asset.path === undefined ? null : String(asset.path)
-    if (!MEMO_FILE_ID.test(fileId)) throw new Error('备忘录画布图片编号无效')
-    if (!ALLOWED_MIME_TYPES.has(mimeType) || !Number.isFinite(size) || size < 1 || size > MAX_IMAGE_BYTES) {
-      throw new Error('备忘录画布图片资料无效')
-    }
-    if (path && !cleanArchivePath(path)) throw new Error('备忘录备份中包含危险图片路径')
-    return {
-      fileId,
-      mimeType: mimeType as BackupMemoAsset['mimeType'],
-      size,
-      createdAt: finiteTimestamp(asset.createdAt, '画布图片'),
-      path
-    }
-  })
-  if (new Set(assets.map((asset) => asset.fileId)).size !== assets.length) throw new Error('备忘录画布图片编号重复')
-  return {
-    scene: normalizedScene,
-    background,
-    colorMode,
-    updatedAt: entry.updatedAt ? finiteTimestamp(entry.updatedAt, '画布') : 0,
-    assets
-  }
-}
-
 function validateManifest(raw: unknown): BackupManifest {
   const root = objectValue(raw)
   const sourceVersion = Number(root.version)
@@ -513,7 +403,6 @@ function validateManifest(raw: unknown): BackupManifest {
   if (quickSaveCategoryName && !categoryNames.has(quickSaveCategoryName.toLocaleLowerCase('zh-CN'))) {
     throw new Error('默认类别在类别清单中不存在')
   }
-  const memoCanvas = validateMemoCanvas(root.memoCanvas, sourceVersion)
   return {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
@@ -522,8 +411,7 @@ function validateManifest(raw: unknown): BackupManifest {
     includeOriginals: Boolean(root.includeOriginals),
     preferences: { quickSaveCategoryName },
     categories,
-    items,
-    memoCanvas
+    items
   }
 }
 
@@ -547,27 +435,22 @@ export async function validateBackupFile(file: File, onProgress?: (progress: Bac
     throw new Error('manifest.json 无法解析')
   }
   const manifest = validateManifest(parsed)
-  const declared = new Map<string, BackupAsset | BackupMemoAsset>()
+  const declared = new Map<string, BackupAsset>()
   manifest.items.forEach((item) => item.assets.forEach((asset) => {
     if (asset.path) {
       if (declared.has(asset.path)) throw new Error('多个图片记录使用了同一路径：' + asset.path)
       declared.set(asset.path, asset)
     }
   }))
-  manifest.memoCanvas?.assets.forEach((asset) => {
-    if (asset.path) {
-      if (declared.has(asset.path)) throw new Error('多个图片记录使用了同一路径：' + asset.path)
-      declared.set(asset.path, asset)
-    }
-  })
-  const extraFiles = names.filter((name) => name !== 'manifest.json' && !declared.has(name))
+  // Gracefully ignore legacy memo/ assets from older v3 backups.
+  const extraFiles = names.filter((name) => name !== 'manifest.json' && !name.startsWith('memo/') && !declared.has(name))
   if (extraFiles.length) throw new Error('ZIP 中存在清单未声明的文件：' + extraFiles[0])
   const images = new Map<string, File>()
   let totalBytes = 0
   let completed = 0
   for (const [path, asset] of declared) {
     const bytes = archive[path]
-    const displayName = 'originalName' in asset ? asset.originalName : `画布图片 ${asset.fileId}`
+    const displayName = asset.originalName
     if (!bytes) throw new Error('备份缺少原图：' + displayName)
     if (
       !bytes.length ||
@@ -611,7 +494,7 @@ export async function restoreBackup(
     }
   }
   categories = [...categoryByName.values()]
-  const report: RestoreReport = { added: 0, skipped: 0, failed: [], canvas: 'none' }
+  const report: RestoreReport = { added: 0, skipped: 0, failed: [] }
   const total = backup.manifest.items.length
   for (let index = 0; index < backup.manifest.items.length; index += 1) {
     assertNotCancelled(options.signal)
@@ -645,45 +528,6 @@ export async function restoreBackup(
     ? categoryByName.get(backup.manifest.preferences.quickSaveCategoryName.toLocaleLowerCase('zh-CN'))
     : null
   await jsonRequest('/api/preferences', 'PATCH', { quickSaveCategoryId: defaultCategory?.id || null })
-  if (backup.manifest.memoCanvas) {
-    try {
-      const currentCanvas = await fetchMemoCanvas()
-      const currentHasContent = currentCanvas.scene.elements.some((value) => (
-        value && typeof value === 'object' && !(value as { isDeleted?: boolean }).isDeleted
-      ))
-      if (mode === 'merge' && currentHasContent) {
-        report.canvas = 'skipped'
-      } else {
-        const memo = backup.manifest.memoCanvas
-        const restoredFileIds: string[] = []
-        for (const asset of memo.assets) {
-          assertNotCancelled(options.signal)
-          if (!asset.path) continue
-          const file = backup.images.get(asset.path)
-          if (!file) throw new Error('缺少画布原图：' + asset.fileId)
-          const form = new FormData()
-          form.set('fileId', asset.fileId)
-          form.set('createdAt', String(asset.createdAt))
-          form.set('file', file, file.name)
-          await api('/api/memo-assets', { method: 'POST', body: form, signal: options.signal })
-          restoredFileIds.push(asset.fileId)
-        }
-        await jsonRequest('/api/memo-canvas', 'PUT', {
-          scene: memo.scene,
-          background: memo.background,
-          colorMode: memo.colorMode,
-          fileIds: restoredFileIds,
-          updatedAt: memo.updatedAt
-        })
-        report.canvas = 'restored'
-      }
-    } catch (error) {
-      report.failed.push({
-        title: '备忘录画布',
-        error: error instanceof Error ? error.message : '画布恢复失败'
-      })
-    }
-  }
   options.onProgress?.({ phase: 'restoring', completed: total, total, message: '恢复处理完成' })
   return report
 }

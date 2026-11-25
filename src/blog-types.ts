@@ -64,6 +64,20 @@ export interface BlogProfile {
   }
 }
 
+export interface BlogRailSummary {
+  aboutSubtitle: string
+  aboutExcerpt: string
+  recentAlbumPhotos: Array<{
+    url: string
+    thumbUrl: string
+    alt: string
+    postShortId: string
+  }>
+  equipment: BlogCatalogItem[]
+  labs: BlogCatalogItem[]
+  friends: BlogFriend[]
+}
+
 export interface BlogBootstrap {
   configured: boolean
   isOwner: boolean
@@ -71,6 +85,27 @@ export interface BlogBootstrap {
   profile: BlogProfile
   categories: Array<{ name: string; count: number }>
   tags: Array<{ name: string; count: number }>
+  initialPosts?: BlogPostsResponse
+  tracks?: BlogMusicTrack[]
+  railSummary?: BlogRailSummary
+}
+
+export interface StorageUsageSnapshot {
+  libraryAssetsBytes: number
+  blogMediaBytes: number
+  memoAssetsBytes: number
+  totalBytes: number
+  quotaBytes: number
+  orphanBlogMediaCount: number
+  orphanBlogMediaBytes: number
+  legacyMemoCount: number
+}
+
+export interface BlogMediaGcResult {
+  deletedCount: number
+  freedBytes: number
+  legacyMemoDeletedCount: number
+  legacyMemoFreedBytes: number
 }
 
 export interface BlogLikeEntry {

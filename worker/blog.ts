@@ -2,12 +2,15 @@ import type {
   BlogAdjacentPost,
   BlogArchiveItem,
   BlogBootstrap,
+  BlogCatalogItem,
   BlogComment,
+  BlogFriend,
   BlogImageItem,
   BlogImportedItemDraft,
   BlogLikeEntry,
   BlogLinkCard,
   BlogMediaUpload,
+  BlogMusicTrack,
   BlogPostDetail,
   BlogPostSummary,
   BlogPostType,
@@ -24,6 +27,9 @@ import {
   MAX_LYRIC_BYTES,
   MAX_VIDEO_BYTES,
   parseByteRange,
+  serializeCatalogItem,
+  serializeFriend,
+  serializeMusicTrack,
   validateCatalogSection,
   validateMediaKind,
   validatePageSlug,
@@ -64,8 +70,16 @@ const UNLOCK_RATE_LIMIT = 10
 const UNLOCK_RATE_WINDOW_MS = 15 * 60 * 1000
 const COMMENT_RATE_LIMIT = 15
 const COMMENT_RATE_WINDOW_MS = 5 * 60 * 1000
+const LIKE_RATE_LIMIT = 30
+const LIKE_RATE_WINDOW_MS = 5 * 60 * 1000
+const DEFAULT_GC_MIN_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_MEDIA_UPLOAD_BATCH = 20
 const MAX_IMPORT_IMAGES = 9
+
+export const MEDIA_SECURITY_HEADERS: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  'content-security-policy': 'sandbox'
+}
 
 const DEFAULT_SETTINGS = {
   siteName: '朋友圈博客',
@@ -77,6 +91,29 @@ const DEFAULT_SETTINGS = {
 
 const unlockAttempts = new Map<string, { count: number; resetAt: number }>()
 const commentAttempts = new Map<string, { count: number; resetAt: number }>()
+const likeAttempts = new Map<string, { count: number; resetAt: number }>()
+
+function isNullBodyStatus(status: number): boolean {
+  return status === 101 || status === 204 || status === 205 || status === 304
+}
+
+export function applyGlobalSecurityHeaders(response: Response): Response {
+  const headers = new Headers(response.headers)
+  if (!headers.has('x-content-type-options')) {
+    headers.set('x-content-type-options', 'nosniff')
+  }
+  if (!headers.has('x-frame-options')) {
+    headers.set('x-frame-options', 'DENY')
+  }
+  if (!headers.has('referrer-policy')) {
+    headers.set('referrer-policy', 'strict-origin-when-cross-origin')
+  }
+  return new Response(isNullBodyStatus(response.status) ? null : response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  })
+}
 
 function json(data: unknown, status = 200, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
@@ -210,7 +247,7 @@ export async function expectedUnlockToken(postId: string, passwordHash: string):
 
 export function buildUnlockCookie(shortId: string, token: string, requestUrl: URL): string {
   const secure = requestUrl.protocol === 'https:' ? '; Secure' : ''
-  return `${unlockCookieName(shortId)}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${UNLOCK_COOKIE_MAX_AGE}${secure}`
+  return `${unlockCookieName(shortId)}=${encodeURIComponent(token)}; Path=/api/blog/; HttpOnly; SameSite=Lax; Max-Age=${UNLOCK_COOKIE_MAX_AGE}${secure}`
 }
 
 export function sanitizeVisitorHeader(raw: string | null | undefined): string | null {
@@ -227,12 +264,246 @@ export async function resolveVisitorKey(
   if (isOwner && ownerId) {
     return `owner:${ownerId}`
   }
+  const ip = (request.headers.get('cf-connecting-ip') || 'local').trim() || 'local'
   const headerVisitor = sanitizeVisitorHeader(request.headers.get('x-blog-visitor'))
   const seed = headerVisitor
-    ? `header:${headerVisitor}`
-    : `ipua:${request.headers.get('cf-connecting-ip') || 'local'}:${request.headers.get('user-agent') || ''}`
+    ? `${headerVisitor}:${ip}`
+    : `ipua:${ip}:${request.headers.get('user-agent') || ''}`
   const hashed = await hashToken(seed)
   return `visitor:${hashed}`
+}
+
+export function escapeHtml(input: string): string {
+  return String(input || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+export function sanitizeOgText(input: unknown, maxLength = 200): string {
+  const cleaned = String(input || '')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!cleaned) return ''
+  if (cleaned.length <= maxLength) return cleaned
+  return `${cleaned.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`
+}
+
+export function toAbsoluteMetaUrl(rawUrl: unknown, origin: string): string | null {
+  const trimmed = String(rawUrl || '').trim()
+  if (!trimmed) return null
+  try {
+    if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+      return new URL(trimmed, origin).toString()
+    }
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+export type BlogHtmlRouteMatch =
+  | { kind: 'home' }
+  | { kind: 'archives' }
+  | { kind: 'about' }
+  | { kind: 'equipment' }
+  | { kind: 'labs' }
+  | { kind: 'friends' }
+  | { kind: 'article'; shortId: string }
+  | { kind: 'moment'; shortId: string }
+  | { kind: 'blog_other' }
+
+export function matchBlogHtmlRoute(pathname: string): BlogHtmlRouteMatch | null {
+  const clean = pathname === '/' ? '/' : pathname.replace(/\/+$/, '') || '/'
+  if (clean === '/' || clean === '/blog') return { kind: 'home' }
+  const normalized = clean.startsWith('/blog/') ? clean.slice('/blog'.length) : clean
+  if (normalized === '/archives') return { kind: 'archives' }
+  if (normalized === '/about') return { kind: 'about' }
+  if (normalized === '/equipment') return { kind: 'equipment' }
+  if (normalized === '/labs') return { kind: 'labs' }
+  if (normalized === '/friends') return { kind: 'friends' }
+
+  const articleMatch = normalized.match(/^\/articles\/([^/]+)$/)
+  if (articleMatch) {
+    try {
+      return { kind: 'article', shortId: decodeURIComponent(articleMatch[1]) }
+    } catch {
+      return { kind: 'article', shortId: articleMatch[1] }
+    }
+  }
+
+  const momentMatch = normalized.match(/^\/moments\/([^/]+)$/)
+  if (momentMatch) {
+    try {
+      return { kind: 'moment', shortId: decodeURIComponent(momentMatch[1]) }
+    } catch {
+      return { kind: 'moment', shortId: momentMatch[1] }
+    }
+  }
+
+  if (clean.startsWith('/blog/')) return { kind: 'blog_other' }
+  return null
+}
+
+export interface BlogOgMeta {
+  siteName: string
+  title: string
+  description: string
+  image: string | null
+  url: string
+  type: 'website' | 'article'
+  rssTitle: string
+  rssHref: string
+}
+
+export function buildBlogOgMeta(options: {
+  origin: string
+  pathname: string
+  route: BlogHtmlRouteMatch
+  siteName?: string | null
+  siteBio?: string | null
+  siteImage?: string | null
+  aboutPage?: { title?: string | null; subtitle?: string | null; content?: string | null; coverUrl?: string | null } | null
+  post?: {
+    type: BlogPostType
+    title?: string | null
+    excerpt?: string | null
+    content?: string | null
+    imageUrl?: string | null
+    visibility: BlogVisibility
+  } | null
+}): BlogOgMeta {
+  const origin = options.origin.replace(/\/+$/, '')
+  const siteName = sanitizeOgText(options.siteName, 60) || DEFAULT_SETTINGS.siteName
+  const siteBio = sanitizeOgText(options.siteBio, 200) || DEFAULT_SETTINGS.bio
+  const siteImage = toAbsoluteMetaUrl(options.siteImage, origin)
+  const canonicalUrl = `${origin}${options.pathname.startsWith('/') ? options.pathname : `/${options.pathname}`}`
+
+  const genericSiteMeta = (): BlogOgMeta => ({
+    siteName,
+    title: siteName,
+    description: siteBio,
+    image: siteImage,
+    url: canonicalUrl,
+    type: 'website',
+    rssTitle: `${siteName} RSS`,
+    rssHref: '/api/blog/feed.xml'
+  })
+
+  switch (options.route.kind) {
+    case 'home':
+    case 'blog_other':
+      return genericSiteMeta()
+    case 'archives':
+      return { ...genericSiteMeta(), title: sanitizeOgText(`归档 · ${siteName}`, 120) }
+    case 'equipment':
+      return { ...genericSiteMeta(), title: sanitizeOgText(`我的装备 · ${siteName}`, 120) }
+    case 'labs':
+      return { ...genericSiteMeta(), title: sanitizeOgText(`实验室 · ${siteName}`, 120) }
+    case 'friends':
+      return { ...genericSiteMeta(), title: sanitizeOgText(`友人帐 · ${siteName}`, 120) }
+    case 'about': {
+      const pageTitle = sanitizeOgText(options.aboutPage?.title, 60) || '关于我'
+      const pageDesc =
+        sanitizeOgText(
+          buildExcerpt(String(options.aboutPage?.content || ''), options.aboutPage?.subtitle, 160),
+          200
+        ) || siteBio
+      const pageImg = toAbsoluteMetaUrl(options.aboutPage?.coverUrl, origin) || siteImage
+      return {
+        ...genericSiteMeta(),
+        title: sanitizeOgText(`${pageTitle} · ${siteName}`, 120),
+        description: pageDesc,
+        image: pageImg
+      }
+    }
+    case 'article':
+    case 'moment': {
+      const post = options.post
+      // Strict privacy guarantee: private or password-protected (or missing) posts emit ONLY generic site meta
+      if (!post || post.visibility !== 'public') {
+        return genericSiteMeta()
+      }
+      const fallbackHeading =
+        buildExcerpt(String(post.content || ''), post.excerpt, 48) ||
+        (post.type === 'article' ? '无题文章' : '动态')
+      const postTitle = sanitizeOgText(post.title, 80) || sanitizeOgText(fallbackHeading, 80)
+      const postDesc =
+        sanitizeOgText(buildExcerpt(String(post.content || ''), post.excerpt, 160), 200) || siteBio
+      const postImage = toAbsoluteMetaUrl(post.imageUrl, origin) || siteImage
+      return {
+        siteName,
+        title: sanitizeOgText(`${postTitle} · ${siteName}`, 120),
+        description: postDesc,
+        image: postImage,
+        url: canonicalUrl,
+        type: 'article',
+        rssTitle: `${siteName} RSS`,
+        rssHref: '/api/blog/feed.xml'
+      }
+    }
+  }
+}
+
+export function renderBlogOgHeadHtml(meta: BlogOgMeta): string {
+  const twitterCard = meta.image ? 'summary_large_image' : 'summary'
+  const lines = [
+    `<title>${escapeHtml(meta.title)}</title>`,
+    `<meta name="description" content="${escapeHtml(meta.description)}" />`,
+    `<meta property="og:site_name" content="${escapeHtml(meta.siteName)}" />`,
+    `<meta property="og:type" content="${escapeHtml(meta.type)}" />`,
+    `<meta property="og:title" content="${escapeHtml(meta.title)}" />`,
+    `<meta property="og:description" content="${escapeHtml(meta.description)}" />`,
+    `<meta property="og:url" content="${escapeHtml(meta.url)}" />`,
+    meta.image ? `<meta property="og:image" content="${escapeHtml(meta.image)}" />` : '',
+    `<meta name="twitter:card" content="${twitterCard}" />`,
+    `<meta name="twitter:title" content="${escapeHtml(meta.title)}" />`,
+    `<meta name="twitter:description" content="${escapeHtml(meta.description)}" />`,
+    meta.image ? `<meta name="twitter:image" content="${escapeHtml(meta.image)}" />` : '',
+    `<link rel="alternate" type="application/rss+xml" title="${escapeHtml(meta.rssTitle)}" href="${escapeHtml(meta.rssHref)}" />`
+  ]
+  return lines.filter(Boolean).join('\n    ')
+}
+
+export function extractMediaIdFromBlogUrl(rawUrl: unknown): string | null {
+  if (typeof rawUrl !== 'string') return null
+  const trimmed = rawUrl.trim()
+  if (!trimmed) return null
+  const match = /\/api\/blog\/media\/([^/?#\s"')<>\\]+)/.exec(trimmed)
+  if (!match || !match[1]) return null
+  let id: string
+  try {
+    id = decodeURIComponent(match[1]).trim()
+  } catch {
+    id = match[1].trim()
+  }
+  if (!id || id === 'gc') return null
+  return id
+}
+
+export function extractBlogMediaIdsFromText(text: unknown): string[] {
+  if (typeof text !== 'string' || !text.includes('/api/blog/media/')) return []
+  const ids = new Set<string>()
+  const regex = /\/api\/blog\/media\/([^/?#\s"')<>\\]+)/g
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(text)) !== null) {
+    if (!match[1]) continue
+    let id: string
+    try {
+      id = decodeURIComponent(match[1]).trim()
+    } catch {
+      id = match[1].trim()
+    }
+    if (id && id !== 'gc') {
+      ids.add(id)
+    }
+  }
+  return [...ids]
 }
 
 export function escapeXml(input: string): string {
@@ -814,26 +1085,40 @@ async function loadAdjacentPosts(
 ): Promise<{ prev: BlogAdjacentPost | null; next: BlogAdjacentPost | null }> {
   const currentId = String(currentRow.id)
   const currentType = String(currentRow.type) as BlogPostType
+  const publishedAt = Number(currentRow.published_at || 0)
+  const createdAt = Number(currentRow.created_at || 0)
   const visibilityClause = isOwner ? '' : "AND visibility <> 'private'"
   const typeClause = currentType === 'article' ? "AND type = 'article'" : ''
 
-  const res = await env.DB.prepare(
-    `SELECT id, short_id, type, title, excerpt, content, visibility, password_hash, published_at FROM blog_posts WHERE user_id = ? ${visibilityClause} ${typeClause} ORDER BY published_at DESC, created_at DESC`
-  ).bind(ownerId).all<Row>()
+  const [prevRow, nextRow] = await Promise.all([
+    env.DB.prepare(
+      `SELECT id, short_id, type, title, excerpt, substr(content, 1, 160) AS content_head, visibility, password_hash, published_at ` +
+        `FROM blog_posts WHERE user_id = ? ${visibilityClause} ${typeClause} AND id <> ? ` +
+        `AND (published_at > ? OR (published_at = ? AND created_at > ?) OR (published_at = ? AND created_at = ? AND id > ?)) ` +
+        `ORDER BY published_at ASC, created_at ASC, id ASC LIMIT 1`
+    )
+      .bind(ownerId, currentId, publishedAt, publishedAt, createdAt, publishedAt, createdAt, currentId)
+      .first<Row>(),
+    env.DB.prepare(
+      `SELECT id, short_id, type, title, excerpt, substr(content, 1, 160) AS content_head, visibility, password_hash, published_at ` +
+        `FROM blog_posts WHERE user_id = ? ${visibilityClause} ${typeClause} AND id <> ? ` +
+        `AND (published_at < ? OR (published_at = ? AND created_at < ?) OR (published_at = ? AND created_at = ? AND id < ?)) ` +
+        `ORDER BY published_at DESC, created_at DESC, id DESC LIMIT 1`
+    )
+      .bind(ownerId, currentId, publishedAt, publishedAt, createdAt, publishedAt, createdAt, currentId)
+      .first<Row>()
+  ])
 
-  const rows = res.results
-  const index = rows.findIndex((r) => String(r.id) === currentId)
-  if (index === -1) return { prev: null, next: null }
-
-  const toAdjacent = async (row: Row | undefined): Promise<BlogAdjacentPost | null> => {
+  const toAdjacent = async (row: Row | null | undefined): Promise<BlogAdjacentPost | null> => {
     if (!row) return null
     const unlocked = await isPostUnlocked(request, row, isOwner)
     const locked = String(row.visibility) === 'password' && !unlocked
     const type = String(row.type) as BlogPostType
     const rawTitle = String(row.title || '')
+    const previewContent = String(row.content_head ?? row.content ?? '')
     const title = locked
       ? rawTitle || '加密动态'
-      : rawTitle || buildExcerpt(String(row.content || ''), String(row.excerpt || ''), 40) || (type === 'article' ? '无题文章' : '动态')
+      : rawTitle || buildExcerpt(previewContent, String(row.excerpt || ''), 40) || (type === 'article' ? '无题文章' : '动态')
     return {
       shortId: String(row.short_id),
       type,
@@ -842,10 +1127,7 @@ async function loadAdjacentPosts(
     }
   }
 
-  const [prev, next] = await Promise.all([
-    toAdjacent(rows[index - 1]),
-    toAdjacent(rows[index + 1])
-  ])
+  const [prev, next] = await Promise.all([toAdjacent(prevRow), toAdjacent(nextRow)])
   return { prev, next }
 }
 
@@ -899,9 +1181,818 @@ async function verifyMediaOwnership(env: Env, ownerId: string, mediaId: string |
   return clean
 }
 
+export function extractBlogMediaIdsFromPostRow(row: Row): string[] {
+  const ids = new Set<string>()
+  const addId = (raw: unknown) => {
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (trimmed && trimmed !== 'gc') ids.add(trimmed)
+    }
+  }
+  const addUrl = (raw: unknown) => {
+    const extracted = extractMediaIdFromBlogUrl(raw)
+    if (extracted) ids.add(extracted)
+  }
+
+  addId(row.cover_media_id)
+  addUrl(row.cover_url)
+
+  const rawImages = safeParseJson<unknown>(row.images_json, [])
+  if (Array.isArray(rawImages)) {
+    for (const entry of rawImages) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const img = entry as Record<string, unknown>
+      addId(img.mediaId)
+      addId(img.liveVideoMediaId)
+      addUrl(img.url)
+      addUrl(img.thumbUrl)
+      addUrl(img.liveVideoUrl)
+    }
+  }
+
+  const metadata = parsePlainObject(safeParseJson<unknown>(row.metadata_json, {}))
+  if (metadata.video && typeof metadata.video === 'object' && !Array.isArray(metadata.video)) {
+    const vid = metadata.video as Record<string, unknown>
+    addId(vid.mediaId)
+    addUrl(vid.url)
+    addUrl(vid.coverUrl)
+  }
+  if (metadata.music && typeof metadata.music === 'object' && !Array.isArray(metadata.music)) {
+    const mus = metadata.music as Record<string, unknown>
+    addId(mus.audioMediaId)
+    addId(mus.coverMediaId)
+    addUrl(mus.audioUrl)
+    addUrl(mus.coverUrl)
+  }
+
+  const linkCard = safeParseJson<unknown>(row.link_card_json, null)
+  if (linkCard && typeof linkCard === 'object' && !Array.isArray(linkCard)) {
+    addUrl((linkCard as Record<string, unknown>).image)
+  }
+
+  for (const mdId of extractBlogMediaIdsFromText(row.content)) {
+    ids.add(mdId)
+  }
+
+  return [...ids]
+}
+
+export async function collectReferencedBlogMediaIds(env: Env, ownerId: string): Promise<Set<string>> {
+  const referenced = new Set<string>()
+  const addId = (raw: unknown) => {
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      if (trimmed && trimmed !== 'gc') referenced.add(trimmed)
+    }
+  }
+  const addUrl = (raw: unknown) => {
+    const id = extractMediaIdFromBlogUrl(raw)
+    if (id) referenced.add(id)
+  }
+
+  const [postsRes, settingsRow, pagesRes, musicRes, catalogRes, friendsRes, mediaPairsRes] =
+    await Promise.all([
+      env.DB.prepare(
+        "SELECT cover_media_id, cover_url, images_json, link_card_json, metadata_json, CASE WHEN content LIKE '%/api/blog/media/%' THEN content ELSE '' END AS content FROM blog_posts WHERE user_id = ?"
+      )
+        .bind(ownerId)
+        .all<Row>(),
+      loadOwnerSettingsRow(env, ownerId),
+      env.DB.prepare('SELECT cover_media_id, content FROM blog_pages WHERE user_id = ?')
+        .bind(ownerId)
+        .all<Row>(),
+      env.DB.prepare('SELECT audio_media_id, cover_media_id FROM blog_music_tracks WHERE user_id = ?')
+        .bind(ownerId)
+        .all<Row>(),
+      env.DB.prepare('SELECT image_media_id, image_url FROM blog_catalog_items WHERE user_id = ?')
+        .bind(ownerId)
+        .all<Row>(),
+      env.DB.prepare('SELECT avatar_media_id, avatar_url FROM blog_friends WHERE user_id = ?')
+        .bind(ownerId)
+        .all<Row>(),
+      env.DB.prepare('SELECT id, paired_media_id FROM blog_media WHERE user_id = ? AND paired_media_id IS NOT NULL')
+        .bind(ownerId)
+        .all<Row>()
+    ])
+
+  for (const post of postsRes.results) {
+    for (const id of extractBlogMediaIdsFromPostRow(post)) {
+      referenced.add(id)
+    }
+  }
+
+  if (settingsRow) {
+    addId(settingsRow.avatar_media_id)
+    addId(settingsRow.cover_media_id)
+  }
+
+  for (const page of pagesRes.results) {
+    addId(page.cover_media_id)
+    for (const id of extractBlogMediaIdsFromText(page.content)) {
+      referenced.add(id)
+    }
+  }
+
+  for (const track of musicRes.results) {
+    addId(track.audio_media_id)
+    addId(track.cover_media_id)
+  }
+
+  for (const item of catalogRes.results) {
+    addId(item.image_media_id)
+    addUrl(item.image_url)
+  }
+
+  for (const friend of friendsRes.results) {
+    addId(friend.avatar_media_id)
+    addUrl(friend.avatar_url)
+  }
+
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const pair of mediaPairsRes.results) {
+      const id = pair.id ? String(pair.id).trim() : ''
+      const pairedId = pair.paired_media_id ? String(pair.paired_media_id).trim() : ''
+      if (id && pairedId && referenced.has(id) && !referenced.has(pairedId)) {
+        referenced.add(pairedId)
+        changed = true
+      }
+    }
+  }
+
+  return referenced
+}
+
+function getEdgeCache(): Cache | null {
+  try {
+    if (typeof caches !== 'undefined' && caches && 'default' in caches) {
+      return (caches as unknown as { default?: Cache }).default || null
+    }
+  } catch {
+    // Ignore in environments without Cloudflare Cache API
+  }
+  return null
+}
+
+async function purgeBlogMediaEdgeCache(origin: string, mediaIds: string[]): Promise<void> {
+  const edgeCache = getEdgeCache()
+  if (!edgeCache || !mediaIds.length) return
+  const baseOrigin = origin.replace(/\/+$/, '')
+  const uniqueIds = [...new Set(mediaIds.filter(Boolean))]
+  await Promise.all(
+    uniqueIds.flatMap((id) => [
+      edgeCache.delete(new Request(`${baseOrigin}${blogMediaUrl(id)}`, { method: 'GET' })),
+      edgeCache.delete(new Request(`${baseOrigin}${blogMediaUrl(id, 'thumb')}`, { method: 'GET' }))
+    ])
+  )
+}
+
+export async function cleanupCandidateBlogMediaIds(
+  env: Env,
+  ownerId: string,
+  candidateIds: string[]
+): Promise<{ deletedCount: number; freedBytes: number }> {
+  const initialCandidates = new Set(
+    candidateIds.map((id) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean)
+  )
+  if (!initialCandidates.size) {
+    return { deletedCount: 0, freedBytes: 0 }
+  }
+
+  // Expand candidates with paired companions if any
+  for (const batch of chunkIds([...initialCandidates])) {
+    const ph = batch.map(() => '?').join(',')
+    const pairedRes = await env.DB.prepare(
+      `SELECT id, paired_media_id FROM blog_media WHERE user_id = ? AND (id IN (${ph}) OR paired_media_id IN (${ph}))`
+    )
+      .bind(ownerId, ...batch, ...batch)
+      .all<Row>()
+    for (const row of pairedRes.results) {
+      if (row.id) initialCandidates.add(String(row.id))
+      if (row.paired_media_id) initialCandidates.add(String(row.paired_media_id))
+    }
+  }
+
+  const referenced = await collectReferencedBlogMediaIds(env, ownerId)
+  const unreferencedCandidates = [...initialCandidates].filter((id) => !referenced.has(id))
+  if (!unreferencedCandidates.length) {
+    return { deletedCount: 0, freedBytes: 0 }
+  }
+
+  const rowsToDelete: Row[] = []
+  for (const batch of chunkIds(unreferencedCandidates)) {
+    const ph = batch.map(() => '?').join(',')
+    const res = await env.DB.prepare(
+      `SELECT id, storage_key, thumb_key, size FROM blog_media WHERE user_id = ? AND id IN (${ph})`
+    )
+      .bind(ownerId, ...batch)
+      .all<Row>()
+    rowsToDelete.push(...res.results)
+  }
+
+  if (!rowsToDelete.length) {
+    return { deletedCount: 0, freedBytes: 0 }
+  }
+
+  const idsToDelete = rowsToDelete.map((r) => String(r.id))
+  const r2Keys: string[] = []
+  let freedBytes = 0
+  for (const row of rowsToDelete) {
+    freedBytes += Number(row.size || 0)
+    if (row.storage_key) r2Keys.push(String(row.storage_key))
+    if (row.thumb_key) r2Keys.push(String(row.thumb_key))
+  }
+
+  for (const batch of chunkIds(idsToDelete)) {
+    const ph = batch.map(() => '?').join(',')
+    await env.DB.prepare(`DELETE FROM blog_media WHERE user_id = ? AND id IN (${ph})`)
+      .bind(ownerId, ...batch)
+      .run()
+  }
+
+  await deleteR2Keys(env, r2Keys)
+  return { deletedCount: idsToDelete.length, freedBytes }
+}
+
+export interface BlogMediaGcResult {
+  deletedCount: number
+  freedBytes: number
+  legacyMemoDeletedCount: number
+  legacyMemoFreedBytes: number
+}
+
+export async function runBlogMediaGc(
+  env: Env,
+  ownerId: string,
+  options?: { minAgeMs?: number; includeLegacyMemo?: boolean }
+): Promise<BlogMediaGcResult> {
+  const minAgeMs =
+    options?.minAgeMs !== undefined ? Math.max(0, Number(options.minAgeMs) || 0) : DEFAULT_GC_MIN_AGE_MS
+  const now = Date.now()
+
+  const [referenced, mediaRes] = await Promise.all([
+    collectReferencedBlogMediaIds(env, ownerId),
+    env.DB.prepare('SELECT id, storage_key, thumb_key, size, created_at FROM blog_media WHERE user_id = ?')
+      .bind(ownerId)
+      .all<Row>()
+  ])
+
+  const orphans = mediaRes.results.filter((row) => {
+    const id = String(row.id || '')
+    if (!id || referenced.has(id)) return false
+    if (minAgeMs <= 0) return true
+    return Number(row.created_at || 0) <= now - minAgeMs
+  })
+
+  let deletedCount = 0
+  let freedBytes = 0
+  if (orphans.length) {
+    const orphanIds = orphans.map((r) => String(r.id))
+    const r2Keys: string[] = []
+    for (const row of orphans) {
+      freedBytes += Number(row.size || 0)
+      if (row.storage_key) r2Keys.push(String(row.storage_key))
+      if (row.thumb_key) r2Keys.push(String(row.thumb_key))
+    }
+
+    for (const batch of chunkIds(orphanIds)) {
+      const ph = batch.map(() => '?').join(',')
+      await env.DB.prepare(`DELETE FROM blog_media WHERE user_id = ? AND id IN (${ph})`)
+        .bind(ownerId, ...batch)
+        .run()
+    }
+    await deleteR2Keys(env, r2Keys)
+    deletedCount = orphanIds.length
+  }
+
+  let legacyMemoDeletedCount = 0
+  let legacyMemoFreedBytes = 0
+
+  if (options?.includeLegacyMemo) {
+    const [canvasRow, memoAssetsRes] = await Promise.all([
+      env.DB.prepare('SELECT scene_json FROM memo_canvas WHERE user_id = ?').bind(ownerId).first<Row>(),
+      env.DB.prepare('SELECT file_id, storage_key, size FROM memo_assets WHERE user_id = ?')
+        .bind(ownerId)
+        .all<Row>()
+    ])
+
+    const defaultSceneKey = `memo/${ownerId}/scene.json`
+    const extraSceneKey =
+      canvasRow?.scene_json && String(canvasRow.scene_json).startsWith('r2:')
+        ? String(canvasRow.scene_json).slice(3)
+        : null
+
+    let sceneBytes = 0
+    try {
+      const headScene = await env.IMAGES.head(extraSceneKey || defaultSceneKey)
+      if (headScene && typeof headScene.size === 'number') {
+        sceneBytes = headScene.size
+      }
+    } catch {
+      // Ignore R2 head error if scene.json doesn't exist
+    }
+
+    legacyMemoDeletedCount = memoAssetsRes.results.length + (canvasRow ? 1 : 0)
+    legacyMemoFreedBytes =
+      memoAssetsRes.results.reduce((sum, r) => sum + Number(r.size || 0), 0) + sceneBytes
+
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM memo_assets WHERE user_id = ?').bind(ownerId),
+      env.DB.prepare('DELETE FROM memo_canvas WHERE user_id = ?').bind(ownerId)
+    ])
+
+    const memoKeys = [
+      ...memoAssetsRes.results.map((r) => String(r.storage_key || '')),
+      defaultSceneKey,
+      ...(extraSceneKey ? [extraSceneKey] : [])
+    ]
+    await deleteR2Keys(env, memoKeys)
+  }
+
+  return {
+    deletedCount,
+    freedBytes,
+    legacyMemoDeletedCount,
+    legacyMemoFreedBytes
+  }
+}
+
+type MediaAccessScope =
+  | { kind: 'public' }
+  | { kind: 'password'; passwordPosts: Row[] }
+  | { kind: 'private' }
+  | { kind: 'unreferenced' }
+
+async function resolveBlogMediaAccessScope(
+  env: Env,
+  ownerId: string,
+  mediaId: string,
+  pairedMediaId: string | null
+): Promise<MediaAccessScope> {
+  const targetIds = new Set<string>([mediaId])
+  if (pairedMediaId) targetIds.add(pairedMediaId)
+
+  const [reversePairedRes, settingsRow, pagesRes, musicRes, catalogRes, friendsRes, postsRes] =
+    await Promise.all([
+      env.DB.prepare('SELECT id FROM blog_media WHERE user_id = ? AND paired_media_id = ?')
+        .bind(ownerId, mediaId)
+        .all<Row>(),
+      loadOwnerSettingsRow(env, ownerId),
+      env.DB.prepare('SELECT cover_media_id, content FROM blog_pages WHERE user_id = ?')
+        .bind(ownerId)
+        .all<Row>(),
+      env.DB.prepare('SELECT audio_media_id, cover_media_id FROM blog_music_tracks WHERE user_id = ?')
+        .bind(ownerId)
+        .all<Row>(),
+      env.DB.prepare('SELECT image_media_id, image_url FROM blog_catalog_items WHERE user_id = ?')
+        .bind(ownerId)
+        .all<Row>(),
+      env.DB.prepare('SELECT avatar_media_id, avatar_url FROM blog_friends WHERE user_id = ?')
+        .bind(ownerId)
+        .all<Row>(),
+      env.DB.prepare(
+        "SELECT id, short_id, visibility, password_hash, cover_media_id, cover_url, images_json, link_card_json, metadata_json, CASE WHEN content LIKE '%/api/blog/media/%' THEN content ELSE '' END AS content FROM blog_posts WHERE user_id = ?"
+      )
+        .bind(ownerId)
+        .all<Row>()
+    ])
+
+  for (const row of reversePairedRes.results) {
+    if (row.id) targetIds.add(String(row.id))
+  }
+
+  const matchesTarget = (raw: unknown): boolean =>
+    typeof raw === 'string' && targetIds.has(raw.trim())
+  const matchesTargetUrl = (raw: unknown): boolean => {
+    const id = extractMediaIdFromBlogUrl(raw)
+    return Boolean(id && targetIds.has(id))
+  }
+
+  if (
+    settingsRow &&
+    (matchesTarget(settingsRow.avatar_media_id) || matchesTarget(settingsRow.cover_media_id))
+  ) {
+    return { kind: 'public' }
+  }
+
+  for (const page of pagesRes.results) {
+    if (matchesTarget(page.cover_media_id)) return { kind: 'public' }
+    if (extractBlogMediaIdsFromText(page.content).some((id) => targetIds.has(id))) {
+      return { kind: 'public' }
+    }
+  }
+
+  for (const track of musicRes.results) {
+    if (matchesTarget(track.audio_media_id) || matchesTarget(track.cover_media_id)) {
+      return { kind: 'public' }
+    }
+  }
+
+  for (const item of catalogRes.results) {
+    if (matchesTarget(item.image_media_id) || matchesTargetUrl(item.image_url)) {
+      return { kind: 'public' }
+    }
+  }
+
+  for (const friend of friendsRes.results) {
+    if (matchesTarget(friend.avatar_media_id) || matchesTargetUrl(friend.avatar_url)) {
+      return { kind: 'public' }
+    }
+  }
+
+  let hasPrivate = false
+  const passwordPosts: Row[] = []
+
+  for (const post of postsRes.results) {
+    const postMediaIds = extractBlogMediaIdsFromPostRow(post)
+    if (!postMediaIds.some((id) => targetIds.has(id))) continue
+    const vis = String(post.visibility || 'public')
+    if (vis === 'public') {
+      return { kind: 'public' }
+    }
+    if (vis === 'password') {
+      passwordPosts.push(post)
+    } else if (vis === 'private') {
+      hasPrivate = true
+    }
+  }
+
+  if (passwordPosts.length > 0) {
+    return { kind: 'password', passwordPosts }
+  }
+  if (hasPrivate) {
+    return { kind: 'private' }
+  }
+  return { kind: 'unreferenced' }
+}
+
+export async function resolveBlogOgMeta(env: Env, requestUrl: URL): Promise<BlogOgMeta> {
+  const route = matchBlogHtmlRoute(requestUrl.pathname) || { kind: 'home' as const }
+  const ownerRow = await env.DB.prepare('SELECT id FROM users ORDER BY created_at ASC LIMIT 1').first<Row>()
+  if (!ownerRow) {
+    return buildBlogOgMeta({
+      origin: requestUrl.origin,
+      pathname: requestUrl.pathname,
+      route
+    })
+  }
+
+  const ownerId = String(ownerRow.id)
+  const settingsRow = await loadOwnerSettingsRow(env, ownerId)
+  const profile = mapSettingsToProfile(settingsRow)
+  const siteImage = profile.coverUrl || profile.avatarUrl || null
+
+  if (route.kind === 'about') {
+    const aboutRow = await env.DB.prepare(
+      "SELECT title, subtitle, content, cover_media_id FROM blog_pages WHERE user_id = ? AND slug = 'about'"
+    )
+      .bind(ownerId)
+      .first<Row>()
+    return buildBlogOgMeta({
+      origin: requestUrl.origin,
+      pathname: requestUrl.pathname,
+      route,
+      siteName: profile.siteName,
+      siteBio: profile.bio,
+      siteImage,
+      aboutPage: aboutRow
+        ? {
+            title: aboutRow.title ? String(aboutRow.title) : null,
+            subtitle: aboutRow.subtitle ? String(aboutRow.subtitle) : null,
+            content: aboutRow.content ? String(aboutRow.content) : null,
+            coverUrl: aboutRow.cover_media_id ? blogMediaUrl(String(aboutRow.cover_media_id)) : null
+          }
+        : null
+    })
+  }
+
+  if (route.kind === 'article' || route.kind === 'moment') {
+    const postRow = await env.DB.prepare(
+      'SELECT type, title, excerpt, content, cover_media_id, cover_url, images_json, link_card_json, visibility FROM blog_posts WHERE user_id = ? AND short_id = ? LIMIT 1'
+    )
+      .bind(ownerId, route.shortId)
+      .first<Row>()
+
+    if (!postRow || String(postRow.visibility) !== 'public') {
+      return buildBlogOgMeta({
+        origin: requestUrl.origin,
+        pathname: requestUrl.pathname,
+        route,
+        siteName: profile.siteName,
+        siteBio: profile.bio,
+        siteImage,
+        post: null
+      })
+    }
+
+    const images = sanitizeImageItems(safeParseJson<unknown>(postRow.images_json, []))
+    const linkCard = sanitizeLinkCard(safeParseJson<unknown>(postRow.link_card_json, null))
+    const imageUrl = resolveCoverUrl(postRow) || images[0]?.url || linkCard?.image || null
+
+    return buildBlogOgMeta({
+      origin: requestUrl.origin,
+      pathname: requestUrl.pathname,
+      route,
+      siteName: profile.siteName,
+      siteBio: profile.bio,
+      siteImage,
+      post: {
+        type: String(postRow.type) as BlogPostType,
+        title: String(postRow.title || ''),
+        excerpt: String(postRow.excerpt || ''),
+        content: String(postRow.content || ''),
+        imageUrl,
+        visibility: 'public'
+      }
+    })
+  }
+
+  return buildBlogOgMeta({
+    origin: requestUrl.origin,
+    pathname: requestUrl.pathname,
+    route,
+    siteName: profile.siteName,
+    siteBio: profile.bio,
+    siteImage
+  })
+}
+
+interface QueryBlogPostsOptions {
+  page: number
+  limit: number
+  typeParam?: string
+  visibilityParam?: string
+  tagFilter?: string
+  categoryFilter?: string
+  queryNeedle?: string
+}
+
+async function queryBlogPostsPage(
+  env: Env,
+  request: Request,
+  auth: AuthContext,
+  opts: QueryBlogPostsOptions
+): Promise<BlogPostsResponse> {
+  const { page, limit } = opts
+  if (!auth.owner) {
+    return { posts: [], total: 0, hasMore: false, page, limit }
+  }
+
+  const typeParam = opts.typeParam || 'all'
+  const visibilityParam = opts.visibilityParam || 'all'
+  const tagFilter = (opts.tagFilter || '').trim()
+  const categoryFilter = (opts.categoryFilter || '').trim()
+  const queryNeedle = (opts.queryNeedle || '').trim().toLocaleLowerCase('zh-CN')
+
+  const whereParts: string[] = ['user_id = ?']
+  const bindings: Array<string | number> = [auth.owner.id]
+
+  if (typeParam === 'moment' || typeParam === 'article') {
+    whereParts.push('type = ?')
+    bindings.push(typeParam)
+  }
+
+  if (auth.isOwner) {
+    if (visibilityParam === 'public' || visibilityParam === 'private' || visibilityParam === 'password') {
+      whereParts.push('visibility = ?')
+      bindings.push(visibilityParam)
+    }
+  } else {
+    whereParts.push("visibility <> 'private'")
+  }
+
+  if (categoryFilter) {
+    whereParts.push('category = ?')
+    bindings.push(categoryFilter)
+  }
+
+  let matchedIds: string[] = []
+  const lockedById = new Map<string, boolean>()
+
+  if (!queryNeedle) {
+    // Lightweight index scan: NO content / images_json / metadata_json / link_card_json fetched
+    const metaRes = await env.DB.prepare(
+      `SELECT id, tags_json FROM blog_posts WHERE ${whereParts.join(' AND ')} ORDER BY is_pinned DESC, published_at DESC, created_at DESC`
+    )
+      .bind(...bindings)
+      .all<Row>()
+
+    const needleTag = tagFilter.toLocaleLowerCase('zh-CN')
+    for (const row of metaRes.results) {
+      if (needleTag) {
+        const tags = parseTagsColumn(row.tags_json)
+        if (!tags.some((t) => t.toLocaleLowerCase('zh-CN') === needleTag)) continue
+      }
+      matchedIds.push(String(row.id))
+    }
+  } else {
+    // Fallback when q search needs content LIKE ?
+    const escapedLike = `%${queryNeedle.replace(/[\\%_]/g, '\\$&')}%`
+    const searchWhere = [
+      ...whereParts,
+      "(LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(excerpt) LIKE ? ESCAPE '\\' OR LOWER(content) LIKE ? ESCAPE '\\' OR LOWER(category) LIKE ? ESCAPE '\\' OR LOWER(location_name) LIKE ? ESCAPE '\\' OR LOWER(tags_json) LIKE ? ESCAPE '\\')"
+    ]
+    const searchRes = await env.DB.prepare(
+      `SELECT id, short_id, title, excerpt, content, category, location_name, tags_json, visibility, password_hash FROM blog_posts WHERE ${searchWhere.join(' AND ')} ORDER BY is_pinned DESC, published_at DESC, created_at DESC`
+    )
+      .bind(...bindings, escapedLike, escapedLike, escapedLike, escapedLike, escapedLike, escapedLike)
+      .all<Row>()
+
+    const needleTag = tagFilter.toLocaleLowerCase('zh-CN')
+    for (const row of searchRes.results) {
+      const tags = parseTagsColumn(row.tags_json)
+      if (needleTag && !tags.some((t) => t.toLocaleLowerCase('zh-CN') === needleTag)) {
+        continue
+      }
+      const unlocked = await isPostUnlocked(request, row, auth.isOwner)
+      const locked = String(row.visibility) === 'password' && !unlocked
+      lockedById.set(String(row.id), locked)
+
+      const haystacks = locked
+        ? [String(row.title || ''), String(row.category || ''), ...tags]
+        : [
+            String(row.title || ''),
+            String(row.excerpt || ''),
+            String(row.content || ''),
+            String(row.category || ''),
+            String(row.location_name || ''),
+            ...tags
+          ]
+      if (haystacks.some((val) => val.toLocaleLowerCase('zh-CN').includes(queryNeedle))) {
+        matchedIds.push(String(row.id))
+      }
+    }
+  }
+
+  const total = matchedIds.length
+  const start = (page - 1) * limit
+  const pageIds = matchedIds.slice(start, start + limit)
+
+  if (!pageIds.length) {
+    return { posts: [], total, hasMore: false, page, limit }
+  }
+
+  const fullRowMap = new Map<string, Row>()
+  for (const batch of chunkIds(pageIds)) {
+    const ph = batch.map(() => '?').join(',')
+    const fullRes = await env.DB.prepare(
+      `SELECT * FROM blog_posts WHERE user_id = ? AND id IN (${ph})`
+    )
+      .bind(auth.owner.id, ...batch)
+      .all<Row>()
+    for (const row of fullRes.results) {
+      fullRowMap.set(String(row.id), row)
+    }
+  }
+
+  const orderedPageRows = pageIds
+    .map((id) => fullRowMap.get(id))
+    .filter((row): row is Row => Boolean(row))
+
+  const [visitorKey, pageEvaluated] = await Promise.all([
+    resolveVisitorKey(request, auth.isOwner, auth.owner.id),
+    Promise.all(
+      orderedPageRows.map(async (row) => {
+        const id = String(row.id)
+        const cachedLocked = lockedById.get(id)
+        if (cachedLocked !== undefined) {
+          return { row, locked: cachedLocked }
+        }
+        const unlocked = await isPostUnlocked(request, row, auth.isOwner)
+        return { row, locked: String(row.visibility) === 'password' && !unlocked }
+      })
+    )
+  ])
+
+  const interactions = await loadPostInteractions(
+    env,
+    orderedPageRows.map((row) => String(row.id)),
+    visitorKey
+  )
+
+  const posts: BlogPostSummary[] = pageEvaluated.map(({ row, locked }) =>
+    serializePostSummary(row, interactions, locked)
+  )
+
+  return {
+    posts,
+    total,
+    hasMore: start + posts.length < total,
+    page,
+    limit
+  }
+}
+
+export interface BlogRailSummary {
+  aboutSubtitle: string
+  aboutExcerpt: string
+  recentAlbumPhotos: Array<{ url: string; thumbUrl: string; alt: string; postShortId: string }>
+  equipment: BlogCatalogItem[]
+  labs: BlogCatalogItem[]
+  friends: BlogFriend[]
+}
+
+async function loadBlogRailSummary(
+  env: Env,
+  request: Request,
+  ownerId: string,
+  isOwner: boolean,
+  profile: BlogProfile
+): Promise<BlogRailSummary> {
+  const visClause = isOwner ? '' : "AND visibility <> 'private'"
+  const [aboutRow, albumPostsRes, equipmentRes, labsRes, friendsRes] = await Promise.all([
+    env.DB.prepare("SELECT subtitle, content FROM blog_pages WHERE user_id = ? AND slug = 'about'")
+      .bind(ownerId)
+      .first<Row>(),
+    env.DB.prepare(
+      `SELECT id, short_id, title, excerpt, images_json, visibility, password_hash FROM blog_posts WHERE user_id = ? ${visClause} ORDER BY published_at DESC, created_at DESC LIMIT 50`
+    )
+      .bind(ownerId)
+      .all<Row>(),
+    env.DB.prepare(
+      "SELECT * FROM blog_catalog_items WHERE user_id = ? AND section = 'equipment' ORDER BY sort_order ASC, created_at DESC LIMIT 4"
+    )
+      .bind(ownerId)
+      .all<Row>(),
+    env.DB.prepare(
+      "SELECT * FROM blog_catalog_items WHERE user_id = ? AND section = 'labs' ORDER BY sort_order ASC, created_at DESC LIMIT 3"
+    )
+      .bind(ownerId)
+      .all<Row>(),
+    env.DB.prepare(
+      'SELECT * FROM blog_friends WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC LIMIT 8'
+    )
+      .bind(ownerId)
+      .all<Row>()
+  ])
+
+  const aboutSubtitle = aboutRow
+    ? String(aboutRow.subtitle ?? '').trim() || profile.siteName || ''
+    : '数字花园与个人简介'
+
+  let aboutExcerpt = ''
+  if (aboutRow?.content && String(aboutRow.content).trim()) {
+    aboutExcerpt = buildExcerpt(String(aboutRow.content), '', 110)
+  }
+  if (!aboutExcerpt) {
+    if (profile.bio?.trim()) {
+      aboutExcerpt = profile.bio.trim()
+    } else {
+      aboutExcerpt = isOwner ? '点击右上角详情完善「关于我」独立页面…' : '记录日常片段、阅读与思考。'
+    }
+  }
+
+  const recentAlbumPhotos: Array<{ url: string; thumbUrl: string; alt: string; postShortId: string }> = []
+  const seenPhotoUrls = new Set<string>()
+
+  for (const row of albumPostsRes.results) {
+    if (recentAlbumPhotos.length >= 9) break
+    const unlocked = await isPostUnlocked(request, row, isOwner)
+    if (String(row.visibility) === 'password' && !unlocked) continue
+    const images = sanitizeImageItems(safeParseJson<unknown>(row.images_json, []))
+    if (!images.length) continue
+    const postShortId = String(row.short_id)
+    for (const img of images) {
+      const fullUrl = (img.url || '').trim()
+      if (!fullUrl || seenPhotoUrls.has(fullUrl)) continue
+      seenPhotoUrls.add(fullUrl)
+      recentAlbumPhotos.push({
+        url: fullUrl,
+        thumbUrl: (img.thumbUrl || fullUrl).trim(),
+        alt:
+          img.alt?.trim() ||
+          String(row.title || '').trim() ||
+          String(row.excerpt || '').trim() ||
+          '相册照片',
+        postShortId
+      })
+      if (recentAlbumPhotos.length >= 9) break
+    }
+  }
+
+  return {
+    aboutSubtitle,
+    aboutExcerpt,
+    recentAlbumPhotos,
+    equipment: equipmentRes.results.slice(0, 4).map((r) => serializeCatalogItem(r, blogMediaUrl)),
+    labs: labsRes.results.slice(0, 3).map((r) => serializeCatalogItem(r, blogMediaUrl)),
+    friends: friendsRes.results.slice(0, 8).map((r) => serializeFriend(r, blogMediaUrl))
+  }
+}
+
 // --- Main Router ---
 
 export async function handleBlogApi(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext
+): Promise<Response> {
+  const response = await handleBlogApiInner(request, env, ctx)
+  return applyGlobalSecurityHeaders(response)
+}
+
+async function handleBlogApiInner(
   request: Request,
   env: Env,
   ctx: ExecutionContext
@@ -910,22 +2001,84 @@ export async function handleBlogApi(
   const path = url.pathname
   const method = request.method.toUpperCase()
 
-  // 9. GET /api/blog/media/:id (public, fast path without auth query, supports HTTP Range / 206)
+  // 9. GET /api/blog/media/:id (supports Edge Cache, Private/Password gating, HTTP Range / 206, XSS sandbox)
   const mediaItemMatch = path.match(/^\/api\/blog\/media\/([^/]+)$/)
-  if (mediaItemMatch && (method === 'GET' || method === 'HEAD')) {
+  if (mediaItemMatch && mediaItemMatch[1] !== 'gc' && (method === 'GET' || method === 'HEAD')) {
     const mediaId = decodeURIComponent(mediaItemMatch[1])
+    const wantsThumb = url.searchParams.get('variant') === 'thumb'
+    const rangeHeader = request.headers.get('range')
+    const edgeCache = getEdgeCache()
+    const cacheKey = new Request(
+      `${url.origin}/api/blog/media/${encodeURIComponent(mediaId)}${wantsThumb ? '?variant=thumb' : ''}`,
+      { method: 'GET' }
+    )
+
+    // Fast public Edge Cache check BEFORE hitting D1 or R2 (only public media is ever placed in caches.default)
+    if (method === 'GET' && rangeHeader === null && edgeCache) {
+      const cached = await edgeCache.match(cacheKey)
+      if (cached) {
+        const cachedEtag = cached.headers.get('etag')
+        const ifNoneMatch = request.headers.get('if-none-match')
+        if (cachedEtag && ifNoneMatch && ifNoneMatch === cachedEtag) {
+          return new Response(null, {
+            status: 304,
+            headers: {
+              etag: cachedEtag,
+              'accept-ranges': 'bytes',
+              'cache-control': cached.headers.get('cache-control') || 'public, max-age=31536000, immutable',
+              ...MEDIA_SECURITY_HEADERS
+            }
+          })
+        }
+        return cached
+      }
+    }
+
     const row = await env.DB.prepare(
-      'SELECT storage_key, thumb_key, mime_type, thumb_mime_type FROM blog_media WHERE id = ?'
-    ).bind(mediaId).first<Row>()
+      'SELECT id, user_id, storage_key, thumb_key, mime_type, thumb_mime_type, paired_media_id FROM blog_media WHERE id = ?'
+    )
+      .bind(mediaId)
+      .first<Row>()
     if (!row) throw new ApiError(404, '媒体文件不存在')
 
-    const wantsThumb = url.searchParams.get('variant') === 'thumb'
+    const ownerId = row.user_id ? String(row.user_id) : ''
+    const pairedMediaId = row.paired_media_id ? String(row.paired_media_id) : null
+    const scope = ownerId
+      ? await resolveBlogMediaAccessScope(env, ownerId, mediaId, pairedMediaId)
+      : ({ kind: 'unreferenced' } as const)
+
+    let cacheControl = 'public, max-age=31536000, immutable'
+    let canEdgeCache = false
+
+    if (scope.kind === 'private') {
+      const mediaAuth = await resolveAuth(env, request)
+      if (!mediaAuth.isOwner) {
+        throw new ApiError(404, '媒体文件不存在')
+      }
+      cacheControl = 'private, no-store'
+    } else if (scope.kind === 'password') {
+      const mediaAuth = await resolveAuth(env, request)
+      if (!mediaAuth.isOwner) {
+        const unlockedChecks = await Promise.all(
+          scope.passwordPosts.map((post) => isPostUnlocked(request, post, false))
+        )
+        if (!unlockedChecks.some(Boolean)) {
+          throw new ApiError(403, '该内容已加密，请先输入密码解锁')
+        }
+      }
+      cacheControl = 'private, no-store'
+    } else if (scope.kind === 'public') {
+      cacheControl = 'public, max-age=31536000, immutable'
+      canEdgeCache = true
+    } else {
+      cacheControl = 'private, no-store'
+    }
+
     const hasThumb = Boolean(row.thumb_key)
     const key = String(wantsThumb && hasThumb ? row.thumb_key : row.storage_key)
     const contentType = String(
       wantsThumb && hasThumb ? row.thumb_mime_type || row.mime_type : row.mime_type
     )
-    const cacheControl = 'public, max-age=31536000, immutable'
 
     if (method === 'HEAD') {
       const headObj = await env.IMAGES.head(key)
@@ -938,12 +2091,12 @@ export async function handleBlogApi(
           'accept-ranges': 'bytes',
           'cache-control': cacheControl,
           'content-disposition': 'inline',
-          etag: headObj.httpEtag
+          etag: headObj.httpEtag,
+          ...MEDIA_SECURITY_HEADERS
         }
       })
     }
 
-    const rangeHeader = request.headers.get('range')
     if (rangeHeader !== null) {
       const headObj = await env.IMAGES.head(key)
       if (!headObj) throw new ApiError(404, '媒体文件不存在')
@@ -955,7 +2108,8 @@ export async function handleBlogApi(
           headers: {
             'content-range': `bytes */${headObj.size}`,
             'accept-ranges': 'bytes',
-            'cache-control': 'no-store'
+            'cache-control': 'no-store',
+            ...MEDIA_SECURITY_HEADERS
           }
         })
       }
@@ -976,7 +2130,8 @@ export async function handleBlogApi(
           'accept-ranges': 'bytes',
           'cache-control': cacheControl,
           'content-disposition': 'inline',
-          etag: rangedObj.httpEtag
+          etag: rangedObj.httpEtag,
+          ...MEDIA_SECURITY_HEADERS
         }
       })
     }
@@ -991,38 +2146,93 @@ export async function handleBlogApi(
         headers: {
           etag,
           'accept-ranges': 'bytes',
-          'cache-control': cacheControl
+          'cache-control': cacheControl,
+          ...MEDIA_SECURITY_HEADERS
         }
       })
     }
-    return new Response(obj.body, {
-      headers: {
-        'content-type': contentType,
-        ...(typeof obj.size === 'number' ? { 'content-length': String(obj.size) } : {}),
-        'accept-ranges': 'bytes',
-        'cache-control': cacheControl,
-        'content-disposition': 'inline',
-        etag
-      }
-    })
+
+    const mediaResponse = applyGlobalSecurityHeaders(
+      new Response(obj.body, {
+        status: 200,
+        headers: {
+          'content-type': contentType,
+          ...(typeof obj.size === 'number' ? { 'content-length': String(obj.size) } : {}),
+          'accept-ranges': 'bytes',
+          'cache-control': cacheControl,
+          'content-disposition': 'inline',
+          etag,
+          ...MEDIA_SECURITY_HEADERS
+        }
+      })
+    )
+
+    if (canEdgeCache && edgeCache) {
+      ctx.waitUntil(edgeCache.put(cacheKey, mediaResponse.clone()))
+    }
+
+    return mediaResponse
   }
 
   const auth = await resolveAuth(env, request)
 
-  // 1. GET /api/blog/bootstrap (public)
+  // 1. GET /api/blog/bootstrap (public; supports ?full=1 zero-waterfall bundle)
   if (path === '/api/blog/bootstrap' && method === 'GET') {
+    const wantsFull = url.searchParams.get('full') === '1'
     if (!auth.owner) {
+      const defaultProfile = buildDefaultProfile()
       const payload: BlogBootstrap = {
         configured: false,
         isOwner: false,
         ownerEmail: null,
-        profile: buildDefaultProfile(),
+        profile: defaultProfile,
         categories: [],
         tags: []
       }
-      return json(payload)
+      if (!wantsFull) return json(payload)
+      return json({
+        ...payload,
+        initialPosts: { posts: [], total: 0, hasMore: false, page: 1, limit: 15 } satisfies BlogPostsResponse,
+        tracks: [] as BlogMusicTrack[],
+        railSummary: {
+          aboutSubtitle: '数字花园与个人简介',
+          aboutExcerpt: defaultProfile.bio,
+          recentAlbumPhotos: [],
+          equipment: [],
+          labs: [],
+          friends: []
+        } satisfies BlogRailSummary
+      })
     }
-    return json(await loadBlogBootstrap(env, auth.owner, auth.isOwner))
+
+    if (!wantsFull) {
+      return json(await loadBlogBootstrap(env, auth.owner, auth.isOwner))
+    }
+
+    const [bootstrap, initialPosts, tracksRes] = await Promise.all([
+      loadBlogBootstrap(env, auth.owner, auth.isOwner),
+      queryBlogPostsPage(env, request, auth, { page: 1, limit: 15 }),
+      env.DB.prepare(
+        'SELECT * FROM blog_music_tracks WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC'
+      )
+        .bind(auth.owner.id)
+        .all<Row>()
+    ])
+
+    const railSummary = await loadBlogRailSummary(
+      env,
+      request,
+      auth.owner.id,
+      auth.isOwner,
+      bootstrap.profile
+    )
+
+    return json({
+      ...bootstrap,
+      initialPosts,
+      tracks: tracksRes.results.map((r) => serializeMusicTrack(r, blogMediaUrl)),
+      railSummary
+    })
   }
 
   // 10. GET /api/blog/feed.xml (public)
@@ -1128,96 +2338,17 @@ export async function handleBlogApi(
     const rawLimit = Number.parseInt(url.searchParams.get('limit') || '20', 10) || 20
     const limit = Math.max(1, Math.min(50, rawLimit))
 
-    if (!auth.owner) {
-      const empty: BlogPostsResponse = { posts: [], total: 0, hasMore: false, page, limit }
-      return json(empty)
-    }
-
-    const typeParam = url.searchParams.get('type') || 'all'
-    const visibilityParam = url.searchParams.get('visibility') || 'all'
-    const tagFilter = (url.searchParams.get('tag') || '').trim()
-    const categoryFilter = (url.searchParams.get('category') || '').trim()
-    const queryNeedle = (url.searchParams.get('q') || '').trim().toLocaleLowerCase('zh-CN')
-
-    const whereParts: string[] = ['user_id = ?']
-    const bindings: Array<string | number> = [auth.owner.id]
-
-    if (typeParam === 'moment' || typeParam === 'article') {
-      whereParts.push('type = ?')
-      bindings.push(typeParam)
-    }
-
-    if (auth.isOwner) {
-      if (visibilityParam === 'public' || visibilityParam === 'private' || visibilityParam === 'password') {
-        whereParts.push('visibility = ?')
-        bindings.push(visibilityParam)
-      }
-    } else {
-      whereParts.push("visibility <> 'private'")
-    }
-
-    if (categoryFilter) {
-      whereParts.push('category = ?')
-      bindings.push(categoryFilter)
-    }
-
-    const res = await env.DB.prepare(
-      `SELECT * FROM blog_posts WHERE ${whereParts.join(' AND ')} ORDER BY is_pinned DESC, published_at DESC, created_at DESC`
-    ).bind(...bindings).all<Row>()
-
-    const evaluated = await Promise.all(
-      res.results.map(async (row) => {
-        const unlocked = await isPostUnlocked(request, row, auth.isOwner)
-        const locked = String(row.visibility) === 'password' && !unlocked
-        return { row, locked }
+    return json(
+      await queryBlogPostsPage(env, request, auth, {
+        page,
+        limit,
+        typeParam: url.searchParams.get('type') || 'all',
+        visibilityParam: url.searchParams.get('visibility') || 'all',
+        tagFilter: url.searchParams.get('tag') || '',
+        categoryFilter: url.searchParams.get('category') || '',
+        queryNeedle: url.searchParams.get('q') || ''
       })
     )
-
-    const filtered = evaluated.filter(({ row, locked }) => {
-      const tags = parseTagsColumn(row.tags_json)
-      if (tagFilter && !tags.some((t) => t.toLocaleLowerCase('zh-CN') === tagFilter.toLocaleLowerCase('zh-CN'))) {
-        return false
-      }
-      if (queryNeedle) {
-        const haystacks = locked
-          ? [String(row.title || ''), String(row.category || ''), ...tags]
-          : [
-              String(row.title || ''),
-              String(row.excerpt || ''),
-              String(row.content || ''),
-              String(row.category || ''),
-              String(row.location_name || ''),
-              ...tags
-            ]
-        if (!haystacks.some((val) => val.toLocaleLowerCase('zh-CN').includes(queryNeedle))) {
-          return false
-        }
-      }
-      return true
-    })
-
-    const total = filtered.length
-    const start = (page - 1) * limit
-    const pageSlice = filtered.slice(start, start + limit)
-    const visitorKey = await resolveVisitorKey(request, auth.isOwner, auth.owner.id)
-    const interactions = await loadPostInteractions(
-      env,
-      pageSlice.map(({ row }) => String(row.id)),
-      visitorKey
-    )
-
-    const posts: BlogPostSummary[] = pageSlice.map(({ row, locked }) =>
-      serializePostSummary(row, interactions, locked)
-    )
-
-    const responsePayload: BlogPostsResponse = {
-      posts,
-      total,
-      hasMore: start + posts.length < total,
-      page,
-      limit
-    }
-    return json(responsePayload)
   }
 
   if (path === '/api/blog/posts' && method === 'POST') {
@@ -1358,6 +2489,12 @@ export async function handleBlogApi(
     const post = await findPostByShortOrId(env, auth.owner.id, identifier)
     if (!post || (String(post.visibility) === 'private' && !auth.isOwner)) {
       throw new ApiError(404, '内容不存在')
+    }
+
+    if (!auth.isOwner) {
+      const ip = request.headers.get('cf-connecting-ip') || 'local'
+      checkRateLimit(likeAttempts, ip, LIKE_RATE_LIMIT, '操作过于频繁，请稍后再试')
+      recordRateLimitHit(likeAttempts, ip, LIKE_RATE_WINDOW_MS)
     }
 
     const body = await readJson(request)
@@ -1674,6 +2811,17 @@ export async function handleBlogApi(
 
       const updated = await findPostByShortOrId(env, owner.id, String(post.id))
       if (!updated) throw new ApiError(404, '内容不存在')
+
+      const oldMediaIds = extractBlogMediaIdsFromPostRow(post)
+      const nextMediaSet = new Set(extractBlogMediaIdsFromPostRow(updated))
+      const removedMediaIds = oldMediaIds.filter((id) => !nextMediaSet.has(id))
+      if (removedMediaIds.length) {
+        ctx.waitUntil(cleanupCandidateBlogMediaIds(env, owner.id, removedMediaIds))
+      }
+      if (String(updated.visibility) !== 'public' || removedMediaIds.length) {
+        ctx.waitUntil(purgeBlogMediaEdgeCache(url.origin, [...oldMediaIds, ...nextMediaSet]))
+      }
+
       const visitorKey = await resolveVisitorKey(request, true, owner.id)
       return json(await buildPostDetail(env, request, owner.id, updated, true, visitorKey, true))
     }
@@ -1682,9 +2830,18 @@ export async function handleBlogApi(
       const owner = requireOwner(auth)
       const post = await findPostByShortOrId(env, owner.id, identifier)
       if (!post) throw new ApiError(404, '内容不存在')
+      const oldMediaIds = extractBlogMediaIdsFromPostRow(post)
       await env.DB.prepare('DELETE FROM blog_posts WHERE id = ? AND user_id = ?')
         .bind(String(post.id), owner.id)
         .run()
+      if (oldMediaIds.length) {
+        ctx.waitUntil(
+          Promise.all([
+            cleanupCandidateBlogMediaIds(env, owner.id, oldMediaIds),
+            purgeBlogMediaEdgeCache(url.origin, oldMediaIds)
+          ])
+        )
+      }
       return json({ ok: true })
     }
   }
@@ -1699,6 +2856,12 @@ export async function handleBlogApi(
     ).bind(commentId, auth.owner.id).first<Row>()
     if (!commentRow || (String(commentRow.visibility) === 'private' && !auth.isOwner)) {
       throw new ApiError(404, '评论不存在')
+    }
+
+    if (!auth.isOwner) {
+      const ip = request.headers.get('cf-connecting-ip') || 'local'
+      checkRateLimit(likeAttempts, ip, LIKE_RATE_LIMIT, '操作过于频繁，请稍后再试')
+      recordRateLimitHit(likeAttempts, ip, LIKE_RATE_WINDOW_MS)
     }
 
     const visitorKey = await resolveVisitorKey(request, auth.isOwner, auth.owner.id)
@@ -1799,11 +2962,31 @@ export async function handleBlogApi(
       now
     ).run()
 
+    const removedSettingsMedia = [current.avatarMediaId, current.coverMediaId].filter(
+      (id): id is string => Boolean(id && id !== avatarMediaId && id !== coverMediaId)
+    )
+    if (removedSettingsMedia.length) {
+      ctx.waitUntil(cleanupCandidateBlogMediaIds(env, owner.id, removedSettingsMedia))
+    }
+
     const bootstrap = await loadBlogBootstrap(env, owner, true)
     return json(bootstrap.profile)
   }
 
-  // 11b. POST /api/blog/media (owner: supports multi-image batch AND single-file audio/video/image/lyric/file)
+  // 11b-gc. POST /api/blog/media/gc (owner: clean unreferenced blog_media + optional legacy memo data)
+  if (path === '/api/blog/media/gc' && method === 'POST') {
+    const owner = requireOwner(auth)
+    const body = await readJson(request)
+    const includeRecent = Boolean(body.includeRecent)
+    const includeLegacyMemo = Boolean(body.includeLegacyMemo)
+    const stats = await runBlogMediaGc(env, owner.id, {
+      minAgeMs: includeRecent ? 0 : DEFAULT_GC_MIN_AGE_MS,
+      includeLegacyMemo
+    })
+    return json(stats)
+  }
+
+  // 11b. POST /api/blog/media (owner: supports multi-image batch AND single-file audio/video/image/lyric)
   if (path === '/api/blog/media' && method === 'POST') {
     const owner = requireOwner(auth)
     const form = await request.formData()
@@ -1813,9 +2996,13 @@ export async function handleBlogApi(
       typeof form.get('pairedMediaId') === 'string' ? String(form.get('pairedMediaId')).trim() : ''
     const singleFile = form.get('file')
 
-    // Phase 2 single-file generic upload (audio, video, paired Live Photo video, image, lyric, file)
+    if (rawKind === 'file') {
+      throw new ApiError(400, '不支持该文件类型')
+    }
+
+    // Phase 2 single-file upload (only image, audio, video, lyric allowed)
     if (!imageBatchFiles.length && (rawKind || rawPairedMediaId) && singleFile instanceof File) {
-      const kind = validateMediaKind(rawKind || 'file')
+      const kind = validateMediaKind(rawKind)
       if (!singleFile.size) throw new ApiError(400, '上传的文件内容为空')
 
       const pairedMediaId = rawPairedMediaId
@@ -1945,20 +3132,13 @@ export async function handleBlogApi(
           }
           mimeType = resolved.mimeType
           ext = resolved.ext
-        } else if (kind === 'lyric') {
+        } else {
+          // kind === 'lyric'
           if (singleFile.size > MAX_LYRIC_BYTES) {
             throw new ApiError(400, '歌词文件不能超过 2 MB')
           }
           mimeType = 'text/plain; charset=utf-8'
           ext = /\.txt$/i.test(singleFile.name || '') ? 'txt' : 'lrc'
-        } else {
-          if (singleFile.size > MAX_IMAGE_BYTES) {
-            throw new ApiError(400, '文件不能超过 20 MB')
-          }
-          const rawFileMime = (singleFile.type || '').split(';')[0].trim().toLowerCase()
-          mimeType = rawFileMime || 'application/octet-stream'
-          const extMatch = /\.([a-zA-Z0-9]{1,10})$/.exec(singleFile.name || '')
-          ext = extMatch ? extMatch[1].toLowerCase() : 'bin'
         }
 
         const bytes = new Uint8Array(await singleFile.arrayBuffer())
@@ -2316,7 +3496,22 @@ export async function handleBlogApi(
     checkCommentRateLimit: (ip: string) => {
       checkRateLimit(commentAttempts, ip, COMMENT_RATE_LIMIT, '评论过于频繁，请稍后再试')
       recordRateLimitHit(commentAttempts, ip, COMMENT_RATE_WINDOW_MS)
-    }
+    },
+    scheduleMediaCleanup: (ownerId: string, candidateIds: Array<string | null | undefined>) => {
+      const cleaned = candidateIds
+        .map((id) => (typeof id === 'string' ? id.trim() : ''))
+        .filter(Boolean)
+      if (cleaned.length) {
+        ctx.waitUntil(
+          Promise.all([
+            cleanupCandidateBlogMediaIds(env, ownerId, cleaned),
+            purgeBlogMediaEdgeCache(url.origin, cleaned)
+          ])
+        )
+      }
+    },
+    extractBlogMediaIdsFromText,
+    extractMediaIdFromBlogUrl
   })
   if (phase2Response) return phase2Response
 

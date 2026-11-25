@@ -1,7 +1,4 @@
 import {
-  Component,
-  Suspense,
-  lazy,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -52,8 +49,6 @@ import { PosterArtwork } from './PosterArtwork'
 import { SchedulePicker } from './SchedulePicker'
 import { SmartAddModal, parseWebUrl, type SmartAddInitial } from './SmartAddModal'
 import { showToast } from './Toast'
-
-const MemoCanvas = lazy(() => import('./MemoCanvas').then((module) => ({ default: module.MemoCanvas })))
 
 type ViewMode = 'list' | 'gallery' | 'coverflow'
 
@@ -196,39 +191,6 @@ function notifySuccess(message: string) {
 
 function notifyError(message: string) {
   showToast('error', message)
-}
-
-class MemoErrorBoundary extends Component<
-  { onClose: () => void; children: ReactNode },
-  { hasError: boolean }
-> {
-  state = { hasError: false }
-
-  static getDerivedStateFromError() {
-    return { hasError: true }
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="memo-canvas-overlay">
-          <div className="fig-card fig-memo-error">
-            <h2>备忘录画布加载失败</h2>
-            <p>应用可能刚刚更新或网络连接中断，刷新页面即可恢复画布。</p>
-            <div className="fig-memo-error-actions">
-              <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>
-                重新加载页面
-              </button>
-              <button type="button" className="btn btn-ghost" onClick={this.props.onClose}>
-                返回清单
-              </button>
-            </div>
-          </div>
-        </div>
-      )
-    }
-    return this.props.children
-  }
 }
 
 function AnchoredMenu({
@@ -1007,7 +969,6 @@ export function Dashboard({
   preferencesRef.current = preferences
   const [retryItems, setRetryItems] = useState<Record<string, { changes: BulkItemChanges; label: string }>>({})
   const [focusMode, setFocusMode] = useState(false)
-  const [memoOpen, setMemoOpen] = useState(false)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
   const [undoDelete, setUndoDelete] = useState<{ ids: string[]; label: string } | null>(null)
@@ -1228,7 +1189,7 @@ export function Dashboard({
       return Boolean(element?.closest('input, textarea, select, [contenteditable="true"]'))
     }
     function handleKeyDown(event: KeyboardEvent) {
-      if (overlay || focusMode || memoOpen) return
+      if (overlay || focusMode) return
       if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return
       if (editableTarget(event.target)) return
       // Floating menus / sheets / popovers own Escape and the letter keys while open.
@@ -1279,7 +1240,7 @@ export function Dashboard({
       }
     }
     function handlePaste(event: ClipboardEvent) {
-      if (overlay || focusMode || memoOpen || editableTarget(event.target)) return
+      if (overlay || focusMode || editableTarget(event.target)) return
       const files = Array.from(event.clipboardData?.files || []).filter((file) => file.type.startsWith('image/'))
       if (files.length) {
         event.preventDefault()
@@ -1296,14 +1257,14 @@ export function Dashboard({
       }
     }
     function handleDragOver(event: DragEvent) {
-      if (!overlay && !focusMode && !memoOpen && event.dataTransfer?.types.some((type) => (
+      if (!overlay && !focusMode && event.dataTransfer?.types.some((type) => (
         type === 'Files' || type === 'text/plain' || type === 'text/uri-list'
       ))) {
         event.preventDefault()
       }
     }
     function handleDrop(event: DragEvent) {
-      if (overlay || focusMode || memoOpen) return
+      if (overlay || focusMode) return
       const files = Array.from(event.dataTransfer?.files || [])
       if (files.length) {
         event.preventDefault()
@@ -1338,7 +1299,6 @@ export function Dashboard({
     filters.trash,
     focusMode,
     items.length,
-    memoOpen,
     mobileMoreOpen,
     overlay,
     selectionMode
@@ -1853,7 +1813,6 @@ export function Dashboard({
   }
 
   function selectQuickView(view: 'pending' | 'today' | 'planned' | 'starred' | 'completed' | 'trash') {
-    setMemoOpen(false)
     setMobileMoreOpen(false)
     exitSelection()
     if (view === 'pending') {
@@ -1918,7 +1877,6 @@ export function Dashboard({
   }
 
   function selectCategory(categoryId: string) {
-    setMemoOpen(false)
     setTodayOverdueOnly(false)
     exitSelection()
     setFilters((current) => ({
@@ -1939,16 +1897,13 @@ export function Dashboard({
     })
   }
 
-  const activeNavTab: 'list' | 'plan' | 'memo' = memoOpen
-    ? 'memo'
-    : (filters.trash === 'active' && filters.priority === 'planned' && !todayOverdueOnly)
-      ? 'plan'
-      : 'list'
+  const activeNavTab: 'list' | 'plan' = (filters.trash === 'active' && filters.priority === 'planned' && !todayOverdueOnly)
+    ? 'plan'
+    : 'list'
 
   useEffect(() => {
     if (!initialTab) return
     if (initialTab === 'plan') {
-      setMemoOpen(false)
       setMobileMoreOpen(false)
       setSelectionMode(false)
       setSelectedIds(new Set())
@@ -1961,13 +1916,7 @@ export function Dashboard({
         category: '',
         sort: 'planned_date'
       }))
-    } else if (initialTab === 'memo') {
-      setMobileMoreOpen(false)
-      setSelectionMode(false)
-      setSelectedIds(new Set())
-      setMemoOpen(true)
     } else if (initialTab === 'list') {
-      setMemoOpen(false)
       setMobileMoreOpen(false)
       setSelectionMode(false)
       setSelectedIds(new Set())
@@ -2149,13 +2098,6 @@ export function Dashboard({
                 onClick={() => selectQuickView('planned')}
               >
                 计划
-              </button>
-              <button
-                type="button"
-                className={`fig-nav-tab${activeNavTab === 'memo' ? ' is-active' : ''}`}
-                onClick={() => setMemoOpen(true)}
-              >
-                备忘录
               </button>
               <button
                 type="button"
@@ -2943,14 +2885,14 @@ export function Dashboard({
         </button>
         <button
           type="button"
-          className={`fig-bottom-item${memoOpen ? ' is-active' : ''}`}
+          className="fig-bottom-item"
           onClick={() => {
             setMobileMoreOpen(false)
-            setMemoOpen(true)
+            onOpenBlog?.({ path: '/' })
           }}
         >
-          <AppIcon name="memo" size={20} />
-          <span>备忘录</span>
+          <AppIcon name="book" size={20} />
+          <span>博客</span>
         </button>
         <button
           type="button"
@@ -3200,34 +3142,6 @@ export function Dashboard({
           onGenerateCover={(item) => generateItemCover(item)}
           onOpenAiSettings={() => setOverlay({ type: 'account' })}
         />
-      )}
-
-      {memoOpen && (
-        <MemoErrorBoundary onClose={() => setMemoOpen(false)}>
-          <Suspense
-            fallback={
-              <div className="memo-canvas-overlay">
-                <div className="memo-canvas-loading">
-                  <span className="spinner" />
-                  <p>正在加载备忘录画布…</p>
-                </div>
-              </div>
-            }
-          >
-            <MemoCanvas
-              items={allItems}
-              categories={categories}
-              onClose={() => setMemoOpen(false)}
-              onEdit={(item) => setOverlay({ type: 'edit', item })}
-              onPatch={patchItem}
-              onDelete={deleteItem}
-              onRestore={restoreItem}
-              onPermanentDelete={permanentDeleteItem}
-              onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
-              onRefresh={reloadAll}
-            />
-          </Suspense>
-        </MemoErrorBoundary>
       )}
     </div>
   )

@@ -661,6 +661,25 @@ function AboutPageEditorModal({
   const inlineImgInputRef = useRef<HTMLInputElement | null>(null)
   const busy = uploadingCover || uploadingInline || saving
 
+  const isDirty = useMemo(() => {
+    return (
+      title !== (page.title || '关于我') ||
+      subtitle !== (page.subtitle || '') ||
+      content !== (page.content || '') ||
+      (coverMediaId ?? null) !== (page.coverMediaId ?? null) ||
+      (coverUrl ?? null) !== (page.coverUrl ?? null) ||
+      allowComments !== Boolean(page.allowComments)
+    )
+  }, [title, subtitle, content, coverMediaId, coverUrl, allowComments, page])
+
+  const attemptClose = useCallback(() => {
+    if (busy) return
+    if (isDirty && !window.confirm('当前关于页修改尚未保存，确定关闭吗？')) {
+      return
+    }
+    onClose()
+  }, [busy, isDirty, onClose])
+
   useEffect(() => {
     if (!open) return
     setBlogTheme(detectBlogTheme())
@@ -678,7 +697,7 @@ function AboutPageEditorModal({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !busy) {
         event.preventDefault()
-        onClose()
+        attemptClose()
       }
     }
     document.addEventListener('keydown', onKeyDown)
@@ -688,7 +707,17 @@ function AboutPageEditorModal({
       document.removeEventListener('keydown', onKeyDown)
       document.body.style.overflow = prevOverflow
     }
-  }, [open, busy, onClose])
+  }, [open, busy, attemptClose])
+
+  useEffect(() => {
+    if (!open || !isDirty || typeof window === 'undefined') return
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [open, isDirty])
 
   const renderedPreview = useMemo(() => renderArticleMarkdown(content), [content])
 
@@ -764,7 +793,7 @@ function AboutPageEditorModal({
       style={{ minHeight: 0, zIndex: 1020 }}
       role="presentation"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose()
+        if (e.target === e.currentTarget && !busy) attemptClose()
       }}
     >
       <section role="dialog" aria-modal="true" aria-label="编辑关于页" className="blog-composer-modal is-article">
@@ -778,7 +807,7 @@ function AboutPageEditorModal({
               type="button"
               className="blog-btn blog-btn-icon"
               disabled={busy}
-              onClick={onClose}
+              onClick={attemptClose}
               aria-label="关闭"
             >
               <AppIcon name="close" size={16} />
@@ -945,7 +974,7 @@ function AboutPageEditorModal({
           <footer className="blog-modal-footer">
             <span className="blog-field-hint">{renderedPreview.wordCount} 字</span>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <button type="button" className="blog-btn blog-btn-ghost" disabled={busy} onClick={onClose}>
+              <button type="button" className="blog-btn blog-btn-ghost" disabled={busy} onClick={attemptClose}>
                 取消
               </button>
               <button type="submit" className="blog-btn blog-btn-primary" disabled={busy}>

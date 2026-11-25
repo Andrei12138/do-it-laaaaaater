@@ -25,10 +25,10 @@
   .blog-bento-stage {
     max-width: 1260px;
     margin: 0 auto;
-    padding: 24px 20px 56px;
+    padding: 24px 16px 56px;
     display: grid;
-    grid-template-columns: 280px 620px 280px;
-    gap: 20px;
+    grid-template-columns: minmax(236px, 280px) minmax(0, 620px) minmax(236px, 280px);
+    gap: clamp(14px, 1.5vw, 20px);
     align-items: start;
     justify-content: center;
   }
@@ -40,8 +40,9 @@
   .blog-bento-stage .blog-shell,
   .blog-root.is-embedded .blog-bento-stage .blog-shell {
     margin: 0;
-    width: 620px;
+    width: 100%;
     max-width: 620px;
+    min-width: 0;
   }
 
   .blog-bento-rail {

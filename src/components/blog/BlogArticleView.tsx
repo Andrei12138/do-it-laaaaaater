@@ -81,6 +81,12 @@ function getAuthorMonogram(name: string): string {
   return Array.from(trimmed)[0]?.toUpperCase() || 'B'
 }
 
+function getAdjacentPostHref(type: BlogPostType, shortId: string): string {
+  return type === 'article'
+    ? `/articles/${encodeURIComponent(shortId)}`
+    : `/moments/${encodeURIComponent(shortId)}`
+}
+
 export function BlogArticleView({
   post,
   profile,
@@ -97,6 +103,7 @@ export function BlogArticleView({
   onTocStateChange
 }: BlogArticleViewProps) {
   const [activeHeadingId, setActiveHeadingId] = useState<string>('')
+  const [mobileTocOpen, setMobileTocOpen] = useState(false)
   const [liking, setLiking] = useState(false)
   const [commentFocusSignal, setCommentFocusSignal] = useState(0)
 
@@ -131,7 +138,23 @@ export function BlogArticleView({
     }
   }, [])
 
-  // Track active TOC heading on scroll
+  // Reset compact TOC drawer when post or rail layout changes
+  useEffect(() => {
+    setMobileTocOpen(false)
+  }, [post.id, tocInRail])
+
+  useEffect(() => {
+    if (!mobileTocOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMobileTocOpen(false)
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [mobileTocOpen])
+
+  // Track active TOC heading on scroll (throttled via requestAnimationFrame)
   useEffect(() => {
     const headings = rendered?.headings ?? []
     if (headings.length < 2) {
@@ -140,8 +163,10 @@ export function BlogArticleView({
     }
 
     setActiveHeadingId(headings[0].id)
+    let rafId = 0
 
     const updateActiveHeading = () => {
+      rafId = 0
       let currentId = headings[0].id
       for (const heading of headings) {
         const el = document.getElementById(heading.id)
@@ -155,10 +180,18 @@ export function BlogArticleView({
       setActiveHeadingId(currentId)
     }
 
+    const onScroll = () => {
+      if (rafId !== 0) return
+      rafId = window.requestAnimationFrame(updateActiveHeading)
+    }
+
     updateActiveHeading()
-    window.addEventListener('scroll', updateActiveHeading, { passive: true })
+    window.addEventListener('scroll', onScroll, { passive: true })
     return () => {
-      window.removeEventListener('scroll', updateActiveHeading)
+      window.removeEventListener('scroll', onScroll)
+      if (rafId !== 0) {
+        window.cancelAnimationFrame(rafId)
+      }
     }
   }, [rendered, post.id])
 
@@ -237,6 +270,7 @@ export function BlogArticleView({
       target.scrollIntoView({ behavior: 'smooth', block: 'start' })
       setActiveHeadingId(id)
     }
+    setMobileTocOpen(false)
   }
 
   const handleArticleContentClick = async (e: MouseEvent<HTMLDivElement>) => {
@@ -282,6 +316,10 @@ export function BlogArticleView({
       onOpenLightbox(images, index)
     }
   }
+
+  const showCompactToc = Boolean(
+    !tocInRail && !post.locked && isArticle && rendered && rendered.headings.length >= 2
+  )
 
   const stickyTopBar = (
     <header className="blog-sticky-bar">
@@ -335,6 +373,19 @@ export function BlogArticleView({
               {(musicCtx.isPlaying && musicCtx.currentLyricLine) || musicCtx.currentTrack.title}
             </span>
           </div>
+        )}
+        {showCompactToc && (
+          <button
+            type="button"
+            className={`blog-sticky-toc-btn${mobileTocOpen ? ' is-active' : ''}`}
+            onClick={() => setMobileTocOpen((prev) => !prev)}
+            aria-expanded={mobileTocOpen}
+            aria-controls="blog-mobile-toc-panel"
+            title="文章目录"
+          >
+            <AppIcon name="list" size={14} />
+            <span>目录</span>
+          </button>
         )}
         {isOwner && (
           <button
@@ -402,10 +453,27 @@ export function BlogArticleView({
     <>
       {stickyTopBar}
 
-      {!tocInRail && isArticle && rendered && rendered.headings.length >= 2 && (
-        <aside className="blog-toc" aria-label="文章目录">
-          <div className="blog-toc-title">目录</div>
-          <ul className="blog-toc-list">
+      {showCompactToc && mobileTocOpen && rendered && (
+        <nav
+          id="blog-mobile-toc-panel"
+          className="blog-mobile-toc-panel"
+          aria-label="文章目录"
+        >
+          <div className="blog-mobile-toc-head">
+            <span className="blog-toc-title" style={{ margin: 0 }}>
+              文章目录 · {rendered.headings.length} 节
+            </span>
+            <button
+              type="button"
+              className="blog-sticky-icon-btn"
+              style={{ width: 26, height: 26 }}
+              onClick={() => setMobileTocOpen(false)}
+              aria-label="收起目录"
+            >
+              <AppIcon name="close" size={14} />
+            </button>
+          </div>
+          <ul className="blog-toc-list blog-mobile-toc-list">
             {rendered.headings.map((heading) => (
               <li key={heading.id} className="blog-toc-item">
                 <a
@@ -422,7 +490,7 @@ export function BlogArticleView({
               </li>
             ))}
           </ul>
-        </aside>
+        </nav>
       )}
 
       <article className="blog-article">
@@ -501,9 +569,10 @@ export function BlogArticleView({
               <nav className="blog-adjacent-nav" aria-label="相邻文章导航">
                 {post.prev ? (
                   <a
-                    href={`#post-${post.prev.shortId}`}
+                    href={getAdjacentPostHref(post.prev.type, post.prev.shortId)}
                     className="blog-adjacent-card"
                     onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
                       e.preventDefault()
                       onOpenPost(post.prev!.type, post.prev!.shortId)
                     }}
@@ -517,9 +586,10 @@ export function BlogArticleView({
 
                 {post.next && (
                   <a
-                    href={`#post-${post.next.shortId}`}
+                    href={getAdjacentPostHref(post.next.type, post.next.shortId)}
                     className="blog-adjacent-card is-next"
                     onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
                       e.preventDefault()
                       onOpenPost(post.next!.type, post.next!.shortId)
                     }}
@@ -659,9 +729,10 @@ export function BlogArticleView({
               <nav className="blog-adjacent-nav" aria-label="相邻内容导航">
                 {post.prev ? (
                   <a
-                    href={`#post-${post.prev.shortId}`}
+                    href={getAdjacentPostHref(post.prev.type, post.prev.shortId)}
                     className="blog-adjacent-card"
                     onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
                       e.preventDefault()
                       onOpenPost(post.prev!.type, post.prev!.shortId)
                     }}
@@ -675,9 +746,10 @@ export function BlogArticleView({
 
                 {post.next && (
                   <a
-                    href={`#post-${post.next.shortId}`}
+                    href={getAdjacentPostHref(post.next.type, post.next.shortId)}
                     className="blog-adjacent-card is-next"
                     onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
                       e.preventDefault()
                       onOpenPost(post.next!.type, post.next!.shortId)
                     }}

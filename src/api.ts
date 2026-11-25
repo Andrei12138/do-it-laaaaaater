@@ -1,4 +1,4 @@
-import { ApiRequestError } from './api-error'
+import { ApiRequestError, errorMessage } from './api-error'
 import { enrichFormDataWithThumbs } from './image-thumb'
 import {
   enqueueOfflineApi,
@@ -13,7 +13,7 @@ import {
 } from './offline-store'
 import { markOfflineReading, markQueued, markSaved, markSaveFailed, markSaving } from './sync-status'
 
-export { ApiRequestError } from './api-error'
+export { ApiRequestError, errorMessage } from './api-error'
 export { readCachedAuthStatus, readCachedSnapshot }
 export const isCloudMode = false
 
@@ -98,8 +98,4 @@ export function jsonRequest<T>(path: string, method: string, body?: unknown) {
     method,
     body: body === undefined ? undefined : JSON.stringify(body)
   })
-}
-
-export function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '操作失败，请稍后重试'
 }
