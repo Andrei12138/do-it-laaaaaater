@@ -36,8 +36,8 @@ export function BlogArchivesView({
   const renderArchiveItem = (item: BlogArchiveItem) => {
     const isArticle = item.type === 'article'
     const href = isArticle
-      ? `/blog/articles/${encodeURIComponent(item.shortId)}`
-      : `/blog/moments/${encodeURIComponent(item.shortId)}`
+      ? `/articles/${encodeURIComponent(item.shortId)}`
+      : `/moments/${encodeURIComponent(item.shortId)}`
 
     const handleOpen = (event: React.MouseEvent<HTMLAnchorElement>) => {
       event.preventDefault()

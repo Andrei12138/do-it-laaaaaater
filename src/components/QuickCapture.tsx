@@ -150,7 +150,7 @@ export function QuickCapture() {
 
   function viewExisting() {
     if (!item) return
-    const target = '/?open=' + encodeURIComponent(item.id)
+    const target = '/app?open=' + encodeURIComponent(item.id)
     const opened = window.open(target, '_blank')
     if (opened) window.close()
     else window.location.href = target

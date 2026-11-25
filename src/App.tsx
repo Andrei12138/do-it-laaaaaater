@@ -9,8 +9,8 @@ const BlogApp = lazy(() =>
   import('./components/blog/BlogApp').then((module) => ({ default: module.BlogApp }))
 )
 
-function isBlogPath(pathname: string): boolean {
-  return pathname === '/blog' || pathname.startsWith('/blog/')
+function isAppPath(pathname: string): boolean {
+  return pathname === '/app' || pathname.startsWith('/app/') || pathname === '/login'
 }
 
 function AuthScreen({
@@ -141,7 +141,7 @@ function AuthScreen({
               className="btn btn-text btn-sm"
               onClick={onOpenBlog}
             >
-              访问公开博客 →
+              返回博客首页 →
             </button>
           </div>
         )}
@@ -206,7 +206,9 @@ export default function App() {
     setInitialDashboardTab(undefined)
   }, [])
 
-  if (isBlogPath(pathname) && !status?.setupRequired) {
+  const isQuickCapture = new URLSearchParams(window.location.search).get('capture') === 'quick'
+
+  if (!isAppPath(pathname) && !isQuickCapture && !status?.setupRequired) {
     return (
       <Suspense
         fallback={
@@ -222,13 +224,14 @@ export default function App() {
           onConsumePendingImport={handleConsumePendingImport}
           onNavigate={navigate}
           onRequestLogin={() => {
-            setPostLoginRedirect(pathname)
-            navigate('/')
+            const clean = pathname.replace(/\/+$/, '') || '/'
+            setPostLoginRedirect(clean === '/' || clean === '/blog' ? '/app' : pathname)
+            navigate('/app')
           }}
-          onBackToWorkspace={() => navigate('/')}
+          onBackToWorkspace={() => navigate('/app')}
           onSwitchWorkspaceTab={(tab) => {
             setInitialDashboardTab(tab)
-            navigate('/')
+            navigate('/app')
           }}
         />
       </Suspense>
@@ -273,12 +276,12 @@ export default function App() {
         onComplete={handleAuthComplete}
         onOpenBlog={() => {
           setPostLoginRedirect(null)
-          navigate('/blog')
+          navigate('/')
         }}
       />
     )
   }
-  if (new URLSearchParams(window.location.search).get('capture') === 'quick') return <QuickCapture />
+  if (isQuickCapture) return <QuickCapture />
 
   return (
     <Dashboard
@@ -290,7 +293,7 @@ export default function App() {
         if (opts?.importItemId) {
           setPendingBlogImportItemId(opts.importItemId)
         }
-        navigate(opts?.path || '/blog')
+        navigate(opts?.path || '/')
       }}
     />
   )

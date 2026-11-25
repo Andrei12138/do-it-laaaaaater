@@ -284,14 +284,14 @@ export function buildRssFeed(options: {
   }>
 }): string {
   const origin = options.origin.replace(/\/+$/, '')
-  const blogLink = `${origin}/blog`
+  const blogLink = `${origin}/`
   const feedLink = `${origin}/api/blog/feed.xml`
   const latestPub = options.posts[0]?.publishedAt || Date.now()
 
   const itemsXml = options.posts
     .map((post) => {
       const segment = post.type === 'article' ? 'articles' : 'moments'
-      const itemLink = `${origin}/blog/${segment}/${encodeURIComponent(post.shortId)}`
+      const itemLink = `${origin}/${segment}/${encodeURIComponent(post.shortId)}`
       const title =
         post.title.trim() ||
         buildExcerpt(post.content, post.excerpt, 48) ||

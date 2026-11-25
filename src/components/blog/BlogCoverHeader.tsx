@@ -182,7 +182,7 @@ export function BlogCoverHeader({
 
         <div className="blog-profile-seam">
           <a
-            href="/blog/archives"
+            href="/archives"
             className="blog-profile-link"
             onClick={(event) => {
               event.preventDefault()

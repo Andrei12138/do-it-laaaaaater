@@ -92,15 +92,21 @@ function safeDecodeSegment(raw: string): string {
 }
 
 function parseBlogRoute(rawPath: string): BlogRoute {
-  const clean = (rawPath.split('?')[0] || '/blog').replace(/\/+$/, '') || '/blog'
-  if (clean === '/blog/archives') {
+  const withoutQuery = (rawPath.split('?')[0] || '/').replace(/\/+$/, '') || '/'
+  const clean =
+    withoutQuery === '/blog'
+      ? '/'
+      : withoutQuery.startsWith('/blog/')
+        ? withoutQuery.slice('/blog'.length)
+        : withoutQuery
+  if (clean === '/archives') {
     return { kind: 'archives' }
   }
-  const articleMatch = /^\/blog\/articles\/([^/]+)$/.exec(clean)
+  const articleMatch = /^\/articles\/([^/]+)$/.exec(clean)
   if (articleMatch && articleMatch[1]) {
     return { kind: 'article', shortId: safeDecodeSegment(articleMatch[1]) }
   }
-  const momentMatch = /^\/blog\/moments\/([^/]+)$/.exec(clean)
+  const momentMatch = /^\/moments\/([^/]+)$/.exec(clean)
   if (momentMatch && momentMatch[1]) {
     return { kind: 'moment', shortId: safeDecodeSegment(momentMatch[1]) }
   }
@@ -429,9 +435,9 @@ export function BlogApp({
 
       if (isNew && route.kind !== 'feed') {
         if (savedPost.type === 'article') {
-          onNavigate(`/blog/articles/${encodeURIComponent(savedPost.shortId)}`)
+          onNavigate(`/articles/${encodeURIComponent(savedPost.shortId)}`)
         } else {
-          onNavigate('/blog')
+          onNavigate('/')
         }
       }
     },
@@ -486,7 +492,7 @@ export function BlogApp({
           (route.kind === 'article' || route.kind === 'moment') &&
           route.shortId === post.shortId
         ) {
-          onNavigate('/blog')
+          onNavigate('/')
         }
       } catch (err) {
         showToast('error', errorMessage(err))
@@ -506,7 +512,7 @@ export function BlogApp({
       setActiveTag(cleaned)
       setSearchOpen(true)
       if (route.kind !== 'feed') {
-        onNavigate('/blog')
+        onNavigate('/')
       }
     },
     [activeTag, onNavigate, route.kind]
@@ -609,7 +615,7 @@ export function BlogApp({
                   type="button"
                   className="fig-nav-tab is-active"
                   aria-current="page"
-                  onClick={() => onNavigate('/blog')}
+                  onClick={() => onNavigate('/')}
                 >
                   博客
                 </button>
@@ -657,13 +663,16 @@ export function BlogApp({
               onToggleSearch={() => {
                 if (route.kind !== 'feed') {
                   setSearchOpen(true)
-                  onNavigate('/blog')
+                  onNavigate('/')
                 } else {
                   setSearchOpen((prev) => !prev)
                 }
               }}
-              onNavigateFeed={() => onNavigate('/blog')}
-              onNavigateArchives={() => onNavigate('/blog/archives')}
+              onNavigateFeed={() => onNavigate('/')}
+              onNavigateArchives={() => {
+                setSearchOpen(false)
+                onNavigate('/archives')
+              }}
               onOpenCompose={(type) => handleOpenCompose(type ?? 'moment')}
               onOpenSettings={() => setSettingsOpen(true)}
               onOpenLogin={onRequestLogin}
@@ -883,10 +892,10 @@ export function BlogApp({
                         isOwner={isOwner}
                         index={idx}
                         onOpenArticle={(shortId) =>
-                          onNavigate(`/blog/articles/${encodeURIComponent(shortId)}`)
+                          onNavigate(`/articles/${encodeURIComponent(shortId)}`)
                         }
                         onOpenMoment={(shortId) =>
-                          onNavigate(`/blog/moments/${encodeURIComponent(shortId)}`)
+                          onNavigate(`/moments/${encodeURIComponent(shortId)}`)
                         }
                         onFilterTag={handleFilterTag}
                         onOpenLightbox={handleOpenLightbox}
@@ -922,12 +931,12 @@ export function BlogApp({
               items={archiveItems}
               loading={archivesLoading}
               profile={profile}
-              onBack={() => onNavigate('/blog')}
+              onBack={() => onNavigate('/')}
               onOpenArticle={(shortId) =>
-                onNavigate(`/blog/articles/${encodeURIComponent(shortId)}`)
+                onNavigate(`/articles/${encodeURIComponent(shortId)}`)
               }
               onOpenMoment={(shortId) =>
-                onNavigate(`/blog/moments/${encodeURIComponent(shortId)}`)
+                onNavigate(`/moments/${encodeURIComponent(shortId)}`)
               }
             />
           )}
@@ -940,7 +949,7 @@ export function BlogApp({
                     <button
                       type="button"
                       className="blog-sticky-back"
-                      onClick={() => onNavigate('/blog')}
+                      onClick={() => onNavigate('/')}
                     >
                       <AppIcon name="arrowLeft" size={16} />
                       <span>朋友圈</span>
@@ -961,7 +970,7 @@ export function BlogApp({
                     <button
                       type="button"
                       className="blog-sticky-back"
-                      onClick={() => onNavigate('/blog')}
+                      onClick={() => onNavigate('/')}
                     >
                       <AppIcon name="arrowLeft" size={16} />
                       <span>朋友圈</span>
@@ -979,7 +988,7 @@ export function BlogApp({
                       <button
                         type="button"
                         className="blog-btn blog-btn-subtle"
-                        onClick={() => onNavigate('/blog')}
+                        onClick={() => onNavigate('/')}
                       >
                         返回朋友圈
                       </button>
@@ -1000,12 +1009,12 @@ export function BlogApp({
                   isOwner={isOwner}
                   darkMode={darkMode}
                   onToggleDarkMode={toggleDarkMode}
-                  onBack={() => onNavigate('/blog')}
+                  onBack={() => onNavigate('/')}
                   onOpenPost={(type, shortId) =>
                     onNavigate(
                       type === 'article'
-                        ? `/blog/articles/${encodeURIComponent(shortId)}`
-                        : `/blog/moments/${encodeURIComponent(shortId)}`
+                        ? `/articles/${encodeURIComponent(shortId)}`
+                        : `/moments/${encodeURIComponent(shortId)}`
                     )
                   }
                   onFilterTag={handleFilterTag}

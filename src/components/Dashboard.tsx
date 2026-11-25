@@ -2103,7 +2103,7 @@ export function Dashboard({
           onGenerateCover={() => void generateItemCover(item)}
           onPreview={(assets, index) => setOverlay({ type: 'lightbox', assets, index })}
           onShareToBlog={
-            onOpenBlog ? () => onOpenBlog({ path: '/blog', importItemId: item.id }) : undefined
+            onOpenBlog ? () => onOpenBlog({ path: '/', importItemId: item.id }) : undefined
           }
         />
       ))}
@@ -2160,7 +2160,7 @@ export function Dashboard({
               <button
                 type="button"
                 className="fig-nav-tab"
-                onClick={() => onOpenBlog?.({ path: '/blog' })}
+                onClick={() => onOpenBlog?.({ path: '/' })}
               >
                 博客
               </button>
@@ -2996,7 +2996,7 @@ export function Dashboard({
             className="fig-sheet-row"
             onClick={() => {
               setMobileMoreOpen(false)
-              onOpenBlog?.({ path: '/blog' })
+              onOpenBlog?.({ path: '/' })
             }}
           >
             <AppIcon name="book" size={17} />

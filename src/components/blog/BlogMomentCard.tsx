@@ -244,8 +244,8 @@ export function BlogMomentCard({
 
   const detailHref =
     post.type === 'article'
-      ? `/blog/articles/${encodeURIComponent(post.shortId)}`
-      : `/blog/moments/${encodeURIComponent(post.shortId)}`
+      ? `/articles/${encodeURIComponent(post.shortId)}`
+      : `/moments/${encodeURIComponent(post.shortId)}`
 
   const hasBadges =
     post.isPinned ||
