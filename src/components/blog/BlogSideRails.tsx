@@ -729,16 +729,15 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
       ? Math.min(100, Math.max(0, (currentTime / effectiveDuration) * 100))
       : 0
   const effectMeta = getAmbientEffectMeta(activeVisualConfig.effect)
-  const ambientLabel =
-    ambientMode === 'minimal' ? '特效 · 已关闭' : `特效 · ${effectMeta.name}`
+  const ambientLabel = ambientMode === 'minimal' ? '特效关' : effectMeta.name
   const showTuner = isOwner && Boolean(currentTrack)
 
   const footerPillBaseStyle: CSSProperties = {
     height: 28,
-    padding: '0 10px',
+    padding: '0 8px',
     borderRadius: 'var(--blog-radius-pill, 50px)',
-    fontSize: 12,
-    gap: 5,
+    fontSize: 11.5,
+    gap: 4,
     minWidth: 0
   }
 
@@ -903,7 +902,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
         style={{
           display: 'grid',
           gridTemplateColumns: showTuner
-            ? 'minmax(0, 1fr) minmax(0, 1.25fr) auto'
+            ? 'minmax(0, 1.05fr) minmax(0, 1.05fr) auto'
             : 'repeat(2, minmax(0, 1fr))',
           gap: 6,
           paddingTop: 2

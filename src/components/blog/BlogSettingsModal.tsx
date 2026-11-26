@@ -657,7 +657,7 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
                 <span className="blog-field-hint">播放时自动提取专辑封面主色同步全站强调色</span>
               </div>
               <div
-                className="blog-ambient-mode-grid is-three"
+                className="blog-ambient-mode-grid"
                 role="radiogroup"
                 aria-label="音乐播放背景氛围"
               >
