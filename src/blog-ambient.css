@@ -1,8 +1,26 @@
 /* ==========================================================================
-   Do It Laaaaaater — Dynamic Cover Ambient Engine, Apple Music Immersion Stage,
-   Custom Volume Controls & Three-in-One Animated Emoji Picker Stylesheet
-   Scoped cleanly for .blog-root & portal stages (Light + Dark + Reduced Motion).
+   Do It Laaaaaater — Dynamic Cover Ambient Engine (Waves / Silk / Vinyl / Minimal),
+   Apple Music Immersion Stage, Custom Volume Controls & Three-in-One Emoji Picker
+   Scoped cleanly for .blog-theme-scope, .blog-root & portal stages.
    ========================================================================== */
+
+@property --accent {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #4d49fc;
+}
+
+@property --accent-hover {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #3c38e0;
+}
+
+@property --accent-soft {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(77, 73, 252, 0.08);
+}
 
 @property --blog-link {
   syntax: '<color>';
@@ -23,52 +41,81 @@
 }
 
 /* --------------------------------------------------------------------------
-   1. Ambient Root Transitions & Frosted Glass Surfaces
+   1. Theme Scope, Ambient Root Transitions & Crisp Frosted Glass Surfaces
    -------------------------------------------------------------------------- */
 
-.blog-root {
+.blog-theme-scope {
   transition:
-    background-color 0.35s var(--blog-ease),
-    color 0.25s var(--blog-ease),
+    --accent 600ms ease,
+    --accent-hover 600ms ease,
+    --accent-soft 600ms ease,
     --blog-link 600ms ease,
     --blog-link-hover 600ms ease,
     --blog-link-soft 600ms ease;
 }
 
-.blog-root.has-ambient-glow,
-.blog-root.has-ambient-wallpaper {
+.blog-theme-scope .fig-header .btn-primary,
+.blog-theme-scope .fig-header .fig-nav-tab.is-active,
+.blog-theme-scope .fig-header .fig-nav-tab.is-active::after {
+  transition:
+    background-color 600ms ease,
+    border-color 600ms ease,
+    color 600ms ease;
+}
+
+.blog-root {
+  transition:
+    background-color 0.35s var(--blog-ease),
+    color 0.25s var(--blog-ease),
+    --accent 600ms ease,
+    --accent-hover 600ms ease,
+    --accent-soft 600ms ease,
+    --blog-link 600ms ease,
+    --blog-link-hover 600ms ease,
+    --blog-link-soft 600ms ease;
+}
+
+.blog-root.has-ambient-waves,
+.blog-root.has-ambient-silk,
+.blog-root.has-ambient-vinyl {
   background: transparent;
   isolation: isolate;
 }
 
-.blog-root.has-ambient-glow .blog-bento-stage,
-.blog-root.has-ambient-wallpaper .blog-bento-stage,
-.blog-root.has-ambient-glow > .blog-shell,
-.blog-root.has-ambient-wallpaper > .blog-shell {
+.blog-root.has-ambient-waves .blog-bento-stage,
+.blog-root.has-ambient-silk .blog-bento-stage,
+.blog-root.has-ambient-vinyl .blog-bento-stage,
+.blog-root.has-ambient-waves > .blog-shell,
+.blog-root.has-ambient-silk > .blog-shell,
+.blog-root.has-ambient-vinyl > .blog-shell {
   position: relative;
   z-index: 1;
 }
 
-/* Frosted glass card surfaces while keeping text 100% sharp #000000 / #f4f4f5 */
-.blog-root.has-ambient-glow,
-.blog-root.has-ambient-wallpaper {
+/* Crisp frosted glass card surfaces while keeping blog text 100% razor-sharp */
+.blog-root.has-ambient-waves,
+.blog-root.has-ambient-silk,
+.blog-root.has-ambient-vinyl {
   --blog-text: #000000;
-  --blog-surface-translucent: rgba(255, 255, 255, 0.86);
+  --blog-surface-translucent: rgba(255, 255, 255, 0.88);
 }
 
-.blog-root[data-blog-theme='dark'].has-ambient-glow,
-.blog-root[data-blog-theme='dark'].has-ambient-wallpaper {
+.blog-root[data-blog-theme='dark'].has-ambient-waves,
+.blog-root[data-blog-theme='dark'].has-ambient-silk,
+.blog-root[data-blog-theme='dark'].has-ambient-vinyl {
   --blog-text: #f4f4f5;
-  --blog-surface-translucent: rgba(26, 26, 30, 0.80);
+  --blog-surface-translucent: rgba(24, 24, 28, 0.82);
 }
 
-.blog-root.has-ambient-glow .blog-shell,
-.blog-root.has-ambient-wallpaper .blog-shell,
-.blog-root.has-ambient-glow .blog-rail-card,
-.blog-root.has-ambient-wallpaper .blog-rail-card {
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(22px) saturate(1.35);
-  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+.blog-root.has-ambient-waves .blog-shell,
+.blog-root.has-ambient-silk .blog-shell,
+.blog-root.has-ambient-vinyl .blog-shell,
+.blog-root.has-ambient-waves .blog-rail-card,
+.blog-root.has-ambient-silk .blog-rail-card,
+.blog-root.has-ambient-vinyl .blog-rail-card {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(20px) saturate(1.32);
+  -webkit-backdrop-filter: blur(20px) saturate(1.32);
   border-color: rgba(0, 0, 0, 0.08);
   transition:
     background-color 600ms var(--blog-ease),
@@ -76,48 +123,60 @@
     color 240ms var(--blog-ease);
 }
 
-.blog-root[data-blog-theme='dark'].has-ambient-glow .blog-shell,
-.blog-root[data-blog-theme='dark'].has-ambient-wallpaper .blog-shell,
-.blog-root[data-blog-theme='dark'].has-ambient-glow .blog-rail-card,
-.blog-root[data-blog-theme='dark'].has-ambient-wallpaper .blog-rail-card {
-  background: rgba(26, 26, 30, 0.80);
-  backdrop-filter: blur(22px) saturate(1.35);
-  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+.blog-root[data-blog-theme='dark'].has-ambient-waves .blog-shell,
+.blog-root[data-blog-theme='dark'].has-ambient-silk .blog-shell,
+.blog-root[data-blog-theme='dark'].has-ambient-vinyl .blog-shell,
+.blog-root[data-blog-theme='dark'].has-ambient-waves .blog-rail-card,
+.blog-root[data-blog-theme='dark'].has-ambient-silk .blog-rail-card,
+.blog-root[data-blog-theme='dark'].has-ambient-vinyl .blog-rail-card {
+  background: rgba(24, 24, 28, 0.82);
+  backdrop-filter: blur(20px) saturate(1.32);
+  -webkit-backdrop-filter: blur(20px) saturate(1.32);
   border-color: rgba(255, 255, 255, 0.11);
 }
 
-.blog-root.has-ambient-glow .blog-search-drawer,
-.blog-root.has-ambient-wallpaper .blog-search-drawer,
-.blog-root.has-ambient-glow .blog-p2-nav-strip,
-.blog-root.has-ambient-wallpaper .blog-p2-nav-strip {
+.blog-root.has-ambient-waves .blog-search-drawer,
+.blog-root.has-ambient-silk .blog-search-drawer,
+.blog-root.has-ambient-vinyl .blog-search-drawer,
+.blog-root.has-ambient-waves .blog-p2-nav-strip,
+.blog-root.has-ambient-silk .blog-p2-nav-strip,
+.blog-root.has-ambient-vinyl .blog-p2-nav-strip {
   background: transparent;
 }
 
-.blog-root.has-ambient-glow .blog-dock-btn:not(.is-primary),
-.blog-root.has-ambient-wallpaper .blog-dock-btn:not(.is-primary) {
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(22px) saturate(1.35);
-  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+.blog-root.has-ambient-waves .blog-dock-btn:not(.is-primary),
+.blog-root.has-ambient-silk .blog-dock-btn:not(.is-primary),
+.blog-root.has-ambient-vinyl .blog-dock-btn:not(.is-primary) {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(20px) saturate(1.32);
+  -webkit-backdrop-filter: blur(20px) saturate(1.32);
 }
 
-.blog-root[data-blog-theme='dark'].has-ambient-glow .blog-dock-btn:not(.is-primary),
-.blog-root[data-blog-theme='dark'].has-ambient-wallpaper .blog-dock-btn:not(.is-primary) {
-  background: rgba(26, 26, 30, 0.80);
+.blog-root[data-blog-theme='dark'].has-ambient-waves .blog-dock-btn:not(.is-primary),
+.blog-root[data-blog-theme='dark'].has-ambient-silk .blog-dock-btn:not(.is-primary),
+.blog-root[data-blog-theme='dark'].has-ambient-vinyl .blog-dock-btn:not(.is-primary) {
+  background: rgba(24, 24, 28, 0.82);
 }
 
 /* Harmonize primary CTAs with cover-extracted --blog-link when ambient is active */
-.blog-root.has-ambient-glow .blog-btn-primary,
-.blog-root.has-ambient-wallpaper .blog-btn-primary,
-.blog-root.has-ambient-glow .blog-dock-btn.is-primary,
-.blog-root.has-ambient-wallpaper .blog-dock-btn.is-primary,
-.blog-root.has-ambient-glow .blog-p2-music-pill-btn.is-primary,
-.blog-root.has-ambient-wallpaper .blog-p2-music-pill-btn.is-primary,
-.blog-root.has-ambient-glow .blog-p2-play-fab,
-.blog-root.has-ambient-wallpaper .blog-p2-play-fab,
-.blog-root.has-ambient-glow .blog-top-pill.is-active,
-.blog-root.has-ambient-wallpaper .blog-top-pill.is-active,
-.blog-root.has-ambient-glow .blog-top-icon-btn.is-active,
-.blog-root.has-ambient-wallpaper .blog-top-icon-btn.is-active {
+.blog-root.has-ambient-waves .blog-btn-primary,
+.blog-root.has-ambient-silk .blog-btn-primary,
+.blog-root.has-ambient-vinyl .blog-btn-primary,
+.blog-root.has-ambient-waves .blog-dock-btn.is-primary,
+.blog-root.has-ambient-silk .blog-dock-btn.is-primary,
+.blog-root.has-ambient-vinyl .blog-dock-btn.is-primary,
+.blog-root.has-ambient-waves .blog-p2-music-pill-btn.is-primary,
+.blog-root.has-ambient-silk .blog-p2-music-pill-btn.is-primary,
+.blog-root.has-ambient-vinyl .blog-p2-music-pill-btn.is-primary,
+.blog-root.has-ambient-waves .blog-p2-play-fab,
+.blog-root.has-ambient-silk .blog-p2-play-fab,
+.blog-root.has-ambient-vinyl .blog-p2-play-fab,
+.blog-root.has-ambient-waves .blog-top-pill.is-active,
+.blog-root.has-ambient-silk .blog-top-pill.is-active,
+.blog-root.has-ambient-vinyl .blog-top-pill.is-active,
+.blog-root.has-ambient-waves .blog-top-icon-btn.is-active,
+.blog-root.has-ambient-silk .blog-top-icon-btn.is-active,
+.blog-root.has-ambient-vinyl .blog-top-icon-btn.is-active {
   background: var(--blog-link);
   border-color: var(--blog-link);
   transition:
@@ -126,25 +185,29 @@
     transform 0.16s var(--blog-ease);
 }
 
-.blog-root.has-ambient-glow .blog-btn-primary:hover:not(:disabled),
-.blog-root.has-ambient-wallpaper .blog-btn-primary:hover:not(:disabled),
-.blog-root.has-ambient-glow .blog-dock-btn.is-primary:hover,
-.blog-root.has-ambient-wallpaper .blog-dock-btn.is-primary:hover,
-.blog-root.has-ambient-glow .blog-p2-music-pill-btn.is-primary:hover,
-.blog-root.has-ambient-wallpaper .blog-p2-music-pill-btn.is-primary:hover,
-.blog-root.has-ambient-glow .blog-p2-play-fab:hover,
-.blog-root.has-ambient-wallpaper .blog-p2-play-fab:hover {
+.blog-root.has-ambient-waves .blog-btn-primary:hover:not(:disabled),
+.blog-root.has-ambient-silk .blog-btn-primary:hover:not(:disabled),
+.blog-root.has-ambient-vinyl .blog-btn-primary:hover:not(:disabled),
+.blog-root.has-ambient-waves .blog-dock-btn.is-primary:hover,
+.blog-root.has-ambient-silk .blog-dock-btn.is-primary:hover,
+.blog-root.has-ambient-vinyl .blog-dock-btn.is-primary:hover,
+.blog-root.has-ambient-waves .blog-p2-music-pill-btn.is-primary:hover,
+.blog-root.has-ambient-silk .blog-p2-music-pill-btn.is-primary:hover,
+.blog-root.has-ambient-vinyl .blog-p2-music-pill-btn.is-primary:hover,
+.blog-root.has-ambient-waves .blog-p2-play-fab:hover,
+.blog-root.has-ambient-silk .blog-p2-play-fab:hover,
+.blog-root.has-ambient-vinyl .blog-p2-play-fab:hover {
   background: var(--blog-link-hover);
   border-color: var(--blog-link-hover);
 }
 
 /* --------------------------------------------------------------------------
-   2. Fixed Ambient Backdrop Layer (Glow Blobs + Dynamic Cover Wallpaper)
+   2. Fixed Ambient Backdrop Layer (Waves / Silk / Vinyl)
    -------------------------------------------------------------------------- */
 
 .blog-ambient-layer {
   --ambient-glow-a: 77, 73, 252;
-  --ambient-glow-b: 99, 102, 241;
+  --ambient-glow-b: 147, 51, 234;
   --ambient-glow-c: 56, 189, 248;
 
   position: fixed;
@@ -159,211 +222,413 @@
 }
 
 .blog-ambient-layer.is-dark {
-  background: #111113;
+  background: #101014;
 }
 
 .blog-ambient-layer.is-light {
-  background: #f6f6f7;
+  background: #f6f6f8;
 }
 
 .blog-ambient-layer.is-active {
   opacity: 1;
 }
 
-.blog-ambient-glow-stage,
-.blog-ambient-wp-stage {
+.blog-ambient-stage {
   position: absolute;
   inset: 0;
   opacity: 0;
-  transition: opacity 700ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 650ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.blog-ambient-glow-stage.is-visible,
-.blog-ambient-wp-stage.is-visible {
+.blog-ambient-stage.is-visible {
   opacity: 1;
 }
 
-/* Mode 1: Glow Blobs */
-.blog-ambient-blob {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(78px);
-  will-change: transform;
-  transform: translate3d(0, 0, 0);
-  animation-play-state: paused;
-  transition: background 900ms ease;
-}
-
-.blog-ambient-layer.is-animating .blog-ambient-blob {
-  animation-play-state: running;
-}
-
-.blog-ambient-blob-1 {
-  top: -16%;
-  left: -10%;
-  width: min(68vw, 760px);
-  height: min(68vw, 760px);
-  background: radial-gradient(
-    circle at 42% 42%,
-    rgba(var(--ambient-glow-a), 0.34) 0%,
-    rgba(var(--ambient-glow-a), 0.12) 48%,
-    rgba(var(--ambient-glow-a), 0) 74%
-  );
-  animation: blogAuraDrift1 26s ease-in-out infinite alternate;
-}
-
-.blog-ambient-blob-2 {
-  right: -12%;
-  top: 14%;
-  width: min(62vw, 700px);
-  height: min(62vw, 700px);
-  background: radial-gradient(
-    circle at 55% 48%,
-    rgba(var(--ambient-glow-b), 0.28) 0%,
-    rgba(var(--ambient-glow-b), 0.10) 50%,
-    rgba(var(--ambient-glow-b), 0) 74%
-  );
-  animation: blogAuraDrift2 32s ease-in-out infinite alternate;
-}
-
-.blog-ambient-blob-3 {
-  left: 18%;
-  bottom: -20%;
-  width: min(66vw, 740px);
-  height: min(66vw, 740px);
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgba(var(--ambient-glow-c), 0.25) 0%,
-    rgba(var(--ambient-glow-c), 0.08) 52%,
-    rgba(var(--ambient-glow-c), 0) 75%
-  );
-  animation: blogAuraDrift3 29s ease-in-out infinite alternate;
-}
-
-.blog-ambient-layer.is-dark .blog-ambient-blob-1 {
-  background: radial-gradient(
-    circle at 42% 42%,
-    rgba(var(--ambient-glow-a), 0.38) 0%,
-    rgba(var(--ambient-glow-a), 0.14) 48%,
-    rgba(var(--ambient-glow-a), 0) 74%
-  );
-}
-
-.blog-ambient-layer.is-dark .blog-ambient-blob-2 {
-  background: radial-gradient(
-    circle at 55% 48%,
-    rgba(var(--ambient-glow-b), 0.32) 0%,
-    rgba(var(--ambient-glow-b), 0.11) 50%,
-    rgba(var(--ambient-glow-b), 0) 74%
-  );
-}
-
-.blog-ambient-layer.is-dark .blog-ambient-blob-3 {
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgba(var(--ambient-glow-c), 0.28) 0%,
-    rgba(var(--ambient-glow-c), 0.10) 52%,
-    rgba(var(--ambient-glow-c), 0) 75%
-  );
-}
-
-/* Mode 2: Dynamic Blurred Album Cover Wallpaper */
-.blog-ambient-wp-layer {
-  position: absolute;
-  inset: -28%;
-  background-position: center;
-  background-size: cover;
-  background-repeat: no-repeat;
-  background-image:
-    radial-gradient(circle at 28% 30%, rgba(var(--ambient-glow-a), 0.78), transparent 58%),
-    radial-gradient(circle at 74% 66%, rgba(var(--ambient-glow-b), 0.72), transparent 60%),
-    radial-gradient(circle at 48% 82%, rgba(var(--ambient-glow-c), 0.65), transparent 58%);
-  filter: blur(74px) saturate(1.55);
-  will-change: transform;
-  animation-play-state: paused;
-}
-
-.blog-ambient-layer.is-animating .blog-ambient-wp-layer {
-  animation-play-state: running;
-}
-
-.blog-ambient-wp-a {
-  opacity: 0.78;
-  transform-origin: 46% 48%;
-  animation: blogWpSpinA 54s linear infinite;
-}
-
-.blog-ambient-wp-b {
-  opacity: 0.56;
-  mix-blend-mode: screen;
-  transform-origin: 54% 52%;
-  animation: blogWpSpinB 68s linear infinite;
-}
-
-.blog-ambient-layer.is-light .blog-ambient-wp-b {
-  mix-blend-mode: normal;
-  opacity: 0.45;
-}
-
-.blog-ambient-wp-veil {
+/* Canvas Layers: Waves (Retina crisp) & Silk (GPU upscaled fluid aurora) */
+.blog-ambient-canvas {
   position: absolute;
   inset: 0;
-  background: rgba(246, 246, 248, 0.52);
-  transition: background-color 600ms ease;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
-.blog-ambient-layer.is-dark .blog-ambient-wp-veil {
-  background: rgba(13, 13, 17, 0.60);
+.blog-ambient-canvas.is-waves {
+  filter: none;
+}
+
+.blog-ambient-canvas.is-silk {
+  transform: scale(1.06);
+  transform-origin: center center;
+  filter: blur(18px) saturate(1.18);
+  will-change: contents;
+}
+
+/* Mode 3: Crisp Architectural Vinyl & Unstretched Artwork Showcase */
+.blog-ambient-vinyl-stage {
+  overflow: hidden;
+}
+
+.blog-vinyl-ambient-wash {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      circle at 6% 50%,
+      rgba(var(--ambient-glow-a), 0.16) 0%,
+      rgba(var(--ambient-glow-b), 0.07) 34%,
+      transparent 64%
+    ),
+    radial-gradient(
+      circle at 95% 58%,
+      rgba(var(--ambient-glow-c), 0.15) 0%,
+      rgba(var(--ambient-glow-b), 0.06) 36%,
+      transparent 64%
+    );
+  transition: background 600ms ease;
+}
+
+.blog-ambient-layer.is-dark .blog-vinyl-ambient-wash {
+  background:
+    radial-gradient(
+      circle at 6% 50%,
+      rgba(var(--ambient-glow-a), 0.22) 0%,
+      rgba(var(--ambient-glow-b), 0.10) 36%,
+      transparent 66%
+    ),
+    radial-gradient(
+      circle at 95% 58%,
+      rgba(var(--ambient-glow-c), 0.20) 0%,
+      rgba(var(--ambient-glow-b), 0.08) 38%,
+      transparent 66%
+    );
+}
+
+/* Left Outer Edge Vinyl Record Half-Disc (Desktop >= 1240px) */
+.blog-vinyl-left-assembly {
+  position: absolute;
+  top: 50%;
+  left: clamp(-215px, -11.5vw, -145px);
+  width: clamp(390px, 29vw, 470px);
+  height: clamp(390px, 29vw, 470px);
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.blog-vinyl-aura {
+  position: absolute;
+  inset: -14%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(var(--ambient-glow-a), 0.28) 0%,
+    rgba(var(--ambient-glow-c), 0.12) 48%,
+    transparent 72%
+  );
+  filter: blur(28px);
+}
+
+.blog-vinyl-platter {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  box-shadow:
+    0 26px 70px rgba(0, 0, 0, 0.24),
+    0 4px 18px rgba(0, 0, 0, 0.14),
+    inset 0 0 0 1.5px rgba(255, 255, 255, 0.14);
+}
+
+.blog-ambient-layer.is-dark .blog-vinyl-platter {
+  box-shadow:
+    0 30px 84px rgba(0, 0, 0, 0.62),
+    0 0 42px rgba(var(--ambient-glow-a), 0.18),
+    inset 0 0 0 1.5px rgba(255, 255, 255, 0.16);
+}
+
+.blog-vinyl-disc {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    #1d1d24 0%,
+    #141419 38%,
+    #0d0d11 72%,
+    #18181f 96%,
+    #0a0a0d 100%
+  );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  will-change: transform;
+  animation: blogVinylSpin 18s linear infinite;
+  animation-play-state: paused;
+}
+
+.blog-ambient-layer.is-animating .blog-vinyl-disc.is-rotating {
+  animation-play-state: running;
+}
+
+.blog-vinyl-grooves {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Stationary anisotropic gallery light reflection across the spinning grooves */
+.blog-vinyl-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  background: conic-gradient(
+    from 32deg at 50% 50%,
+    rgba(255, 255, 255, 0) 0deg,
+    rgba(255, 255, 255, 0.11) 24deg,
+    rgba(var(--ambient-glow-c), 0.10) 38deg,
+    rgba(255, 255, 255, 0) 64deg,
+    rgba(255, 255, 255, 0) 180deg,
+    rgba(255, 255, 255, 0.10) 205deg,
+    rgba(var(--ambient-glow-a), 0.10) 220deg,
+    rgba(255, 255, 255, 0) 246deg,
+    rgba(255, 255, 255, 0) 360deg
+  );
+  mix-blend-mode: screen;
+}
+
+/* Razor-sharp unstretched 1:1 circular vinyl center label */
+.blog-vinyl-label {
+  position: relative;
+  z-index: 2;
+  width: 37%;
+  height: 37%;
+  border-radius: 50%;
+  overflow: hidden;
+  background: linear-gradient(
+    135deg,
+    rgba(var(--ambient-glow-a), 0.92) 0%,
+    rgba(var(--ambient-glow-b), 0.85) 100%
+  );
+  box-shadow:
+    0 0 0 3px rgba(18, 18, 22, 0.95),
+    0 0 0 4.5px rgba(255, 255, 255, 0.22),
+    inset 0 0 12px rgba(0, 0, 0, 0.26);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.blog-vinyl-label img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  image-rendering: auto;
+}
+
+.blog-vinyl-label-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--blog-font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.blog-vinyl-spindle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #f4f4f6;
+  border: 2.5px solid rgba(16, 16, 20, 0.88);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.blog-ambient-layer.is-dark .blog-vinyl-spindle {
+  background: #111115;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+/* Right Outer Edge Crisp Tilted 1:1 Vinyl Sleeve Showcase (Desktop >= 1240px) */
+.blog-vinyl-sleeve-echo {
+  position: absolute;
+  right: clamp(-58px, -3.2vw, -22px);
+  bottom: 9%;
+  width: clamp(196px, 14.8vw, 248px);
+  transform: rotate(-7deg);
+  transform-origin: center center;
+}
+
+.blog-vinyl-sleeve-glow {
+  position: absolute;
+  inset: -26%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(var(--ambient-glow-c), 0.26) 0%,
+    rgba(var(--ambient-glow-b), 0.14) 48%,
+    transparent 74%
+  );
+  filter: blur(26px);
+}
+
+.blog-vinyl-sleeve-card {
+  position: relative;
+  padding: 8px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow:
+    0 22px 54px rgba(0, 0, 0, 0.14),
+    0 2px 10px rgba(0, 0, 0, 0.06);
+  opacity: 0.88;
+}
+
+.blog-ambient-layer.is-dark .blog-vinyl-sleeve-card {
+  background: rgba(24, 24, 30, 0.72);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 26px 64px rgba(0, 0, 0, 0.48),
+    0 0 32px rgba(var(--ambient-glow-c), 0.14);
+}
+
+.blog-vinyl-sleeve-art {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(
+    135deg,
+    rgba(var(--ambient-glow-a), 0.78) 0%,
+    rgba(var(--ambient-glow-c), 0.72) 100%
+  );
+}
+
+.blog-vinyl-sleeve-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blog-vinyl-sleeve-fallback {
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.26), transparent 60%),
+    linear-gradient(
+      135deg,
+      rgba(var(--ambient-glow-a), 0.85),
+      rgba(var(--ambient-glow-b), 0.78),
+      rgba(var(--ambient-glow-c), 0.82)
+    );
+}
+
+.blog-vinyl-sleeve-meta {
+  margin-top: 7px;
+  padding: 0 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.blog-vinyl-sleeve-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #18181b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blog-ambient-layer.is-dark .blog-vinyl-sleeve-title {
+  color: #f4f4f5;
+}
+
+.blog-vinyl-sleeve-artist {
+  font-size: 10px;
+  font-family: var(--blog-font-mono, ui-monospace, monospace);
+  color: #71717a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blog-ambient-layer.is-dark .blog-vinyl-sleeve-artist {
+  color: #a1a1aa;
+}
+
+/* Mobile / Narrow (< 1240px) Subtle Top/Corner Silk Tint for Vinyl Mode */
+.blog-vinyl-mobile-tint {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      circle at 12% 8%,
+      rgba(var(--ambient-glow-a), 0.22) 0%,
+      transparent 52%
+    ),
+    radial-gradient(
+      circle at 88% 14%,
+      rgba(var(--ambient-glow-c), 0.18) 0%,
+      transparent 48%
+    ),
+    radial-gradient(
+      circle at 50% 96%,
+      rgba(var(--ambient-glow-b), 0.14) 0%,
+      transparent 54%
+    );
+}
+
+@media (max-width: 1239px) {
+  .blog-vinyl-left-assembly,
+  .blog-vinyl-sleeve-echo {
+    display: none;
+  }
+
+  .blog-vinyl-mobile-tint {
+    display: block;
+  }
 }
 
 /* Ultra-Subtle Editorial Paper Grain */
 .blog-ambient-grain {
   position: absolute;
   inset: 0;
-  opacity: 0.032;
+  opacity: 0.03;
   mix-blend-mode: overlay;
   background-image: radial-gradient(rgba(0, 0, 0, 0.65) 0.65px, transparent 0.65px);
   background-size: 3px 3px;
 }
 
 .blog-ambient-layer.is-dark .blog-ambient-grain {
-  opacity: 0.045;
+  opacity: 0.042;
   background-image: radial-gradient(rgba(255, 255, 255, 0.65) 0.65px, transparent 0.65px);
 }
 
-@keyframes blogAuraDrift1 {
-  0% {
-    transform: translate3d(0, 0, 0) scale(1);
+@keyframes blogVinylSpin {
+  from {
+    transform: rotate(0deg);
   }
-  50% {
-    transform: translate3d(8vw, 6vh, 0) scale(1.08);
-  }
-  100% {
-    transform: translate3d(3vw, 13vh, 0) scale(0.96);
-  }
-}
-
-@keyframes blogAuraDrift2 {
-  0% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(-9vw, 8vh, 0) scale(1.06);
-  }
-  100% {
-    transform: translate3d(-4vw, -7vh, 0) scale(1.11);
-  }
-}
-
-@keyframes blogAuraDrift3 {
-  0% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(6vw, -8vh, 0) scale(1.09);
-  }
-  100% {
-    transform: translate3d(-7vw, -4vh, 0) scale(0.95);
+  to {
+    transform: rotate(360deg);
   }
 }
 
@@ -1329,7 +1594,7 @@ input.blog-emoji-search:focus {
 
 .blog-emoji-cell:hover {
   background: var(--blog-link-soft, rgba(77, 73, 252, 0.08));
-  border-color: rgba(77, 73, 252, 0.22);
+  border-color: rgba(var(--blog-link-rgb, 77, 73, 252), 0.24);
   transform: scale(1.1);
 }
 
@@ -1498,8 +1763,7 @@ input.blog-emoji-search:focus {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .blog-ambient-blob,
-  .blog-ambient-wp-layer,
+  .blog-vinyl-disc,
   .blog-immersion-bg-layer {
     animation: none !important;
   }
@@ -1512,8 +1776,8 @@ input.blog-emoji-search:focus {
   .blog-immersion-artwork,
   .blog-immersion-lrc-line,
   .blog-ambient-layer,
-  .blog-ambient-glow-stage,
-  .blog-ambient-wp-stage {
+  .blog-ambient-stage,
+  .blog-theme-scope {
     transition-duration: 0.01ms !important;
   }
 }

@@ -1,12 +1,14 @@
-export type BlogAmbientMode = 'glow' | 'wallpaper' | 'minimal'
+export type BlogAmbientMode = 'waves' | 'silk' | 'vinyl' | 'minimal'
 
 export interface BlogAmbientPalette {
-  accentLight: string       // hex or hsl clamped to WCAG-legible lightness 36%-46% on white
+  accentLight: string       // hex clamped to WCAG-legible lightness 36%-46% on white
   accentLightHover: string
   accentLightSoft: string   // rgba(..., 0.10)
+  accentLightRgb: string    // 'r, g, b'
   accentDark: string        // luminous hue clamped to lightness 66%-76% on dark
   accentDarkHover: string
   accentDarkSoft: string    // rgba(..., 0.16)
+  accentDarkRgb: string     // 'r, g, b'
   glowA: string             // 'r, g, b'
   glowB: string             // 'r, g, b'
   glowC: string             // 'r, g, b'
@@ -26,28 +28,37 @@ export const DEFAULT_AMBIENT_PALETTE: BlogAmbientPalette = {
   accentLight: '#4340d6',
   accentLightHover: '#3532b8',
   accentLightSoft: 'rgba(67, 64, 214, 0.10)',
+  accentLightRgb: '67, 64, 214',
   accentDark: '#8b95f9',
   accentDarkHover: '#a5adfc',
   accentDarkSoft: 'rgba(139, 149, 249, 0.16)',
+  accentDarkRgb: '139, 149, 249',
   glowA: '77, 73, 252',
-  glowB: '99, 102, 241',
+  glowB: '147, 51, 234',
   glowC: '56, 189, 248'
 }
 
 export function readAmbientMode(): BlogAmbientMode {
   try {
     const raw = globalThis.localStorage?.getItem(BLOG_AMBIENT_MODE_KEY)
-    if (raw === 'glow' || raw === 'wallpaper' || raw === 'minimal') {
+    if (raw === 'waves' || raw === 'silk' || raw === 'vinyl' || raw === 'minimal') {
       return raw
+    }
+    // Seamlessly migrate legacy stored modes for existing users
+    if (raw === 'glow') {
+      return 'silk'
+    }
+    if (raw === 'wallpaper') {
+      return 'vinyl'
     }
   } catch {
     // Ignore storage access errors in restricted browsing modes.
   }
-  return 'glow'
+  return 'waves'
 }
 
 export function saveAmbientMode(mode: BlogAmbientMode): void {
-  if (mode !== 'glow' && mode !== 'wallpaper' && mode !== 'minimal') return
+  if (mode !== 'waves' && mode !== 'silk' && mode !== 'vinyl' && mode !== 'minimal') return
   try {
     globalThis.localStorage?.setItem(BLOG_AMBIENT_MODE_KEY, mode)
   } catch {
@@ -57,6 +68,10 @@ export function saveAmbientMode(mode: BlogAmbientMode): void {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
+}
+
+function normalizeHue(hue: number): number {
+  return ((hue % 360) + 360) % 360
 }
 
 function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
@@ -85,7 +100,7 @@ function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
 }
 
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
-  const hue = ((h % 360) + 360) % 360
+  const hue = normalizeHue(h)
   const sat = clamp(s, 0, 1)
   const light = clamp(l, 0, 1)
 
@@ -158,8 +173,18 @@ function contrastRatio(lumA: number, lumB: number): number {
 }
 
 function hueDistance(a: number, b: number): number {
-  const diff = Math.abs((((a - b) % 360) + 360) % 360)
+  const diff = Math.abs(normalizeHue(a - b))
   return diff > 180 ? 360 - diff : diff
+}
+
+/**
+ * Keeps yellow/amber/lime glow colors luminous rather than muddy olive/brown.
+ */
+function crispGlowLightness(hue: number, targetLight: number, minLight = 0.52, maxLight = 0.65): number {
+  const h = normalizeHue(hue)
+  const warmYellowZone = h >= 32 && h <= 98
+  const floor = warmYellowZone ? Math.max(minLight, 0.56) : minLight
+  return clamp(targetLight, floor, maxLight)
 }
 
 /**
@@ -170,7 +195,7 @@ function deriveLightAccent(hue: number, sat: number): {
   accent: [number, number, number]
   hover: [number, number, number]
 } {
-  const s = clamp(sat, 0.56, 0.86)
+  const s = clamp(sat, 0.58, 0.88)
   let bestL = 0.44
   for (let l = 0.46; l >= 0.36; l -= 0.01) {
     const candidate = hslToRgb(hue, s, l)
@@ -182,7 +207,7 @@ function deriveLightAccent(hue: number, sat: number): {
   const hoverL = clamp(bestL - 0.06, 0.28, 0.40)
   return {
     accent: hslToRgb(hue, s, bestL),
-    hover: hslToRgb(hue, clamp(s + 0.04, 0.56, 0.90), hoverL)
+    hover: hslToRgb(hue, clamp(s + 0.04, 0.58, 0.92), hoverL)
   }
 }
 
@@ -194,7 +219,7 @@ function deriveDarkAccent(hue: number, sat: number): {
   hover: [number, number, number]
 } {
   const darkSurfaceLum = relativeLuminance([26, 26, 30])
-  const s = clamp(sat, 0.62, 0.92)
+  const s = clamp(sat, 0.64, 0.92)
   let bestL = 0.70
   for (let l = 0.66; l <= 0.76; l += 0.01) {
     const candidate = hslToRgb(hue, s, l)
@@ -206,27 +231,32 @@ function deriveDarkAccent(hue: number, sat: number): {
   const hoverL = clamp(bestL + 0.06, 0.72, 0.84)
   return {
     accent: hslToRgb(hue, s, bestL),
-    hover: hslToRgb(hue, clamp(s + 0.04, 0.62, 0.95), hoverL)
+    hover: hslToRgb(hue, clamp(s + 0.04, 0.64, 0.95), hoverL)
   }
 }
 
 function buildMonochromePalette(avgLum: number): BlogAmbientPalette {
-  // Cool slate-indigo editorial fallback tuned subtly by monochrome cover brightness
-  const primaryHue = avgLum > 0.55 ? 236 : 228
-  const light = deriveLightAccent(primaryHue, 0.62)
-  const dark = deriveDarkAccent(primaryHue, 0.72)
+  // Cool slate-indigo editorial triad tuned by grayscale cover brightness
+  const primaryHue = avgLum > 0.55 ? 236 : 226
+  const light = deriveLightAccent(primaryHue, 0.66)
+  const dark = deriveDarkAccent(primaryHue, 0.74)
 
-  const glowA = hslToRgb(primaryHue, 0.64, 0.56)
-  const glowB = hslToRgb((primaryHue + 26) % 360, 0.54, 0.54)
-  const glowC = hslToRgb((primaryHue + 332) % 360, 0.48, 0.58)
+  const glowA = hslToRgb(primaryHue, 0.76, 0.57)
+  const glowB = hslToRgb(normalizeHue(primaryHue + 36), 0.78, 0.60)
+  const glowC = hslToRgb(normalizeHue(primaryHue + 148), 0.76, 0.60)
+
+  const lightRgb = formatRgbTriplet(light.accent)
+  const darkRgb = formatRgbTriplet(dark.accent)
 
   return {
     accentLight: rgbToHex(...light.accent),
     accentLightHover: rgbToHex(...light.hover),
-    accentLightSoft: `rgba(${formatRgbTriplet(light.accent)}, 0.10)`,
+    accentLightSoft: `rgba(${lightRgb}, 0.10)`,
+    accentLightRgb: lightRgb,
     accentDark: rgbToHex(...dark.accent),
     accentDarkHover: rgbToHex(...dark.hover),
-    accentDarkSoft: `rgba(${formatRgbTriplet(dark.accent)}, 0.16)`,
+    accentDarkSoft: `rgba(${darkRgb}, 0.16)`,
+    accentDarkRgb: darkRgb,
     glowA: formatRgbTriplet(glowA),
     glowB: formatRgbTriplet(glowB),
     glowC: formatRgbTriplet(glowC)
@@ -243,7 +273,7 @@ interface HueBucket {
   lightSum: number
 }
 
-function computePaletteFromPixels(data: Uint8ClampedArray): BlogAmbientPalette {
+export function computePaletteFromPixels(data: Uint8ClampedArray): BlogAmbientPalette {
   const buckets: HueBucket[] = Array.from({ length: HUE_BUCKET_COUNT }, (_, index) => ({
     index,
     weight: 0,
@@ -271,13 +301,13 @@ function computePaletteFromPixels(data: Uint8ClampedArray): BlogAmbientPalette {
     totalLum += l
 
     // Ignore near-white, near-black, and achromatic gray pixels
-    if (l < 0.08 || l > 0.92 || s < 0.14) {
+    if (l < 0.08 || l > 0.92 || s < 0.15) {
       continue
     }
 
     colorfulPixels += 1
-    const midToneFactor = Math.max(0.12, 1 - Math.abs(l - 0.52) * 1.35)
-    const vibrancyWeight = Math.pow(s, 1.2) * midToneFactor
+    const midToneFactor = Math.max(0.14, 1 - Math.abs(l - 0.54) * 1.32)
+    const vibrancyWeight = Math.pow(s, 1.35) * midToneFactor
 
     const bucketIdx = Math.floor(h / (360 / HUE_BUCKET_COUNT)) % HUE_BUCKET_COUNT
     const rad = (h * Math.PI) / 180
@@ -303,7 +333,7 @@ function computePaletteFromPixels(data: Uint8ClampedArray): BlogAmbientPalette {
     .filter((b) => b.count > 0 && b.weight > 0)
     .map((b) => {
       const meanAngle = (Math.atan2(b.sinSum, b.cosSum) * 180) / Math.PI
-      const hue = ((meanAngle % 360) + 360) % 360
+      const hue = normalizeHue(meanAngle)
       return {
         hue,
         sat: b.satSum / b.weight,
@@ -318,57 +348,69 @@ function computePaletteFromPixels(data: Uint8ClampedArray): BlogAmbientPalette {
   }
 
   const primary = ranked[0]
-  const minSecondaryWeight = primary.weight * 0.12
 
-  const secondary =
-    ranked.find(
-      (item) => item.weight >= minSecondaryWeight && hueDistance(item.hue, primary.hue) >= 28
-    ) ?? {
-      hue: (primary.hue + 34) % 360,
-      sat: clamp(primary.sat * 0.92, 0.52, 0.85),
-      light: clamp(primary.light + 0.04, 0.48, 0.64),
-      weight: primary.weight * 0.5
-    }
+  // Only adopt a secondary/tertiary bucket from the cover if it represents a genuinely
+  // distinct, saturated color (not anti-aliased transition fringe on single-hue covers like Persona 4).
+  const distinctSecondary = ranked.find(
+    (item) =>
+      item.weight >= primary.weight * 0.18 &&
+      item.sat >= 0.34 &&
+      hueDistance(item.hue, primary.hue) >= 34
+  )
 
-  const tertiary =
-    ranked.find(
-      (item) =>
-        item.weight >= minSecondaryWeight * 0.7 &&
-        hueDistance(item.hue, primary.hue) >= 28 &&
-        hueDistance(item.hue, secondary.hue) >= 28
-    ) ?? {
-      hue: (primary.hue + 322) % 360,
-      sat: clamp(primary.sat * 0.88, 0.48, 0.82),
-      light: clamp(primary.light - 0.03, 0.46, 0.64),
-      weight: primary.weight * 0.35
-    }
+  const secondaryHue = distinctSecondary
+    ? distinctSecondary.hue
+    : normalizeHue(primary.hue + 36)
+  const secondarySat = distinctSecondary
+    ? clamp(distinctSecondary.sat, 0.72, 0.92)
+    : clamp(primary.sat * 1.04, 0.76, 0.92)
+  const secondaryLight = distinctSecondary
+    ? crispGlowLightness(distinctSecondary.hue, distinctSecondary.light, 0.54, 0.65)
+    : crispGlowLightness(secondaryHue, Math.max(primary.light + 0.04, 0.58), 0.56, 0.66)
+
+  const distinctTertiary = ranked.find(
+    (item) =>
+      item.weight >= primary.weight * 0.14 &&
+      item.sat >= 0.32 &&
+      hueDistance(item.hue, primary.hue) >= 48 &&
+      hueDistance(item.hue, secondaryHue) >= 38
+  )
+
+  // Harmonized cool/complementary accent (+148°) guarantees unmistakable multi-tone depth
+  // on single-hue covers (e.g. Persona 4 golden yellow 48° -> +36° sunlit lime-gold & +148° crisp sky-cerulean 196°).
+  const tertiaryHue = distinctTertiary
+    ? distinctTertiary.hue
+    : normalizeHue(primary.hue + 148)
+  const tertiarySat = distinctTertiary
+    ? clamp(distinctTertiary.sat, 0.68, 0.90)
+    : clamp(primary.sat * 0.96, 0.74, 0.90)
+  const tertiaryLight = distinctTertiary
+    ? crispGlowLightness(distinctTertiary.hue, distinctTertiary.light, 0.54, 0.66)
+    : crispGlowLightness(tertiaryHue, 0.60, 0.56, 0.66)
 
   const light = deriveLightAccent(primary.hue, primary.sat)
   const dark = deriveDarkAccent(primary.hue, primary.sat)
 
   const glowA = hslToRgb(
     primary.hue,
-    clamp(primary.sat, 0.58, 0.88),
-    clamp(primary.light, 0.48, 0.62)
+    clamp(primary.sat, 0.72, 0.94),
+    crispGlowLightness(primary.hue, primary.light, 0.52, 0.63)
   )
-  const glowB = hslToRgb(
-    secondary.hue,
-    clamp(secondary.sat, 0.54, 0.86),
-    clamp(secondary.light, 0.50, 0.65)
-  )
-  const glowC = hslToRgb(
-    tertiary.hue,
-    clamp(tertiary.sat, 0.50, 0.84),
-    clamp(tertiary.light, 0.48, 0.64)
-  )
+  const glowB = hslToRgb(secondaryHue, secondarySat, secondaryLight)
+  const glowC = hslToRgb(tertiaryHue, tertiarySat, tertiaryLight)
+
+  const lightRgb = formatRgbTriplet(light.accent)
+  const darkRgb = formatRgbTriplet(dark.accent)
 
   return {
     accentLight: rgbToHex(...light.accent),
     accentLightHover: rgbToHex(...light.hover),
-    accentLightSoft: `rgba(${formatRgbTriplet(light.accent)}, 0.10)`,
+    accentLightSoft: `rgba(${lightRgb}, 0.10)`,
+    accentLightRgb: lightRgb,
     accentDark: rgbToHex(...dark.accent),
     accentDarkHover: rgbToHex(...dark.hover),
-    accentDarkSoft: `rgba(${formatRgbTriplet(dark.accent)}, 0.16)`,
+    accentDarkSoft: `rgba(${darkRgb}, 0.16)`,
+    accentDarkRgb: darkRgb,
     glowA: formatRgbTriplet(glowA),
     glowB: formatRgbTriplet(glowB),
     glowC: formatRgbTriplet(glowC)

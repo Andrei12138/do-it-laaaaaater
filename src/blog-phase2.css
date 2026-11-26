@@ -51,14 +51,14 @@
 }
 
 .blog-top-icon-btn.is-music-playing {
-  background: rgba(77, 73, 252, 0.56);
-  border-color: rgba(165, 180, 252, 0.65);
+  background: rgba(var(--blog-link-rgb), 0.72);
+  border-color: rgba(255, 255, 255, 0.42);
   color: #ffffff;
 }
 
 .blog-top-icon-btn.is-music-playing:hover {
-  background: rgba(77, 73, 252, 0.76);
-  border-color: rgba(199, 210, 254, 0.85);
+  background: rgba(var(--blog-link-rgb), 0.88);
+  border-color: rgba(255, 255, 255, 0.68);
   color: #ffffff;
 }
 
@@ -121,11 +121,11 @@
 }
 
 .blog-p2-music-pill.is-playing {
-  border-color: rgba(77, 73, 252, 0.34);
+  border-color: rgba(var(--blog-link-rgb), 0.34);
 }
 
 .blog-root[data-blog-theme='dark'] .blog-p2-music-pill.is-playing {
-  border-color: rgba(129, 140, 248, 0.4);
+  border-color: rgba(var(--blog-link-rgb), 0.4);
 }
 
 .blog-p2-music-disc {
@@ -134,7 +134,7 @@
   height: 36px;
   border-radius: 50%;
   border: 1px solid var(--blog-divider);
-  background: linear-gradient(135deg, #18181b 0%, #2e2e38 55%, #4d49fc 100%);
+  background: linear-gradient(135deg, #18181b 0%, #2e2e38 55%, var(--blog-link) 100%);
   color: #ffffff;
   display: inline-flex;
   align-items: center;
@@ -240,14 +240,14 @@
 }
 
 .blog-p2-music-pill-btn.is-primary {
-  background: #4d49fc;
-  border-color: #4d49fc;
+  background: var(--blog-link);
+  border-color: var(--blog-link);
   color: #ffffff;
 }
 
 .blog-p2-music-pill-btn.is-primary:hover {
-  background: #3c38e0;
-  border-color: #3c38e0;
+  background: var(--blog-link-hover);
+  border-color: var(--blog-link-hover);
 }
 
 /* Music & Lyrics Drawer */
@@ -335,7 +335,7 @@
 .blog-p2-seek-slider {
   flex: 1;
   height: 4px;
-  accent-color: #4d49fc;
+  accent-color: var(--blog-link);
   cursor: pointer;
 }
 
@@ -357,7 +357,7 @@
   height: 40px;
   border-radius: 50%;
   border: 0;
-  background: #4d49fc;
+  background: var(--blog-link);
   color: #ffffff;
   display: inline-flex;
   align-items: center;
@@ -367,7 +367,7 @@
 }
 
 .blog-p2-play-fab:hover {
-  background: #3c38e0;
+  background: var(--blog-link-hover);
   transform: scale(1.04);
 }
 
@@ -781,7 +781,7 @@
   border-radius: 8px;
   overflow: hidden;
   flex-shrink: 0;
-  background: linear-gradient(135deg, #1b1d28 0%, #4d49fc 100%);
+  background: linear-gradient(135deg, #1b1d28 0%, var(--blog-link) 100%);
   color: #ffffff;
   display: flex;
   align-items: center;
@@ -810,7 +810,7 @@
 }
 
 .blog-p2-music-card:hover .blog-p2-music-card-play {
-  background: rgba(77, 73, 252, 0.72);
+  background: rgba(var(--blog-link-rgb), 0.72);
 }
 
 .blog-p2-music-card-info {
@@ -939,10 +939,10 @@
 }
 
 .blog-p2-video-play-btn:hover {
-  background: #4d49fc;
+  background: var(--blog-link);
   border-color: rgba(255, 255, 255, 0.56);
   transform: scale(1.08);
-  box-shadow: 0 12px 32px rgba(77, 73, 252, 0.46);
+  box-shadow: 0 12px 32px rgba(var(--blog-link-rgb), 0.46);
 }
 
 .blog-p2-video-play-btn:active {
@@ -1026,7 +1026,7 @@
 }
 
 .blog-img-cell.is-live-playing .blog-p2-live-badge {
-  background: rgba(77, 73, 252, 0.85);
+  background: rgba(var(--blog-link-rgb), 0.85);
   border-color: rgba(255, 255, 255, 0.35);
 }
 
@@ -1104,15 +1104,15 @@
 
 .blog-p2-attach-tabs button.is-active,
 .blog-p2-attach-tab.is-active {
-  background: #4d49fc;
-  border-color: #4d49fc;
+  background: var(--blog-link);
+  border-color: var(--blog-link);
   color: #ffffff;
 }
 
 .blog-p2-attach-tabs button.is-active:hover:not(:disabled),
 .blog-p2-attach-tab.is-active:hover:not(:disabled) {
-  background: #3c38e0;
-  border-color: #3c38e0;
+  background: var(--blog-link-hover);
+  border-color: var(--blog-link-hover);
   color: #ffffff;
 }
 
@@ -1144,14 +1144,14 @@
 }
 
 .blog-p2-live-attach-btn:hover {
-  background: #4d49fc;
-  border-color: #4d49fc;
+  background: var(--blog-link);
+  border-color: var(--blog-link);
 }
 
 .blog-p2-live-attach-btn.is-active,
 .blog-p2-live-attach-btn.has-live {
-  background: #4d49fc;
-  border-color: #4d49fc;
+  background: var(--blog-link);
+  border-color: var(--blog-link);
   color: #ffffff;
 }
 
@@ -1186,7 +1186,7 @@
   width: 56px;
   height: 56px;
   border-radius: 12px;
-  background: #4d49fc;
+  background: var(--blog-link);
   color: #ffffff;
   display: inline-flex;
   align-items: center;
@@ -1452,7 +1452,7 @@
   width: 46px;
   height: 46px;
   border-radius: 50%;
-  background: #4d49fc;
+  background: var(--blog-link);
   color: #ffffff;
   border: 1px solid var(--blog-divider);
   display: inline-flex;

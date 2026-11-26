@@ -369,6 +369,7 @@ function BlogAppInner({
     isPlaying,
     ambientMode,
     palette,
+    getAudioEnergy,
     openDrawer,
     openManager
   } = useBlogMusicActions()
@@ -976,14 +977,22 @@ function BlogAppInner({
   const isDetailRoute = route.kind === 'article' || route.kind === 'moment'
 
   const ambientActive =
-    isPlaying && ambientMode !== 'minimal' && Boolean(palette || currentTrack?.coverUrl)
+    isPlaying && ambientMode !== 'minimal' && Boolean(palette || currentTrack)
 
-  const blogRootStyle = useMemo<CSSProperties | undefined>(() => {
+  const ambientThemeStyle = useMemo<CSSProperties | undefined>(() => {
     if (!ambientActive || !palette) return undefined
+    const activeAccent = darkMode ? palette.accentDark : palette.accentLight
+    const activeAccentHover = darkMode ? palette.accentDarkHover : palette.accentLightHover
+    const activeAccentSoft = darkMode ? palette.accentDarkSoft : palette.accentLightSoft
+    const activeAccentRgb = darkMode ? palette.accentDarkRgb : palette.accentLightRgb
     return {
-      '--blog-link': darkMode ? palette.accentDark : palette.accentLight,
-      '--blog-link-hover': darkMode ? palette.accentDarkHover : palette.accentLightHover,
-      '--blog-link-soft': darkMode ? palette.accentDarkSoft : palette.accentLightSoft,
+      '--blog-link': activeAccent,
+      '--blog-link-hover': activeAccentHover,
+      '--blog-link-soft': activeAccentSoft,
+      '--blog-link-rgb': activeAccentRgb,
+      '--accent': activeAccent,
+      '--accent-hover': activeAccentHover,
+      '--accent-soft': activeAccentSoft,
       '--blog-ambient-a': palette.glowA,
       '--blog-ambient-b': palette.glowB,
       '--blog-ambient-c': palette.glowC
@@ -993,14 +1002,19 @@ function BlogAppInner({
   const blogRootClassName = [
     'blog-root',
     embedded ? 'is-embedded' : '',
-    ambientActive && ambientMode === 'glow' ? 'has-ambient-glow' : '',
-    ambientActive && ambientMode === 'wallpaper' ? 'has-ambient-wallpaper' : ''
+    ambientActive && ambientMode === 'waves' ? 'has-ambient-waves' : '',
+    ambientActive && ambientMode === 'silk' ? 'has-ambient-silk' : '',
+    ambientActive && ambientMode === 'vinyl' ? 'has-ambient-vinyl' : ''
   ]
     .filter(Boolean)
     .join(' ')
 
   return (
-    <>
+    <div
+      className="blog-theme-scope"
+      data-blog-theme={darkMode ? 'dark' : 'light'}
+      style={ambientThemeStyle}
+    >
       {embedded && (
         <header
           className="fig-header blog-embedded-header"
@@ -1072,7 +1086,7 @@ function BlogAppInner({
       <div
         className={blogRootClassName}
         data-blog-theme={darkMode ? 'dark' : 'light'}
-        style={blogRootStyle}
+        style={ambientThemeStyle}
       >
         <BlogAmbientBackdrop
           mode={ambientMode}
@@ -1080,6 +1094,9 @@ function BlogAppInner({
           darkMode={darkMode}
           palette={palette}
           coverUrl={currentTrack?.coverUrl ?? null}
+          trackTitle={currentTrack?.title}
+          trackArtist={currentTrack?.artist}
+          getAudioEnergy={getAudioEnergy}
         />
 
         <div className="blog-bento-stage">
@@ -1636,6 +1653,6 @@ function BlogAppInner({
           />
         )}
       </div>
-    </>
+    </div>
   )
 }

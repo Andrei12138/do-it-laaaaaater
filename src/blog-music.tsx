@@ -37,6 +37,12 @@ import { showToast } from './components/Toast'
 
 export type { BlogAmbientMode, BlogAmbientPalette } from './blog-ambient'
 
+export interface AudioEnergy {
+  bass: number
+  mid: number
+  level: number
+}
+
 export interface LrcLine {
   time: number
   text: string
@@ -59,6 +65,7 @@ export interface BlogMusicActionsContextValue {
   ambientMode: BlogAmbientMode
   setAmbientMode: (mode: BlogAmbientMode) => void
   palette: BlogAmbientPalette | null
+  getAudioEnergy: () => AudioEnergy
   immersionOpen: boolean
   openImmersion: () => void
   closeImmersion: () => void
@@ -341,9 +348,23 @@ interface BlogMusicImmersionModalProps {
   onOpenManager: () => void
 }
 
+function isSameOriginAudioUrl(rawUrl: string): boolean {
+  const cleaned = rawUrl.trim()
+  if (!cleaned || typeof window === 'undefined') return false
+  if (cleaned.startsWith('/') && !cleaned.startsWith('//')) return true
+  if (cleaned.startsWith('blob:') || cleaned.startsWith('data:')) return true
+  try {
+    const parsed = new URL(cleaned, window.location.origin)
+    return parsed.origin === window.location.origin
+  } catch {
+    return false
+  }
+}
+
 const AMBIENT_MODE_OPTIONS: ReadonlyArray<{ mode: BlogAmbientMode; label: string }> = [
-  { mode: 'glow', label: '流光氛围' },
-  { mode: 'wallpaper', label: '浓郁壁纸' },
+  { mode: 'waves', label: '声波点阵' },
+  { mode: 'silk', label: '丝绸极光' },
+  { mode: 'vinyl', label: '黑胶展墙' },
   { mode: 'minimal', label: '纯白极简' }
 ]
 
@@ -1768,6 +1789,11 @@ export function BlogMusicProvider({
   const [managerOpen, setManagerOpen] = useState(false)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null)
+  const freqDataRef = useRef<Parameters<AnalyserNode['getByteFrequencyData']>[0] | null>(null)
+  const audioGraphFailedRef = useRef(false)
   const lrcBoxRef = useRef<HTMLDivElement | null>(null)
   const activeLrcLineRef = useRef<HTMLButtonElement | null>(null)
   const pendingAutoPlayRef = useRef(false)
@@ -1777,6 +1803,144 @@ export function BlogMusicProvider({
   const durationRef = useRef(0)
   durationRef.current = duration
   const lastNonZeroVolumeRef = useRef<number>(volume > 0 ? volume : DEFAULT_BLOG_VOLUME)
+
+  useEffect(() => {
+    return () => {
+      const ctx = audioCtxRef.current
+      audioCtxRef.current = null
+      analyserRef.current = null
+      sourceNodeRef.current = null
+      freqDataRef.current = null
+      if (ctx && ctx.state !== 'closed') {
+        void ctx.close().catch(() => {
+          // Ignore AudioContext close errors on unmount.
+        })
+      }
+    }
+  }, [])
+
+  const ensureAudioAnalyser = useCallback(() => {
+    const audio = audioRef.current
+    if (!audio || audioGraphFailedRef.current || typeof window === 'undefined') return
+
+    const activeSrc = audio.currentSrc || audio.getAttribute('src') || audio.src || ''
+    if (!activeSrc) return
+
+    const canCapture = isSameOriginAudioUrl(activeSrc) || audio.crossOrigin === 'anonymous'
+    if (!canCapture) return
+
+    try {
+      if (audioCtxRef.current) {
+        if (audioCtxRef.current.state === 'suspended') {
+          void audioCtxRef.current.resume().catch(() => {
+            // Audio playback itself must never fail if WebAudio resume is blocked.
+          })
+        }
+        return
+      }
+
+      if (sourceNodeRef.current) return
+
+      const AudioCtxCtor =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!AudioCtxCtor) return
+
+      const ctx = new AudioCtxCtor()
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 128
+      analyser.smoothingTimeConstant = 0.82
+
+      const source = ctx.createMediaElementSource(audio)
+      source.connect(analyser)
+      analyser.connect(ctx.destination)
+
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch(() => {
+          // Ignore suspended state errors.
+        })
+      }
+
+      audioCtxRef.current = ctx
+      analyserRef.current = analyser
+      sourceNodeRef.current = source
+      freqDataRef.current = new Uint8Array(
+        analyser.frequencyBinCount
+      ) as Parameters<AnalyserNode['getByteFrequencyData']>[0]
+    } catch {
+      audioGraphFailedRef.current = true
+    }
+  }, [])
+
+  const getAudioEnergy = useCallback((): AudioEnergy => {
+    const audio = audioRef.current
+    const ctx = audioCtxRef.current
+    const analyser = analyserRef.current
+    const freqData = freqDataRef.current
+
+    if (
+      !audio ||
+      audio.paused ||
+      audio.ended ||
+      audio.muted ||
+      audio.volume <= 0 ||
+      !ctx ||
+      ctx.state !== 'running' ||
+      !analyser ||
+      !freqData
+    ) {
+      return { bass: 0, mid: 0, level: 0 }
+    }
+
+    const activeSrc = audio.currentSrc || audio.getAttribute('src') || audio.src || ''
+    if (!activeSrc || (!isSameOriginAudioUrl(activeSrc) && audio.crossOrigin !== 'anonymous')) {
+      return { bass: 0, mid: 0, level: 0 }
+    }
+
+    try {
+      analyser.getByteFrequencyData(freqData)
+      const binCount = freqData.length
+      if (binCount === 0) return { bass: 0, mid: 0, level: 0 }
+
+      const bassEnd = Math.min(5, binCount)
+      let bassWeightedSum = 0
+      let bassWeightTotal = 0
+      for (let i = 0; i < bassEnd; i += 1) {
+        const w = i <= 2 ? 1.5 : 1.0
+        bassWeightedSum += freqData[i] * w
+        bassWeightTotal += w * 255
+      }
+      const rawBass = bassWeightTotal > 0 ? bassWeightedSum / bassWeightTotal : 0
+
+      const midStart = Math.min(5, binCount)
+      const midEnd = Math.min(23, binCount)
+      let midSum = 0
+      for (let i = midStart; i < midEnd; i += 1) {
+        midSum += freqData[i]
+      }
+      const midBins = Math.max(1, midEnd - midStart)
+      const rawMid = midSum / (midBins * 255)
+
+      const highStart = Math.min(23, binCount)
+      const highEnd = Math.min(43, binCount)
+      let highSum = 0
+      for (let i = highStart; i < highEnd; i += 1) {
+        highSum += freqData[i]
+      }
+      const highBins = Math.max(1, highEnd - highStart)
+      const rawHigh = highSum / (highBins * 255)
+
+      const bass = Math.min(1, Math.max(0, Math.pow(rawBass, 0.92) * 1.08))
+      const mid = Math.min(1, Math.max(0, Math.pow(rawMid, 0.9) * 1.12))
+      const level = Math.min(
+        1,
+        Math.max(0, bass * 0.46 + mid * 0.4 + Math.min(1, rawHigh * 1.2) * 0.14)
+      )
+      return { bass, mid, level }
+    } catch {
+      return { bass: 0, mid: 0, level: 0 }
+    }
+  }, [])
 
   const showFloatingUi =
     tracks.length > 0 || currentTrack !== null || drawerOpen || immersionOpen || managerOpen
@@ -1961,6 +2125,11 @@ export function BlogMusicProvider({
 
     const currentAttrSrc = audio.getAttribute('src') || ''
     if (currentAttrSrc !== currentTrack.audioUrl) {
+      if (isSameOriginAudioUrl(currentTrack.audioUrl)) {
+        audio.crossOrigin = 'anonymous'
+      } else {
+        audio.removeAttribute('crossorigin')
+      }
       audio.src = currentTrack.audioUrl
       audio.muted = muted
       audio.volume = volume
@@ -2134,6 +2303,7 @@ export function BlogMusicProvider({
       ambientMode,
       setAmbientMode,
       palette,
+      getAudioEnergy,
       immersionOpen,
       openImmersion,
       closeImmersion,
@@ -2158,6 +2328,7 @@ export function BlogMusicProvider({
       ambientMode,
       setAmbientMode,
       palette,
+      getAudioEnergy,
       immersionOpen,
       openImmersion,
       closeImmersion,
@@ -2197,7 +2368,8 @@ export function BlogMusicProvider({
     return {
       '--blog-link': isDark ? palette.accentDark : palette.accentLight,
       '--blog-link-hover': isDark ? palette.accentDarkHover : palette.accentLightHover,
-      '--blog-link-soft': isDark ? palette.accentDarkSoft : palette.accentLightSoft
+      '--blog-link-soft': isDark ? palette.accentDarkSoft : palette.accentLightSoft,
+      '--blog-link-rgb': isDark ? palette.accentDarkRgb : palette.accentLightRgb
     } as CSSProperties
   }, [isPlaying, ambientMode, palette, blogTheme])
 
@@ -2222,7 +2394,10 @@ export function BlogMusicProvider({
             const d = e.currentTarget.duration
             if (Number.isFinite(d) && d > 0) setDuration(d)
           }}
-          onPlay={() => setIsPlaying(true)}
+          onPlay={() => {
+            setIsPlaying(true)
+            ensureAudioAnalyser()
+          }}
           onPause={() => setIsPlaying(false)}
           onEnded={() => {
             if (tracks.length > 0) {
@@ -2405,11 +2580,13 @@ export function BlogMusicProvider({
 
                   <div className="blog-p2-transport-row">
                     <span className="blog-p2-time-mono" style={{ minWidth: 42 }}>
-                      {ambientMode === 'glow'
-                        ? '流光'
-                        : ambientMode === 'wallpaper'
-                          ? '壁纸'
-                          : '极简'}
+                      {ambientMode === 'waves'
+                        ? '声波'
+                        : ambientMode === 'silk'
+                          ? '丝绸'
+                          : ambientMode === 'vinyl'
+                            ? '黑胶'
+                            : '极简'}
                     </span>
 
                     <div className="blog-p2-transport-main">

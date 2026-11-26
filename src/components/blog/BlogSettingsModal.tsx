@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { errorMessage } from '../../api-error'
 import {
@@ -57,10 +57,33 @@ function detectBlogTheme(): 'light' | 'dark' {
   return theme === 'dark' ? 'dark' : 'light'
 }
 
-const SETTINGS_AMBIENT_OPTIONS: ReadonlyArray<{ mode: BlogAmbientMode; label: string }> = [
-  { mode: 'glow', label: '流光氛围' },
-  { mode: 'wallpaper', label: '浓郁壁纸' },
-  { mode: 'minimal', label: '纯白极简' }
+const SETTINGS_AMBIENT_OPTIONS: ReadonlyArray<{
+  mode: BlogAmbientMode
+  label: string
+  desc: string
+  recommended?: boolean
+}> = [
+  {
+    mode: 'waves',
+    label: '声波点阵',
+    desc: '推荐：Figma 点阵 + 实时音频律动声波',
+    recommended: true
+  },
+  {
+    mode: 'silk',
+    label: '丝绸极光',
+    desc: '60fps 动态多色丝绸流动光晕'
+  },
+  {
+    mode: 'vinyl',
+    label: '黑胶展墙',
+    desc: '两侧清晰黑胶唱片旋转 + 锐利封面'
+  },
+  {
+    mode: 'minimal',
+    label: '纯白极简',
+    desc: '关闭动态背景与取色'
+  }
 ]
 
 function normalizeClipboardImageFile(rawFile: File): File {
@@ -381,6 +404,18 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
     }
   }
 
+  const modalAmbientStyle = useMemo<CSSProperties | undefined>(() => {
+    const palette = musicCtx?.palette
+    if (!musicCtx?.isPlaying || activeAmbientMode === 'minimal' || !palette) return undefined
+    const isDark = blogTheme === 'dark'
+    return {
+      '--blog-link': isDark ? palette.accentDark : palette.accentLight,
+      '--blog-link-hover': isDark ? palette.accentDarkHover : palette.accentLightHover,
+      '--blog-link-soft': isDark ? palette.accentDarkSoft : palette.accentLightSoft,
+      '--blog-link-rgb': isDark ? palette.accentDarkRgb : palette.accentLightRgb
+    } as CSSProperties
+  }, [musicCtx?.isPlaying, musicCtx?.palette, activeAmbientMode, blogTheme])
+
   if (!open || typeof document === 'undefined') return null
 
   const avatarFallbackChar = (nickname.trim() || siteName.trim() || '博').slice(0, 1).toUpperCase()
@@ -391,7 +426,8 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
       data-blog-theme={blogTheme}
       style={{
         minHeight: 0,
-        zIndex: 1000
+        zIndex: 1000,
+        ...modalAmbientStyle
       }}
       role="presentation"
       onMouseDown={(event) => {
@@ -621,20 +657,19 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
               />
             </label>
 
-            {/* Music Ambient Mode 3-Way Control */}
+            {/* Music Ambient Mode 4-Way Control */}
             <div className="blog-field">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                 <span className="blog-field-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                   <AppIcon name="music" size={13} />
                   <span>音乐播放背景氛围</span>
                 </span>
-                <span className="blog-field-hint">播放时自动提取专辑封面主色动态渲染</span>
+                <span className="blog-field-hint">播放时自动提取专辑封面主色同步全站强调色</span>
               </div>
               <div
-                className="blog-segmented"
+                className="blog-ambient-mode-grid"
                 role="radiogroup"
                 aria-label="音乐播放背景氛围"
-                style={{ alignSelf: 'flex-start' }}
               >
                 {SETTINGS_AMBIENT_OPTIONS.map((opt) => {
                   const active = activeAmbientMode === opt.mode
@@ -644,10 +679,19 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
                       type="button"
                       role="radio"
                       aria-checked={active}
-                      className={`blog-segmented-btn${active ? ' is-active is-accent' : ''}`}
+                      className={`blog-ambient-mode-card${active ? ' is-active' : ''}`}
                       onClick={() => handleChangeAmbientMode(opt.mode)}
                     >
-                      {opt.label}
+                      <span className="blog-ambient-mode-card-top">
+                        <span className="blog-ambient-mode-card-title">
+                          <span>{opt.label}</span>
+                          {opt.recommended && (
+                            <span className="blog-ambient-mode-card-badge">推荐</span>
+                          )}
+                        </span>
+                        <span className="blog-ambient-mode-card-dot" aria-hidden="true" />
+                      </span>
+                      <span className="blog-ambient-mode-card-desc">{opt.desc}</span>
                     </button>
                   )
                 })}

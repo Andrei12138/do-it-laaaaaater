@@ -606,14 +606,16 @@ function AlbumRailWidget({
    -------------------------------------------------------------------------- */
 
 const AMBIENT_MODE_NEXT: Record<BlogAmbientMode, BlogAmbientMode> = {
-  glow: 'wallpaper',
-  wallpaper: 'minimal',
-  minimal: 'glow'
+  waves: 'silk',
+  silk: 'vinyl',
+  vinyl: 'minimal',
+  minimal: 'waves'
 }
 
 const AMBIENT_MODE_SHORT_LABELS: Record<BlogAmbientMode, string> = {
-  glow: '流光',
-  wallpaper: '壁纸',
+  waves: '声波',
+  silk: '丝绸',
+  vinyl: '黑胶',
   minimal: '极简'
 }
 
@@ -733,7 +735,11 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
 
   const displayVol = muted ? 0 : volume
   const volPercent = Math.round(displayVol * 100)
-  const ambientLabel = AMBIENT_MODE_SHORT_LABELS[ambientMode]
+  const seekPercent =
+    effectiveDuration > 0
+      ? Math.min(100, Math.max(0, (currentTime / effectiveDuration) * 100))
+      : 0
+  const ambientLabel = AMBIENT_MODE_SHORT_LABELS[ambientMode] ?? '声波'
 
   const footerPillBaseStyle: CSSProperties = {
     height: 28,
@@ -830,7 +836,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
           step={0.1}
           value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
           disabled={effectiveDuration <= 0}
-          style={{ accentColor: 'var(--blog-link)' }}
+          style={{ '--seek-pct': `${seekPercent.toFixed(2)}%` } as CSSProperties}
           onChange={(event) => seekTo(Number(event.target.value))}
           aria-label="音乐播放进度"
         />
@@ -857,7 +863,6 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
             type="button"
             className="blog-rail-music-play"
             onClick={togglePlay}
-            style={{ background: 'var(--blog-link)', borderColor: 'var(--blog-link)' }}
             title={isPlaying ? '暂停' : '播放'}
             aria-label={isPlaying ? '暂停' : '播放'}
           >
@@ -934,8 +939,8 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
                 }
               : footerPillBaseStyle
           }
-          onClick={() => setAmbientMode(AMBIENT_MODE_NEXT[ambientMode])}
-          title="循环切换音乐播放背景氛围（流光 / 壁纸 / 极简）"
+          onClick={() => setAmbientMode(AMBIENT_MODE_NEXT[ambientMode] ?? 'waves')}
+          title="循环切换音乐播放背景氛围（声波 / 丝绸 / 黑胶 / 极简）"
           aria-label={`背景氛围：${ambientLabel}，点击切换`}
         >
           <span>氛围 · {ambientLabel}</span>
