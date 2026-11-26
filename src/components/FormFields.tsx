@@ -3,7 +3,7 @@ import { errorMessage } from '../api'
 import type { Category } from '../types'
 import { AppIcon } from './AppIcon'
 
-const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const MAX_BYTES = 20 * 1024 * 1024
 const MAX_FILES = 30
 
@@ -177,7 +177,7 @@ export function validateImageFiles(files: File[], existingCount = 0) {
   let error = ''
   for (const file of files) {
     if (!ACCEPTED_TYPES.has(file.type)) {
-      error = '只支持 PNG、JPEG 和 WebP 图片'
+      error = '只支持 PNG、JPEG、WebP 和 GIF 图片'
       continue
     }
     if (file.size > MAX_BYTES) {
@@ -260,13 +260,13 @@ export function ImageInput({
         >
           <AppIcon name="upload" size={18} />
           <strong>拖入图片或按 Ctrl+V 粘贴</strong>
-          <span className="field-hint">PNG、JPEG、WebP · 单张不超过 20 MB</span>
+          <span className="field-hint">PNG、JPEG、WebP、GIF · 单张不超过 20 MB</span>
           <label htmlFor={inputId} className="btn btn-ghost btn-sm">选择图片</label>
           <input
             id={inputId}
             className="visually-hidden"
             type="file"
-            accept="image/png,image/jpeg,image/webp"
+            accept="image/png,image/jpeg,image/webp,image/gif"
             multiple
             onChange={(event) => {
               add(Array.from(event.target.files || []))

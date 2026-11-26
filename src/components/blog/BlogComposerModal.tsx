@@ -5,7 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type ClipboardEvent,
+  type ClipboardEvent as ReactClipboardEvent,
   type DragEvent,
   type FormEvent
 } from 'react'
@@ -40,6 +40,7 @@ import type {
 import type { LibraryItem } from '../../types'
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
+import { BlogEmojiTrigger } from './BlogEmojiPicker'
 import { BlogMusicCard } from './BlogMusicCard'
 import { BlogVideoCard } from './BlogVideoCard'
 
@@ -48,13 +49,14 @@ export interface BlogComposerModalProps {
   initialType?: BlogPostType
   editingPost?: BlogPostSummary | null
   importedDraft?: BlogImportedItemDraft | null
+  initialPastedFiles?: File[] | null
+  onConsumePastedFiles?: () => void
   existingCategories: string[]
   onClose: () => void
   onSaved: (post: BlogPostDetail, isNew: boolean) => void
 }
 
 const MAX_MOMENT_IMAGES = 9
-const QUICK_EMOJIS = ['😊', '✨', '🎉', '☕', '📸', '📚', '💡', '🌙'] as const
 
 function detectBlogTheme(): 'light' | 'dark' {
   if (typeof document === 'undefined') return 'light'
@@ -236,25 +238,52 @@ async function discardBlogComposerDraft(key: string) {
   }
 }
 
-function extractClipboardImageFiles(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
+function normalizeClipboardImageFile(rawFile: File, index = 0): File {
+  if (
+    rawFile.name &&
+    /\.[a-z0-9]{2,5}$/i.test(rawFile.name) &&
+    !/^image\.[a-z]+$/i.test(rawFile.name)
+  ) {
+    return rawFile
+  }
+  const mime = (rawFile.type || 'image/png').toLowerCase()
+  const ext = mime.includes('gif')
+    ? 'gif'
+    : mime.includes('webp')
+      ? 'webp'
+      : mime.includes('jpeg') || mime.includes('jpg')
+        ? 'jpg'
+        : 'png'
+  const suffix = index > 0 ? `-${index + 1}` : ''
+  return new File([rawFile], `pasted-${Date.now()}${suffix}.${ext}`, { type: mime })
+}
+
+function extractClipboardImageFilesFromData(clipboardData: DataTransfer | null | undefined): File[] {
+  if (!clipboardData) return []
   const files: File[] = []
-  const items = event.clipboardData?.items
+  const items = clipboardData.items
   if (items) {
     for (let i = 0; i < items.length; i += 1) {
       const item = items[i]
       if (item.kind === 'file' && item.type.startsWith('image/')) {
         const file = item.getAsFile()
-        if (file) files.push(file)
+        if (file) files.push(normalizeClipboardImageFile(file, files.length))
       }
     }
   }
-  if (!files.length && event.clipboardData?.files?.length) {
-    for (let i = 0; i < event.clipboardData.files.length; i += 1) {
-      const file = event.clipboardData.files[i]
-      if (file.type.startsWith('image/')) files.push(file)
+  if (!files.length && clipboardData.files?.length) {
+    for (let i = 0; i < clipboardData.files.length; i += 1) {
+      const file = clipboardData.files[i]
+      if (file.type.startsWith('image/')) {
+        files.push(normalizeClipboardImageFile(file, files.length))
+      }
     }
   }
   return files
+}
+
+function extractClipboardImageFiles(event: ReactClipboardEvent<HTMLTextAreaElement>): File[] {
+  return extractClipboardImageFilesFromData(event.clipboardData)
 }
 
 export function BlogComposerModal({
@@ -262,6 +291,8 @@ export function BlogComposerModal({
   initialType = 'moment',
   editingPost = null,
   importedDraft = null,
+  initialPastedFiles = null,
+  onConsumePastedFiles,
   existingCategories,
   onClose,
   onSaved
@@ -809,6 +840,15 @@ export function BlogComposerModal({
     [content]
   )
 
+  const insertEmojiAtCursor = useCallback(
+    (emojiToken: string) => {
+      const targetTextarea =
+        type === 'article' ? articleTextareaRef.current : momentTextareaRef.current
+      insertAtCursor(targetTextarea, emojiToken)
+    },
+    [type, insertAtCursor]
+  )
+
   const handleUploadMomentImages = useCallback(
     async (rawFiles: File[]) => {
       const imageFiles = rawFiles.filter((file) => file.type.startsWith('image/'))
@@ -847,7 +887,7 @@ export function BlogComposerModal({
   )
 
   const handleMomentPaste = useCallback(
-    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
       const files = extractClipboardImageFiles(event)
       if (!files.length) return
       event.preventDefault()
@@ -1208,7 +1248,7 @@ export function BlogComposerModal({
   )
 
   const handleArticlePaste = useCallback(
-    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
       const files = extractClipboardImageFiles(event)
       if (!files.length) return
       event.preventDefault()
@@ -1216,6 +1256,66 @@ export function BlogComposerModal({
     },
     [handleUploadInlineImages]
   )
+
+  const consumedPastedRef = useRef<File[] | null>(null)
+
+  // Consume initialPastedFiles passed from global feed Ctrl+V paste-to-post
+  useEffect(() => {
+    if (!open) {
+      consumedPastedRef.current = null
+      return
+    }
+    if (!hydrated || !initialPastedFiles || initialPastedFiles.length === 0) return
+    if (consumedPastedRef.current === initialPastedFiles) return
+    consumedPastedRef.current = initialPastedFiles
+
+    const imageFiles = initialPastedFiles
+      .filter((file) => file.type.startsWith('image/'))
+      .map((file, idx) => normalizeClipboardImageFile(file, idx))
+    onConsumePastedFiles?.()
+
+    if (!imageFiles.length) return
+    if (type === 'article') {
+      void handleUploadInlineImages(imageFiles)
+    } else {
+      void handleUploadMomentImages(imageFiles)
+    }
+  }, [
+    open,
+    hydrated,
+    initialPastedFiles,
+    onConsumePastedFiles,
+    type,
+    handleUploadInlineImages,
+    handleUploadMomentImages
+  ])
+
+  // Modal-wide Ctrl+V image / GIF paste handler (avoids double-handling textarea onPaste)
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return
+
+    const onWindowPaste = (event: globalThis.ClipboardEvent) => {
+      if (event.defaultPrevented || busy) return
+      const targetNode = event.target as Node | null
+      if (
+        targetNode &&
+        (targetNode === momentTextareaRef.current || targetNode === articleTextareaRef.current)
+      ) {
+        return
+      }
+      const files = extractClipboardImageFilesFromData(event.clipboardData)
+      if (!files.length) return
+      event.preventDefault()
+      if (type === 'article') {
+        void handleUploadInlineImages(files)
+      } else {
+        void handleUploadMomentImages(files)
+      }
+    }
+
+    window.addEventListener('paste', onWindowPaste)
+    return () => window.removeEventListener('paste', onWindowPaste)
+  }, [open, busy, type, handleUploadInlineImages, handleUploadMomentImages])
 
   const handleMdTool = useCallback(
     (tool: 'h2' | 'h3' | 'bold' | 'italic' | 'quote' | 'inlineCode' | 'codeBlock' | 'table' | 'link') => {
@@ -1692,7 +1792,7 @@ export function BlogComposerModal({
               <input
                 ref={videoCoverInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/gif"
                 hidden
                 onChange={(e) => {
                   const file = e.target.files?.[0]
@@ -2027,23 +2127,14 @@ export function BlogComposerModal({
                     onPaste={handleMomentPaste}
                     placeholder="分享此刻的想法、摘录或日常…（支持 #标签 与粘贴图片）"
                   />
-                  {/* Quick Emoji Strip */}
+                  {/* Emoji Picker & Clipboard Paste Hint */}
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-                      {QUICK_EMOJIS.map((emoji) => (
-                        <button
-                          key={emoji}
-                          type="button"
-                          className="blog-md-tool-btn"
-                          style={{ fontSize: 15, padding: '0 6px' }}
-                          title={`插入 ${emoji}`}
-                          onClick={() => insertAtCursor(momentTextareaRef.current, emoji)}
-                        >
-                          {emoji}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="blog-field-hint">支持 Ctrl+V 直接粘贴图片</span>
+                    <BlogEmojiTrigger
+                      label="表情"
+                      onSelect={insertEmojiAtCursor}
+                      disabled={busy}
+                    />
+                    <span className="blog-paste-hint">支持 Ctrl+V 粘贴图片 / GIF</span>
                   </div>
                 </div>
 
@@ -2179,7 +2270,7 @@ export function BlogComposerModal({
                   <input
                     ref={momentFileInputRef}
                     type="file"
-                    accept="image/png,image/jpeg,image/webp"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
                     multiple
                     hidden
                     onChange={(e) => {
@@ -2319,7 +2410,7 @@ export function BlogComposerModal({
                   <input
                     ref={coverFileInputRef}
                     type="file"
-                    accept="image/png,image/jpeg,image/webp"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
                     hidden
                     onChange={(e) => {
                       const file = e.target.files?.[0]
@@ -2387,6 +2478,11 @@ export function BlogComposerModal({
                       <AppIcon name="image" size={14} />
                       <span>{uploadingInlineImage ? '上传中…' : '插图'}</span>
                     </button>
+                    <BlogEmojiTrigger
+                      label="表情"
+                      onSelect={insertEmojiAtCursor}
+                      disabled={busy}
+                    />
 
                     {isMobile && (
                       <div className="blog-segmented" style={{ marginLeft: 'auto' }}>
@@ -2411,7 +2507,7 @@ export function BlogComposerModal({
                   <input
                     ref={inlineImageInputRef}
                     type="file"
-                    accept="image/png,image/jpeg,image/webp"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
                     multiple
                     hidden
                     onChange={(e) => {
@@ -2462,7 +2558,7 @@ export function BlogComposerModal({
                     <span>
                       {renderedPreview.wordCount} 字 · 预计阅读 {renderedPreview.readingMinutes} 分钟
                     </span>
-                    <span>支持粘贴图片自动上传</span>
+                    <span className="blog-paste-hint">支持 Ctrl+V 粘贴图片 / GIF</span>
                   </div>
                 </div>
 

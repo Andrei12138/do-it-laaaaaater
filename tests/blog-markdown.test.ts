@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { formatArticleDateTime, formatRelativeTime, groupArchivesByDate } from '../src/blog-api'
+import {
+  ANIMATED_EMOJI_MAP,
+  FLUENT_ANIMATED_EMOJIS,
+  NOTO_ANIMATED_EMOJIS,
+  STANDARD_EMOJI_GROUPS,
+  resolveAnimatedEmoji
+} from '../src/blog-emojis'
 import { formatMomentText, generateExcerpt, renderArticleMarkdown } from '../src/blog-markdown'
 import type { BlogArchiveItem } from '../src/blog-types'
 
@@ -204,6 +211,99 @@ describe('blog-markdown: word count, reading minutes, generateExcerpt, formatMom
       { type: 'tag', value: '#读书笔记' },
       { type: 'text', value: ' 朋友！' }
     ])
+  })
+})
+
+describe('blog-markdown: animated emoji allowlist engine (Noto & Fluent 3D)', () => {
+  it('converts allowlisted Noto & Fluent shortcodes in formatMomentText while keeping unknown shortcodes plain text', () => {
+    const segments = formatMomentText(
+      '新版本上线 :noto-fire: 太酷了 :fluent-sparkles: 未知 :noto-xss: 链接 https://example.com/:noto-fire:/guide #发布'
+    )
+    expect(segments).toEqual([
+      { type: 'text', value: '新版本上线 ' },
+      {
+        type: 'emoji',
+        value: ':noto-fire:',
+        code: ':noto-fire:',
+        url: 'https://fonts.gstatic.com/s/e/notoemoji/latest/1f525/512.webp',
+        fallback: '🔥',
+        label: '燃起来了'
+      },
+      { type: 'text', value: ' 太酷了 ' },
+      {
+        type: 'emoji',
+        value: ':fluent-sparkles:',
+        code: ':fluent-sparkles:',
+        url: 'https://cdn.jsdelivr.net/gh/Tarikul-Islam-Anik/Animated-Fluent-Emojis@master/Emojis/Activities/Sparkles.png',
+        fallback: '✨',
+        label: '璀璨星芒'
+      },
+      { type: 'text', value: ' 未知 :noto-xss: 链接 ' },
+      {
+        type: 'link',
+        value: 'https://example.com/:noto-fire:/guide',
+        href: 'https://example.com/:noto-fire:/guide'
+      },
+      { type: 'text', value: ' ' },
+      { type: 'tag', value: '#发布' }
+    ])
+  })
+
+  it('renders allowlisted animated emojis in renderArticleMarkdown without touching inline code, code blocks, or unknown shortcodes', () => {
+    const md = [
+      '## 里程碑 :noto-tada:',
+      '',
+      '正文包含 :noto-fire: 与 **:fluent-rocket: 起飞**，以及未知 `:noto-fire:` 和 :noto-xss: 或 :fluent-evil:。',
+      '',
+      '```ts',
+      'const raw = ":noto-fire: :fluent-joy:"',
+      '```'
+    ].join('\n')
+
+    const res = renderArticleMarkdown(md)
+    expect(res.headings).toEqual([{ id: 'h-1', level: 2, text: '里程碑 🎉' }])
+    expect(res.html).toContain(
+      '<img class="blog-anim-emoji" src="https://fonts.gstatic.com/s/e/notoemoji/latest/1f525/512.webp" alt="🔥" title="燃起来了" loading="lazy" />'
+    )
+    expect(res.html).toContain(
+      '<strong><img class="blog-anim-emoji" src="https://cdn.jsdelivr.net/gh/Tarikul-Islam-Anik/Animated-Fluent-Emojis@master/Emojis/Travel%20and%20places/Rocket.png" alt="🚀" title="极速火箭" loading="lazy" /> 起飞</strong>'
+    )
+    expect(res.html).toContain('<code>:noto-fire:</code>')
+    expect(res.html).toContain('和 :noto-xss: 或 :fluent-evil:。')
+    expect(res.html).toContain(
+      '<pre><code class="language-ts">const raw = &quot;:noto-fire: :fluent-joy:&quot;</code></pre>'
+    )
+  })
+
+  it('turns allowlisted animated emoji shortcodes into clean Unicode fallbacks in generateExcerpt', () => {
+    const md = [
+      '# 发布日志',
+      '',
+      '全力冲刺 :noto-fire: 庆祝 :fluent-tada: 忽略未知 :noto-xss: 与代码 `:noto-fire:`！',
+      '',
+      '```txt',
+      ':noto-rocket:',
+      '```'
+    ].join('\n')
+
+    expect(generateExcerpt(md, 140)).toBe(
+      '发布日志 全力冲刺 🔥 庆祝 🎉 忽略未知 :noto-xss: 与代码 :noto-fire:！'
+    )
+  })
+
+  it('exposes curated Noto, Fluent 3D, and 7-group Standard Emoji packs with strict allowlist lookup', () => {
+    expect(NOTO_ANIMATED_EMOJIS.length).toBeGreaterThanOrEqual(48)
+    expect(FLUENT_ANIMATED_EMOJIS.length).toBeGreaterThanOrEqual(42)
+    expect(ANIMATED_EMOJI_MAP.size).toBe(NOTO_ANIMATED_EMOJIS.length + FLUENT_ANIMATED_EMOJIS.length)
+    expect(STANDARD_EMOJI_GROUPS).toHaveLength(7)
+
+    const totalStandard = STANDARD_EMOJI_GROUPS.reduce((sum, g) => sum + g.items.length, 0)
+    expect(totalStandard).toBeGreaterThanOrEqual(240)
+
+    expect(resolveAnimatedEmoji(':noto-joy:')?.fallback).toBe('😂')
+    expect(resolveAnimatedEmoji(':fluent-fire:')?.fallback).toBe('🔥')
+    expect(resolveAnimatedEmoji(':noto-xss:')).toBeNull()
+    expect(resolveAnimatedEmoji(':fluent-<script>:')).toBeNull()
   })
 })
 

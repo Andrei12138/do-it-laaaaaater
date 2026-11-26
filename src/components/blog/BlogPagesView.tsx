@@ -7,7 +7,8 @@ import {
   type ChangeEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent
+  type MouseEvent,
+  type ReactNode
 } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -29,6 +30,7 @@ import {
   updateBlogPage,
   uploadBlogMedia
 } from '../../blog-api'
+import { ANIMATED_EMOJI_REGEX, resolveAnimatedEmoji } from '../../blog-emojis'
 import { renderArticleMarkdown } from '../../blog-markdown'
 import { useOptionalBlogMusic } from '../../blog-music'
 import type {
@@ -41,6 +43,7 @@ import type {
 } from '../../blog-types'
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
+import { BlogEmojiTrigger, InlineAnimatedEmoji } from './BlogEmojiPicker'
 
 export interface BlogPagesViewProps {
   section: 'about' | 'equipment' | 'labs' | 'friends'
@@ -56,9 +59,75 @@ interface ReplyTarget {
   replyToName: string
 }
 
-const QUICK_EMOJIS = ['👍', '❤️', '🎉', '😄', '🤔', '🔥', '✨', '👏'] as const
 const EQUIP_TAG_SUGGESTIONS = ['主力', '推荐', '便携', '服役中'] as const
 const LAB_TAG_SUGGESTIONS = ['在线', '开源', '实验', '原型'] as const
+
+function renderCommentText(text: string): ReactNode {
+  if (!text || !text.includes(':')) return text
+  const parts: ReactNode[] = []
+  const regex = new RegExp(ANIMATED_EMOJI_REGEX.source, 'g')
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(text)) !== null) {
+    const code = match[0]
+    const resolved = resolveAnimatedEmoji(code)
+    if (!resolved) continue
+    if (match.index > cursor) {
+      parts.push(text.slice(cursor, match.index))
+    }
+    parts.push(<InlineAnimatedEmoji key={`${match.index}-${code}`} code={resolved.code} />)
+    cursor = match.index + code.length
+  }
+  if (parts.length === 0) return text
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor))
+  }
+  return parts
+}
+
+function normalizeClipboardImageFile(rawFile: File, index = 0): File {
+  if (
+    rawFile.name &&
+    /\.[a-z0-9]{2,5}$/i.test(rawFile.name) &&
+    !/^image\.[a-z]+$/i.test(rawFile.name)
+  ) {
+    return rawFile
+  }
+  const mime = (rawFile.type || 'image/png').toLowerCase()
+  const ext = mime.includes('gif')
+    ? 'gif'
+    : mime.includes('webp')
+      ? 'webp'
+      : mime.includes('jpeg') || mime.includes('jpg')
+        ? 'jpg'
+        : 'png'
+  const suffix = index > 0 ? `-${index + 1}` : ''
+  return new File([rawFile], `pasted-${Date.now()}${suffix}.${ext}`, { type: mime })
+}
+
+function extractClipboardImageFilesFromData(clipboardData: DataTransfer | null | undefined): File[] {
+  if (!clipboardData) return []
+  const files: File[] = []
+  const items = clipboardData.items
+  if (items) {
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i]
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) files.push(normalizeClipboardImageFile(file, files.length))
+      }
+    }
+  }
+  if (!files.length && clipboardData.files?.length) {
+    for (let i = 0; i < clipboardData.files.length; i += 1) {
+      const file = clipboardData.files[i]
+      if (file.type.startsWith('image/')) {
+        files.push(normalizeClipboardImageFile(file, files.length))
+      }
+    }
+  }
+  return files
+}
 
 function getErrorMessage(err: unknown, fallback = '操作失败，请稍后重试'): string {
   if (err instanceof Error && err.message) return err.message
@@ -214,6 +283,24 @@ function AboutPageCommentBoard({
   const persistVisitor = () => {
     if (isOwner) return
     saveVisitorProfile({ authorName, authorEmail, authorWebsite })
+  }
+
+  const handleInsertEmoji = (emoji: string) => {
+    const textarea = textareaRef.current
+    if (!textarea) {
+      setContent((prev) => prev + emoji)
+      return
+    }
+    const start = textarea.selectionStart ?? content.length
+    const end = textarea.selectionEnd ?? content.length
+    const nextValue = content.slice(0, start) + emoji + content.slice(end)
+    setContent(nextValue)
+    if (error) setError(null)
+    window.requestAnimationFrame(() => {
+      textarea.focus()
+      const caret = start + emoji.length
+      textarea.setSelectionRange(caret, caret)
+    })
   }
 
   const handleSubmit = async (event?: FormEvent) => {
@@ -459,19 +546,12 @@ function AboutPageCommentBoard({
                 style={{ minHeight: 84 }}
               />
 
-              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
-                {QUICK_EMOJIS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    className="blog-floor-action-btn"
-                    disabled={submitting}
-                    onClick={() => setContent((prev) => prev + emoji)}
-                    style={{ fontSize: 15, padding: '3px 6px', lineHeight: 1.2 }}
-                  >
-                    {emoji}
-                  </button>
-                ))}
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                <BlogEmojiTrigger
+                  label="表情"
+                  onSelect={handleInsertEmoji}
+                  disabled={submitting}
+                />
               </div>
 
               {error && (
@@ -533,7 +613,7 @@ function AboutPageCommentBoard({
                   </span>
                 </div>
 
-                <div className="blog-floor-content">{root.content}</div>
+                <div className="blog-floor-content">{renderCommentText(root.content)}</div>
 
                 <div className="blog-floor-actions">
                   {canComment && (
@@ -583,7 +663,7 @@ function AboutPageCommentBoard({
                               </span>
                             )}
                             <span style={{ color: 'var(--blog-text-muted)', marginRight: 4 }}>：</span>
-                            <span style={{ whiteSpace: 'pre-wrap' }}>{reply.content}</span>
+                            <span style={{ whiteSpace: 'pre-wrap' }}>{renderCommentText(reply.content)}</span>
                           </div>
 
                           <div className="blog-floor-actions" style={{ marginTop: 4 }}>
@@ -659,6 +739,7 @@ function AboutPageEditorModal({
 
   const coverInputRef = useRef<HTMLInputElement | null>(null)
   const inlineImgInputRef = useRef<HTMLInputElement | null>(null)
+  const aboutTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const busy = uploadingCover || uploadingInline || saving
 
   const isDirty = useMemo(() => {
@@ -721,42 +802,98 @@ function AboutPageEditorModal({
 
   const renderedPreview = useMemo(() => renderArticleMarkdown(content), [content])
 
-  const handleUploadCover = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
+  const insertAboutTextAtCursor = useCallback(
+    (snippet: string) => {
+      const textarea = aboutTextareaRef.current
+      if (!textarea) {
+        setContent((prev) => `${prev}${snippet}`)
+        return
+      }
+      const start = textarea.selectionStart ?? content.length
+      const end = textarea.selectionEnd ?? content.length
+      const nextValue = `${content.slice(0, start)}${snippet}${content.slice(end)}`
+      setContent(nextValue)
+      const caret = start + snippet.length
+      window.requestAnimationFrame(() => {
+        textarea.focus()
+        textarea.setSelectionRange(caret, caret)
+      })
+    },
+    [content]
+  )
+
+  const uploadAboutCoverFile = useCallback(async (file: File, fromPaste = false) => {
     setUploadingCover(true)
     try {
       const [uploaded] = await uploadBlogMedia([file])
       if (uploaded) {
         setCoverMediaId(uploaded.id)
         setCoverUrl(uploaded.url)
-        showToast('success', '关于页横幅已上传')
+        showToast('success', fromPaste ? '已粘贴并上传关于页横幅' : '关于页横幅已上传')
       }
     } catch (err) {
       showToast('error', getErrorMessage(err, '封面上传失败'))
     } finally {
       setUploadingCover(false)
     }
-  }
+  }, [])
 
-  const handleInsertImage = async (event: ChangeEvent<HTMLInputElement>) => {
+  const uploadAboutInlineFiles = useCallback(
+    async (files: File[], fromPaste = false) => {
+      if (!files.length) return
+      setUploadingInline(true)
+      try {
+        const uploaded = await uploadBlogMedia(files)
+        if (uploaded.length) {
+          const mdImages = uploaded
+            .map((item) => `![${(item.originalName || 'image').replace(/\.[^.]+$/, '')}](${item.url})`)
+            .join('\n')
+          insertAboutTextAtCursor(`\n${mdImages}\n`)
+          showToast('success', fromPaste ? '已粘贴并插入图片到正文' : '图片已插入正文')
+        }
+      } catch (err) {
+        showToast('error', getErrorMessage(err, '图片上传失败'))
+      } finally {
+        setUploadingInline(false)
+      }
+    },
+    [insertAboutTextAtCursor]
+  )
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return
+    const onWindowPaste = (event: globalThis.ClipboardEvent) => {
+      if (event.defaultPrevented || busy) return
+      const files = extractClipboardImageFilesFromData(event.clipboardData)
+      if (!files.length) return
+      event.preventDefault()
+      const focusedInTextarea = Boolean(
+        aboutTextareaRef.current &&
+          (event.target === aboutTextareaRef.current ||
+            document.activeElement === aboutTextareaRef.current)
+      )
+      if (focusedInTextarea) {
+        void uploadAboutInlineFiles(files, true)
+      } else {
+        void uploadAboutCoverFile(files[0], true)
+      }
+    }
+    window.addEventListener('paste', onWindowPaste)
+    return () => window.removeEventListener('paste', onWindowPaste)
+  }, [open, busy, uploadAboutInlineFiles, uploadAboutCoverFile])
+
+  const handleUploadCover = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
-    setUploadingInline(true)
-    try {
-      const [uploaded] = await uploadBlogMedia([file])
-      if (uploaded) {
-        const mdImage = `\n![${file.name.replace(/\.[^.]+$/, '')}](${uploaded.url})\n`
-        setContent((prev) => `${prev}${mdImage}`)
-        showToast('success', '图片已插入正文')
-      }
-    } catch (err) {
-      showToast('error', getErrorMessage(err, '图片上传失败'))
-    } finally {
-      setUploadingInline(false)
-    }
+    await uploadAboutCoverFile(file)
+  }
+
+  const handleInsertImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files ? Array.from(event.target.files) : []
+    event.target.value = ''
+    if (!files.length) return
+    await uploadAboutInlineFiles(files)
   }
 
   const handleSubmit = async (event: FormEvent) => {
@@ -869,10 +1006,11 @@ function AboutPageEditorModal({
                     移除封面
                   </button>
                 )}
+                <span className="blog-paste-hint">支持 Ctrl+V 粘贴图片 / GIF</span>
                 <input
                   ref={coverInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
                   hidden
                   onChange={(e) => void handleUploadCover(e)}
                 />
@@ -882,7 +1020,7 @@ function AboutPageEditorModal({
             <div className="blog-field">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                 <span className="blog-field-label">Markdown 正文</span>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <button
                     type="button"
                     className="blog-btn blog-btn-subtle blog-btn-sm"
@@ -892,10 +1030,16 @@ function AboutPageEditorModal({
                     <AppIcon name="image" size={13} />
                     <span>{uploadingInline ? '上传中…' : '插入图片'}</span>
                   </button>
+                  <BlogEmojiTrigger
+                    label="表情"
+                    onSelect={insertAboutTextAtCursor}
+                    disabled={busy}
+                  />
                   <input
                     ref={inlineImgInputRef}
                     type="file"
-                    accept="image/png,image/jpeg,image/webp"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    multiple
                     hidden
                     onChange={(e) => void handleInsertImage(e)}
                   />
@@ -929,6 +1073,7 @@ function AboutPageEditorModal({
               <div className={`blog-md-split${previewMode !== 'split' ? ' is-single-pane' : ''}`}>
                 {previewMode !== 'preview' && (
                   <textarea
+                    ref={aboutTextareaRef}
                     className="blog-md-editor"
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
@@ -945,6 +1090,9 @@ function AboutPageEditorModal({
                     }}
                   />
                 )}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <span className="blog-paste-hint">正文内 Ctrl+V 粘贴插图 / GIF</span>
               </div>
             </div>
 
@@ -1059,23 +1207,40 @@ function CatalogEditorModal({
     }
   }, [open, busy, onClose])
 
-  const handleUploadImage = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
+  const uploadCatalogImageFile = useCallback(async (file: File, fromPaste = false) => {
     setUploading(true)
     try {
       const [uploaded] = await uploadBlogMedia([file])
       if (uploaded) {
         setImageMediaId(uploaded.id)
         setImageUrl(uploaded.url)
-        showToast('success', '图片已上传')
+        showToast('success', fromPaste ? '已粘贴并上传配图' : '图片已上传')
       }
     } catch (err) {
       showToast('error', getErrorMessage(err, '上传失败'))
     } finally {
       setUploading(false)
     }
+  }, [])
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return
+    const onWindowPaste = (event: globalThis.ClipboardEvent) => {
+      if (event.defaultPrevented || busy) return
+      const files = extractClipboardImageFilesFromData(event.clipboardData)
+      if (!files.length) return
+      event.preventDefault()
+      void uploadCatalogImageFile(files[0], true)
+    }
+    window.addEventListener('paste', onWindowPaste)
+    return () => window.removeEventListener('paste', onWindowPaste)
+  }, [open, busy, uploadCatalogImageFile])
+
+  const handleUploadImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    await uploadCatalogImageFile(file)
   }
 
   const handleSubmit = async (event: FormEvent) => {
@@ -1247,7 +1412,7 @@ function CatalogEditorModal({
                   )}
                 </div>
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <button
                       type="button"
                       className="blog-btn blog-btn-subtle blog-btn-sm"
@@ -1269,6 +1434,7 @@ function CatalogEditorModal({
                         清除
                       </button>
                     )}
+                    <span className="blog-paste-hint">支持 Ctrl+V 粘贴图片 / GIF</span>
                   </div>
                   <input
                     type="url"
@@ -1284,7 +1450,7 @@ function CatalogEditorModal({
                 <input
                   ref={imgInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
                   hidden
                   onChange={(e) => void handleUploadImage(e)}
                 />
@@ -1412,23 +1578,40 @@ function FriendEditorModal({
     }
   }, [open, busy, onClose])
 
-  const handleUploadAvatar = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
+  const uploadFriendAvatarFile = useCallback(async (file: File, fromPaste = false) => {
     setUploading(true)
     try {
       const [uploaded] = await uploadBlogMedia([file])
       if (uploaded) {
         setAvatarMediaId(uploaded.id)
         setAvatarUrl(uploaded.url)
-        showToast('success', '头像已上传')
+        showToast('success', fromPaste ? '已粘贴并上传头像' : '头像已上传')
       }
     } catch (err) {
       showToast('error', getErrorMessage(err, '头像上传失败'))
     } finally {
       setUploading(false)
     }
+  }, [])
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return
+    const onWindowPaste = (event: globalThis.ClipboardEvent) => {
+      if (event.defaultPrevented || busy) return
+      const files = extractClipboardImageFilesFromData(event.clipboardData)
+      if (!files.length) return
+      event.preventDefault()
+      void uploadFriendAvatarFile(files[0], true)
+    }
+    window.addEventListener('paste', onWindowPaste)
+    return () => window.removeEventListener('paste', onWindowPaste)
+  }, [open, busy, uploadFriendAvatarFile])
+
+  const handleUploadAvatar = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    await uploadFriendAvatarFile(file)
   }
 
   const handleSubmit = async (event: FormEvent) => {
@@ -1516,7 +1699,7 @@ function FriendEditorModal({
                   {avatarUrl ? <img src={avatarUrl} alt="头像预览" /> : getMonogram(name, '友')}
                 </div>
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <button
                       type="button"
                       className="blog-btn blog-btn-subtle blog-btn-sm"
@@ -1538,6 +1721,7 @@ function FriendEditorModal({
                         清除
                       </button>
                     )}
+                    <span className="blog-paste-hint">支持 Ctrl+V 粘贴图片 / GIF</span>
                   </div>
                   <input
                     type="url"
@@ -1553,7 +1737,7 @@ function FriendEditorModal({
                 <input
                   ref={avatarInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
                   hidden
                   onChange={(e) => void handleUploadAvatar(e)}
                 />

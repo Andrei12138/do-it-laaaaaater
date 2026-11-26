@@ -2,11 +2,17 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { errorMessage } from '../../api-error'
 import {
+  readAmbientMode,
+  saveAmbientMode,
+  type BlogAmbientMode
+} from '../../blog-ambient'
+import {
   fetchStorageUsage,
   runBlogMediaGc,
   updateBlogSettings,
   uploadBlogMedia
 } from '../../blog-api'
+import { useOptionalBlogMusic } from '../../blog-music'
 import type { BlogProfile, StorageUsageSnapshot } from '../../blog-types'
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
@@ -51,17 +57,72 @@ function detectBlogTheme(): 'light' | 'dark' {
   return theme === 'dark' ? 'dark' : 'light'
 }
 
+const SETTINGS_AMBIENT_OPTIONS: ReadonlyArray<{ mode: BlogAmbientMode; label: string }> = [
+  { mode: 'glow', label: '流光氛围' },
+  { mode: 'wallpaper', label: '浓郁壁纸' },
+  { mode: 'minimal', label: '纯白极简' }
+]
+
+function normalizeClipboardImageFile(rawFile: File): File {
+  if (
+    rawFile.name &&
+    /\.[a-z0-9]{2,5}$/i.test(rawFile.name) &&
+    !/^image\.[a-z]+$/i.test(rawFile.name)
+  ) {
+    return rawFile
+  }
+  const mime = (rawFile.type || 'image/png').toLowerCase()
+  const ext = mime.includes('gif')
+    ? 'gif'
+    : mime.includes('webp')
+      ? 'webp'
+      : mime.includes('jpeg') || mime.includes('jpg')
+        ? 'jpg'
+        : 'png'
+  return new File([rawFile], `pasted-settings-${Date.now()}.${ext}`, { type: mime })
+}
+
+function extractFirstClipboardImage(clipboardData: DataTransfer | null | undefined): File | null {
+  if (!clipboardData) return null
+  if (clipboardData.items && clipboardData.items.length > 0) {
+    for (let i = 0; i < clipboardData.items.length; i += 1) {
+      const item = clipboardData.items[i]
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) return normalizeClipboardImageFile(file)
+      }
+    }
+  }
+  if (clipboardData.files && clipboardData.files.length > 0) {
+    for (let i = 0; i < clipboardData.files.length; i += 1) {
+      const candidate = clipboardData.files[i]
+      if (candidate.type.startsWith('image/')) {
+        return normalizeClipboardImageFile(candidate)
+      }
+    }
+  }
+  return null
+}
+
 export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSettingsModalProps) {
+  const musicCtx = useOptionalBlogMusic()
   const [blogTheme, setBlogTheme] = useState<'light' | 'dark'>('light')
 
   const [siteName, setSiteName] = useState(profile.siteName || '')
   const [nickname, setNickname] = useState(profile.nickname || '')
   const [bio, setBio] = useState(profile.bio || '')
+  const [aboutSubtitle, setAboutSubtitle] = useState(
+    profile.aboutSubtitle ?? '数字花园与个人简介'
+  )
   const [footerText, setFooterText] = useState(profile.footerText || '')
   const [allowComments, setAllowComments] = useState(Boolean(profile.allowComments))
   const [hiddenWidgets, setHiddenWidgets] = useState<BlogSidebarWidgetId[]>(
     () => readBlogSidebarConfig(profile.extensions).hiddenWidgets
   )
+  const [fallbackAmbientMode, setFallbackAmbientMode] = useState<BlogAmbientMode>(() =>
+    readAmbientMode()
+  )
+  const [pasteTarget, setPasteTarget] = useState<'cover' | 'avatar'>('cover')
 
   const [coverMediaId, setCoverMediaId] = useState<string | null>(profile.coverMediaId ?? null)
   const [coverUrl, setCoverUrl] = useState<string | null>(profile.coverUrl ?? null)
@@ -104,9 +165,12 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
     setSiteName(profile.siteName || '')
     setNickname(profile.nickname || '')
     setBio(profile.bio || '')
+    setAboutSubtitle(profile.aboutSubtitle ?? '数字花园与个人简介')
     setFooterText(profile.footerText || '')
     setAllowComments(Boolean(profile.allowComments))
     setHiddenWidgets(readBlogSidebarConfig(profile.extensions).hiddenWidgets)
+    setFallbackAmbientMode(readAmbientMode())
+    setPasteTarget('cover')
     setCoverMediaId(profile.coverMediaId ?? null)
     setCoverUrl(profile.coverUrl ?? null)
     setAvatarMediaId(profile.avatarMediaId ?? null)
@@ -171,6 +235,38 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
       setUploadingAvatar(false)
     }
   }, [])
+
+  const activeAmbientMode: BlogAmbientMode = musicCtx ? musicCtx.ambientMode : fallbackAmbientMode
+
+  const handleChangeAmbientMode = useCallback(
+    (mode: BlogAmbientMode) => {
+      if (musicCtx) {
+        musicCtx.setAmbientMode(mode)
+      } else {
+        saveAmbientMode(mode)
+        setFallbackAmbientMode(mode)
+      }
+    },
+    [musicCtx]
+  )
+
+  // Modal-wide Ctrl+V clipboard image / GIF paste routed to cover or avatar
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return
+    const onWindowPaste = (event: globalThis.ClipboardEvent) => {
+      if (event.defaultPrevented || busy) return
+      const pastedImage = extractFirstClipboardImage(event.clipboardData)
+      if (!pastedImage) return
+      event.preventDefault()
+      if (pasteTarget === 'avatar') {
+        void handleUploadAvatar(pastedImage)
+      } else {
+        void handleUploadCover(pastedImage)
+      }
+    }
+    window.addEventListener('paste', onWindowPaste)
+    return () => window.removeEventListener('paste', onWindowPaste)
+  }, [open, busy, pasteTarget, handleUploadAvatar, handleUploadCover])
 
   const rssUrl =
     typeof window !== 'undefined' && window.location?.origin
@@ -261,6 +357,7 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
         siteName: siteName.trim(),
         nickname: nickname.trim(),
         bio: bio.trim(),
+        aboutSubtitle: aboutSubtitle.trim(),
         footerText: footerText.trim(),
         avatarMediaId,
         coverMediaId,
@@ -325,6 +422,50 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
           </header>
 
           <div className="blog-modal-body">
+            {/* Clipboard Paste Target Toggle */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                flexWrap: 'wrap',
+                padding: '6px 10px',
+                borderRadius: 10,
+                background: 'var(--blog-surface-subtle)',
+                border: '1px solid var(--blog-divider)'
+              }}
+            >
+              <span className="blog-paste-hint">支持 Ctrl+V 粘贴图片 / GIF</span>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span className="blog-field-hint" style={{ fontSize: 12 }}>
+                  粘贴到：
+                </span>
+                <div className="blog-segmented" role="radiogroup" aria-label="粘贴目标">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={pasteTarget === 'cover'}
+                    className={`blog-segmented-btn${pasteTarget === 'cover' ? ' is-active is-accent' : ''}`}
+                    style={{ height: 24, padding: '0 10px', fontSize: 12 }}
+                    onClick={() => setPasteTarget('cover')}
+                  >
+                    封面
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={pasteTarget === 'avatar'}
+                    className={`blog-segmented-btn${pasteTarget === 'avatar' ? ' is-active is-accent' : ''}`}
+                    style={{ height: 24, padding: '0 10px', fontSize: 12 }}
+                    onClick={() => setPasteTarget('avatar')}
+                  >
+                    头像
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Cover Banner */}
             <div className="blog-field">
               <span className="blog-field-label">主页封面图</span>
@@ -358,12 +499,12 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
                 >
                   清除封面
                 </button>
-                <span className="blog-field-hint">建议横向高清图片，支持 PNG / JPG / WebP</span>
+                <span className="blog-field-hint">建议横向高清图片，支持 PNG / JPG / WebP / GIF</span>
               </div>
               <input
                 ref={coverInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/gif"
                 hidden
                 onChange={(e) => {
                   const file = e.target.files?.[0]
@@ -403,13 +544,13 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
                       清除头像
                     </button>
                   </div>
-                  <span className="blog-field-hint">显示在封面右下角与每条动态左侧</span>
+                  <span className="blog-field-hint">显示在封面右下角与每条动态左侧，支持 GIF 动图</span>
                 </div>
               </div>
               <input
                 ref={avatarInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/gif"
                 hidden
                 onChange={(e) => {
                   const file = e.target.files?.[0]
@@ -457,6 +598,19 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
             </label>
 
             <label className="blog-field">
+              <span className="blog-field-label">左上角关于副标题</span>
+              <input
+                type="text"
+                className="blog-input"
+                maxLength={120}
+                value={aboutSubtitle}
+                onChange={(e) => setAboutSubtitle(e.target.value)}
+                placeholder="例如：数字花园与个人简介"
+              />
+              <span className="blog-field-hint">展示在桌面端左栏「关于我」卡片标题下方</span>
+            </label>
+
+            <label className="blog-field">
               <span className="blog-field-label">页脚文案</span>
               <input
                 type="text"
@@ -466,6 +620,39 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
                 placeholder="例如：记录生活与阅读 · Powered by Do It Laaaaaater"
               />
             </label>
+
+            {/* Music Ambient Mode 3-Way Control */}
+            <div className="blog-field">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                <span className="blog-field-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <AppIcon name="music" size={13} />
+                  <span>音乐播放背景氛围</span>
+                </span>
+                <span className="blog-field-hint">播放时自动提取专辑封面主色动态渲染</span>
+              </div>
+              <div
+                className="blog-segmented"
+                role="radiogroup"
+                aria-label="音乐播放背景氛围"
+                style={{ alignSelf: 'flex-start' }}
+              >
+                {SETTINGS_AMBIENT_OPTIONS.map((opt) => {
+                  const active = activeAmbientMode === opt.mode
+                  return (
+                    <button
+                      key={opt.mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      className={`blog-segmented-btn${active ? ' is-active is-accent' : ''}`}
+                      onClick={() => handleChangeAmbientMode(opt.mode)}
+                    >
+                      {opt.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
 
             {/* Allow Comments Switch */}
             <div className="blog-switch-row">

@@ -23,6 +23,7 @@ import {
 import '../../blog.css'
 import '../../blog-phase2.css'
 import '../../blog-bento.css'
+import '../../blog-ambient.css'
 import type { TocHeading } from '../../blog-markdown'
 import { BlogMusicProvider, useBlogMusicActions } from '../../blog-music'
 import type {
@@ -36,6 +37,7 @@ import type {
 } from '../../blog-types'
 import { AppIcon, BrandMark } from '../AppIcon'
 import { showToast } from '../Toast'
+import { BlogAmbientBackdrop } from './BlogAmbientBackdrop'
 import { BlogArchivesView } from './BlogArchivesView'
 import { BlogArticleView } from './BlogArticleView'
 import { BlogCoverHeader } from './BlogCoverHeader'
@@ -138,6 +140,49 @@ function safeDecodeSegment(raw: string): string {
   } catch {
     return raw
   }
+}
+
+function isEditablePasteTarget(target: Element | EventTarget | null): boolean {
+  if (!target || !(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (target.isContentEditable) return true
+  return Boolean(
+    target.closest('[contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"]')
+  )
+}
+
+function normalizePastedImageFile(rawFile: File, index: number): File {
+  if (rawFile.name && /\.[a-z0-9]{2,5}$/i.test(rawFile.name) && rawFile.name !== 'image.png') {
+    return rawFile
+  }
+  const mime = (rawFile.type || 'image/png').toLowerCase()
+  const ext = mime.includes('gif')
+    ? 'gif'
+    : mime.includes('webp')
+      ? 'webp'
+      : mime.includes('jpeg') || mime.includes('jpg')
+        ? 'jpg'
+        : 'png'
+  return new File([rawFile], `pasted-image-${Date.now()}-${index + 1}.${ext}`, { type: mime })
+}
+
+function extractPastedImageFiles(clipboardData: DataTransfer | null): File[] {
+  if (!clipboardData) return []
+  const directFiles = Array.from(clipboardData.files || []).filter((file) =>
+    file.type.startsWith('image/')
+  )
+  if (directFiles.length > 0) {
+    return directFiles.map((file, idx) => normalizePastedImageFile(file, idx))
+  }
+  const itemFiles: File[] = []
+  for (const item of Array.from(clipboardData.items || [])) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) itemFiles.push(file)
+    }
+  }
+  return itemFiles.map((file, idx) => normalizePastedImageFile(file, idx))
 }
 
 export function parseBlogRoute(rawPath: string): BlogRoute {
@@ -318,7 +363,15 @@ function BlogAppInner({
   sidebarConfig
 }: BlogAppInnerProps) {
   // Subscribe ONLY to stable music state/actions so audio.ontimeupdate never re-renders BlogApp or feed cards
-  const music = useBlogMusicActions()
+  const {
+    tracks,
+    currentTrack,
+    isPlaying,
+    ambientMode,
+    palette,
+    openDrawer,
+    openManager
+  } = useBlogMusicActions()
 
   const [darkMode, setDarkMode] = useState<boolean>(readInitialDarkMode)
 
@@ -355,6 +408,7 @@ function BlogAppInner({
   const [composerInitialType, setComposerInitialType] = useState<BlogPostType>('moment')
   const [editingPost, setEditingPost] = useState<BlogPostSummary | null>(null)
   const [importedDraft, setImportedDraft] = useState<BlogImportedItemDraft | null>(null)
+  const [pendingPastedFiles, setPendingPastedFiles] = useState<File[] | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [lightbox, setLightbox] = useState<{ images: BlogLightboxImage[]; index: number } | null>(null)
 
@@ -707,6 +761,7 @@ function BlogAppInner({
   const handleOpenCompose = useCallback((type: BlogPostType = 'moment') => {
     setEditingPost(null)
     setImportedDraft(null)
+    setPendingPastedFiles(null)
     setComposerInitialType(type)
     setComposerOpen(true)
   }, [])
@@ -715,6 +770,7 @@ function BlogAppInner({
     (post: BlogPostSummary) => {
       const resolved = detailPost && detailPost.id === post.id ? detailPost : post
       setImportedDraft(null)
+      setPendingPastedFiles(null)
       setEditingPost(resolved)
       setComposerInitialType(resolved.type)
       setComposerOpen(true)
@@ -726,13 +782,51 @@ function BlogAppInner({
     setComposerOpen(false)
     setEditingPost(null)
     setImportedDraft(null)
+    setPendingPastedFiles(null)
   }, [])
+
+  const handleConsumePastedFiles = useCallback(() => {
+    setPendingPastedFiles(null)
+  }, [])
+
+  const handleOpenSettings = useCallback(() => {
+    setSettingsOpen(true)
+  }, [])
+
+  // Global Ctrl+V paste-to-post on Blog Feed when no modal/lightbox or editable input is active
+  useEffect(() => {
+    if (!isOwner || composerOpen || settingsOpen || lightbox) return
+    if (typeof window === 'undefined' || typeof document === 'undefined') return
+
+    const onWindowPaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return
+      if (isEditablePasteTarget(document.activeElement) || isEditablePasteTarget(event.target)) {
+        return
+      }
+      if (document.querySelector('[aria-modal="true"]')) {
+        return
+      }
+      const imageFiles = extractPastedImageFiles(event.clipboardData)
+      if (imageFiles.length === 0) return
+
+      event.preventDefault()
+      setEditingPost(null)
+      setImportedDraft(null)
+      setPendingPastedFiles(imageFiles)
+      setComposerInitialType('moment')
+      setComposerOpen(true)
+    }
+
+    window.addEventListener('paste', onWindowPaste)
+    return () => window.removeEventListener('paste', onWindowPaste)
+  }, [isOwner, composerOpen, settingsOpen, lightbox])
 
   const handleComposerSaved = useCallback(
     (savedPost: BlogPostDetail, isNew: boolean) => {
       setComposerOpen(false)
       setEditingPost(null)
       setImportedDraft(null)
+      setPendingPastedFiles(null)
 
       void refreshBootstrap()
       setFeedRefreshTick((t) => t + 1)
@@ -881,6 +975,30 @@ function BlogAppInner({
 
   const isDetailRoute = route.kind === 'article' || route.kind === 'moment'
 
+  const ambientActive =
+    isPlaying && ambientMode !== 'minimal' && Boolean(palette || currentTrack?.coverUrl)
+
+  const blogRootStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!ambientActive || !palette) return undefined
+    return {
+      '--blog-link': darkMode ? palette.accentDark : palette.accentLight,
+      '--blog-link-hover': darkMode ? palette.accentDarkHover : palette.accentLightHover,
+      '--blog-link-soft': darkMode ? palette.accentDarkSoft : palette.accentLightSoft,
+      '--blog-ambient-a': palette.glowA,
+      '--blog-ambient-b': palette.glowB,
+      '--blog-ambient-c': palette.glowC
+    } as CSSProperties
+  }, [ambientActive, palette, darkMode])
+
+  const blogRootClassName = [
+    'blog-root',
+    embedded ? 'is-embedded' : '',
+    ambientActive && ambientMode === 'glow' ? 'has-ambient-glow' : '',
+    ambientActive && ambientMode === 'wallpaper' ? 'has-ambient-wallpaper' : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
     <>
       {embedded && (
@@ -952,9 +1070,18 @@ function BlogAppInner({
       )}
 
       <div
-        className={embedded ? 'blog-root is-embedded' : 'blog-root'}
+        className={blogRootClassName}
         data-blog-theme={darkMode ? 'dark' : 'light'}
+        style={blogRootStyle}
       >
+        <BlogAmbientBackdrop
+          mode={ambientMode}
+          active={ambientActive}
+          darkMode={darkMode}
+          palette={palette}
+          coverUrl={currentTrack?.coverUrl ?? null}
+        />
+
         <div className="blog-bento-stage">
           {isDesktopRail && (
             <BlogLeftRail
@@ -968,6 +1095,7 @@ function BlogAppInner({
               onNavigate={onNavigate}
               onOpenLightbox={handleOpenLightbox}
               onOpenCompose={handleOpenCompose}
+              onOpenSettings={handleOpenSettings}
               articleHeadings={route.kind === 'article' ? articleToc.headings : undefined}
               activeHeadingId={route.kind === 'article' ? articleToc.activeId : undefined}
               onJumpHeading={handleJumpHeading}
@@ -1001,14 +1129,12 @@ function BlogAppInner({
                   onNavigate(`/${section}`)
                 }}
                 onOpenMusic={() =>
-                  music.tracks.length > 0 || music.currentTrack
-                    ? music.openDrawer()
-                    : music.openManager()
+                  tracks.length > 0 || currentTrack ? openDrawer() : openManager()
                 }
-                musicPlaying={music.isPlaying}
-                hasMusic={music.tracks.length > 0 || Boolean(music.currentTrack)}
+                musicPlaying={isPlaying}
+                hasMusic={tracks.length > 0 || Boolean(currentTrack)}
                 onOpenCompose={(type) => handleOpenCompose(type ?? 'moment')}
-                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenSettings={handleOpenSettings}
                 onOpenLogin={onRequestLogin}
                 onBackToWorkspace={onBackToWorkspace}
               />
@@ -1399,7 +1525,7 @@ function BlogAppInner({
           )}
         </div>
 
-        <footer className="blog-footer">
+        <footer className="blog-footer" style={{ position: 'relative', zIndex: 1 }}>
           <div>
             {profile.footerText?.trim()
               ? profile.footerText
@@ -1477,6 +1603,8 @@ function BlogAppInner({
               initialType={composerInitialType}
               editingPost={editingPost}
               importedDraft={importedDraft}
+              initialPastedFiles={pendingPastedFiles}
+              onConsumePastedFiles={handleConsumePastedFiles}
               existingCategories={existingCategories}
               onClose={handleCloseComposer}
               onSaved={handleComposerSaved}

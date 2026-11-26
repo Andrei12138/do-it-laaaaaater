@@ -27,6 +27,6 @@ export const DEFAULT_CATEGORIES = [
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024
 export const MAX_IMAGES_PER_ITEM = 30
 export const MAX_MEMO_SCENE_BYTES = 12 * 1024 * 1024
-export const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+export const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 export const SESSION_COOKIE = 'dil_session'
 export const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000

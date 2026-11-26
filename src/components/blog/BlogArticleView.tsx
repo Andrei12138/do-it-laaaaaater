@@ -12,6 +12,7 @@ import type {
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
 import { BlogCommentSection } from './BlogCommentSection'
+import { InlineAnimatedEmoji } from './BlogEmojiPicker'
 import { BlogImageGrid } from './BlogImageGrid'
 import { BlogMusicCard } from './BlogMusicCard'
 import { BlogUnlockCard } from './BlogUnlockCard'
@@ -646,6 +647,9 @@ export function BlogArticleView({
                         {segment.value}
                       </button>
                     )
+                  }
+                  if (segment.type === 'emoji') {
+                    return <InlineAnimatedEmoji key={index} code={segment.code} />
                   }
                   return <span key={index}>{segment.value}</span>
                 })}

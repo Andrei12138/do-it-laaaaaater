@@ -1,3 +1,5 @@
+import { ANIMATED_EMOJI_REGEX, resolveAnimatedEmoji } from './blog-emojis'
+
 export interface TocHeading {
   id: string
   level: 2 | 3
@@ -11,11 +13,33 @@ export interface RenderedMarkdown {
   readingMinutes: number
 }
 
-export interface MomentTextSegment {
-  type: 'text' | 'link' | 'tag'
-  value: string
-  href?: string
-}
+export type MomentSegment =
+  | {
+      type: 'text'
+      value: string
+      href?: undefined
+    }
+  | {
+      type: 'link'
+      value: string
+      href: string
+    }
+  | {
+      type: 'tag'
+      value: string
+      href?: undefined
+    }
+  | {
+      type: 'emoji'
+      value: string
+      code: string
+      url: string
+      fallback: string
+      label: string
+      href?: undefined
+    }
+
+export type MomentTextSegment = MomentSegment
 
 function escapeHtml(text: string): string {
   return text
@@ -220,6 +244,15 @@ function renderInline(rawInput: string, allowLinks = true): string {
     )
   }
 
+  // 4.5. Allowlisted animated emoji shortcodes (:noto-*: & :fluent-*:)
+  text = text.replace(ANIMATED_EMOJI_REGEX, (shortcode) => {
+    const emoji = resolveAnimatedEmoji(shortcode)
+    if (!emoji) return shortcode
+    return stash(
+      `<img class="blog-anim-emoji" src="${escapeAttr(emoji.url)}" alt="${escapeAttr(emoji.fallback)}" title="${escapeAttr(emoji.label)}" loading="lazy" />`
+    )
+  })
+
   // 5. Escape all remaining raw HTML before applying inline emphasis
   let escaped = escapeHtml(text)
   escaped = renderInlineFormattingOnEscaped(escaped)
@@ -228,8 +261,25 @@ function renderInline(rawInput: string, allowLinks = true): string {
   return escaped.replace(/\u0000TOK(\d+)\u0000/g, (_match, idxStr: string) => tokens[Number(idxStr)] ?? '')
 }
 
+function replaceAllowlistedEmojisOutsideInlineCode(source: string): string {
+  const codeSpans: string[] = []
+  const masked = source.replace(/\u0000/g, '').replace(/`+([^`\n]+?)`+/g, (match) => {
+    const idx = codeSpans.length
+    codeSpans.push(match)
+    return `\u0000EMCODE${idx}\u0000`
+  })
+  const withFallbacks = masked.replace(ANIMATED_EMOJI_REGEX, (shortcode) => {
+    const emoji = resolveAnimatedEmoji(shortcode)
+    return emoji ? emoji.fallback : shortcode
+  })
+  return withFallbacks.replace(
+    /\u0000EMCODE(\d+)\u0000/g,
+    (_match, idxStr: string) => codeSpans[Number(idxStr)] ?? ''
+  )
+}
+
 function stripInlineMarkdownToPlain(text: string): string {
-  return text
+  return replaceAllowlistedEmojisOutsideInlineCode(text)
     .replace(/!\[([^\]]*)\]\(([^)\n]+)\)/g, '$1')
     .replace(/\[([^\]]+)\]\(([^)\n]+)\)/g, '$1')
     .replace(/`+([^`\n]+?)`+/g, '$1')
@@ -568,6 +618,7 @@ function countWords(markdown: string): number {
     .replace(/\[([^\]]+)\]\([^)\n]+\)/g, ' $1 ')
     .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/^\s*(`{3,}|~{3,}).*$/gm, ' ')
+    .replace(ANIMATED_EMOJI_REGEX, (shortcode) => (resolveAnimatedEmoji(shortcode) ? ' ' : shortcode))
     .replace(/<[^>]+>/g, ' ')
 
   const cjkMatches = withoutUrls.match(/[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]/g)
@@ -622,7 +673,7 @@ export function generateExcerpt(markdown: string, maxLength = 140): string {
       .trim()
 
   const withoutFences = normalized.replace(/(^|\n)\s*(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n\s*\2\s*(?=\n|$)|$)/g, ' ')
-  let plain = stripSyntax(withoutFences)
+  let plain = stripSyntax(replaceAllowlistedEmojisOutsideInlineCode(withoutFences))
   if (!plain) {
     // Fall back to keeping fenced block content if the article consists solely of code.
     plain = stripSyntax(normalized.replace(/^\s*(`{3,}|~{3,}).*$/gm, ' '))
@@ -634,10 +685,10 @@ export function generateExcerpt(markdown: string, maxLength = 140): string {
   return `${plain.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`
 }
 
-export function formatMomentText(text: string): MomentTextSegment[] {
+export function formatMomentText(text: string): MomentSegment[] {
   if (!text) return []
 
-  const segments: MomentTextSegment[] = []
+  const segments: MomentSegment[] = []
   const pushText = (value: string) => {
     if (!value) return
     const last = segments[segments.length - 1]
@@ -649,7 +700,7 @@ export function formatMomentText(text: string): MomentTextSegment[] {
   }
 
   const pattern =
-    /(https?:\/\/[^\s<>"'，。！？；：、（）【】《》「」『』]+)|((?:^|[\s，。！？、；：（【\[])#([A-Za-z0-9_\-\u4e00-\u9fff]+))/gi
+    /(https?:\/\/[^\s<>"'，。！？；：、（）【】《》「」『』]+)|((?:^|[\s，。！？、；：（【\[])#([A-Za-z0-9_\-\u4e00-\u9fff]+))|(:(?:noto|fluent)-[a-z0-9_-]+:)/gi
   let cursor = 0
   let match: RegExpExecArray | null
 
@@ -678,6 +729,22 @@ export function formatMomentText(text: string): MomentTextSegment[] {
       pushText(prefix)
       segments.push({ type: 'tag', value: tagValue })
       cursor = matchStart + fullTagMatch.length
+    } else if (match[4]) {
+      const rawCode = match[4]
+      const emoji = resolveAnimatedEmoji(rawCode)
+      if (emoji) {
+        segments.push({
+          type: 'emoji',
+          value: emoji.code,
+          code: emoji.code,
+          url: emoji.url,
+          fallback: emoji.fallback,
+          label: emoji.label
+        })
+      } else {
+        pushText(rawCode)
+      }
+      cursor = matchStart + rawCode.length
     }
   }
 

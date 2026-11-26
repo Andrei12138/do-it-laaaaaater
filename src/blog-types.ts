@@ -49,6 +49,7 @@ export interface BlogProfile {
   siteName: string
   nickname: string
   bio: string
+  aboutSubtitle?: string
   avatarMediaId: string | null
   avatarUrl: string | null
   coverMediaId: string | null
@@ -234,6 +235,7 @@ export interface BlogSettingsInput {
   siteName?: string
   nickname?: string
   bio?: string
+  aboutSubtitle?: string
   avatarMediaId?: string | null
   coverMediaId?: string | null
   footerText?: string

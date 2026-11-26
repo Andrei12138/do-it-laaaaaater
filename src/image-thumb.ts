@@ -1,4 +1,5 @@
 async function createThumb(file: File): Promise<{ thumb: File; width: number; height: number } | null> {
+  if (file.type === 'image/gif' || /\.gif$/i.test(file.name)) return null
   if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') return null
   let bitmap: ImageBitmap | null = null
   try {

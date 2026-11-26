@@ -168,7 +168,7 @@ async function tryChatImageFallback(
   config: AiImageConfig,
   model: string,
   prompt: string
-): Promise<{ bytes: Uint8Array; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' } | null> {
+): Promise<{ bytes: Uint8Array; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' } | null> {
   const endpoint = resolveChatEndpoint(config.apiUrl)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 55_000)
@@ -246,7 +246,7 @@ async function tryChatImageFallback(
 export async function generateAiPosterCover(
   config: AiImageConfig,
   item: { title: string; url?: string | null; categoryName?: string | null; categoryPrompt?: string | null }
-): Promise<{ bytes: Uint8Array; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' }> {
+): Promise<{ bytes: Uint8Array; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' }> {
   if (!config.apiKey.trim()) throw new ApiError(400, '请先在账号设置中填写生图 API Key')
   const endpoint = resolveGenerationsEndpoint(config.apiUrl)
   const model = config.model.trim() || 'gpt-image-1'

@@ -150,9 +150,10 @@ function cleanOriginalName(value: string): string {
   return (name || 'image').slice(0, 180)
 }
 
-function extensionFor(mimeType: string): string {
+export function extensionFor(mimeType: string): string {
   if (mimeType === 'image/png') return 'png'
   if (mimeType === 'image/jpeg') return 'jpg'
+  if (mimeType === 'image/gif') return 'gif'
   return 'webp'
 }
 
@@ -797,11 +798,22 @@ async function isPostUnlocked(request: Request, post: Row, isOwner: boolean): Pr
 
 // --- Profile & Settings ---
 
+export const DEFAULT_ABOUT_SUBTITLE = '数字花园与个人简介'
+
+export function resolveAboutSubtitle(aboutRow: Row | null | undefined): string {
+  const raw =
+    aboutRow && aboutRow.subtitle !== null && aboutRow.subtitle !== undefined
+      ? String(aboutRow.subtitle).trim()
+      : ''
+  return raw || DEFAULT_ABOUT_SUBTITLE
+}
+
 function buildDefaultProfile(): BlogProfile {
   return {
     siteName: DEFAULT_SETTINGS.siteName,
     nickname: DEFAULT_SETTINGS.nickname,
     bio: DEFAULT_SETTINGS.bio,
+    aboutSubtitle: DEFAULT_ABOUT_SUBTITLE,
     avatarMediaId: null,
     avatarUrl: null,
     coverMediaId: null,
@@ -824,10 +836,11 @@ async function loadOwnerSettingsRow(env: Env, ownerId: string): Promise<Row | nu
 
 function mapSettingsToProfile(
   row: Row | null,
-  stats: BlogProfile['stats'] = { totalPosts: 0, momentCount: 0, articleCount: 0, commentCount: 0 }
+  stats: BlogProfile['stats'] = { totalPosts: 0, momentCount: 0, articleCount: 0, commentCount: 0 },
+  aboutSubtitle: string = DEFAULT_ABOUT_SUBTITLE
 ): BlogProfile {
   if (!row) {
-    return { ...buildDefaultProfile(), stats }
+    return { ...buildDefaultProfile(), aboutSubtitle, stats }
   }
   const avatarMediaId = row.avatar_media_id ? String(row.avatar_media_id) : null
   const coverMediaId = row.cover_media_id ? String(row.cover_media_id) : null
@@ -836,6 +849,7 @@ function mapSettingsToProfile(
     siteName: String(row.site_name || DEFAULT_SETTINGS.siteName),
     nickname: String(row.nickname || DEFAULT_SETTINGS.nickname),
     bio: row.bio !== null && row.bio !== undefined ? String(row.bio) : DEFAULT_SETTINGS.bio,
+    aboutSubtitle,
     avatarMediaId,
     avatarUrl: avatarMediaId ? blogMediaUrl(avatarMediaId) : null,
     coverMediaId,
@@ -847,12 +861,26 @@ function mapSettingsToProfile(
   }
 }
 
+export async function loadBlogProfile(
+  env: Env,
+  ownerId: string,
+  stats: BlogProfile['stats'] = { totalPosts: 0, momentCount: 0, articleCount: 0, commentCount: 0 }
+): Promise<BlogProfile> {
+  const [settingsRow, aboutRow] = await Promise.all([
+    loadOwnerSettingsRow(env, ownerId),
+    env.DB.prepare('SELECT subtitle FROM blog_pages WHERE user_id = ? AND slug = ?')
+      .bind(ownerId, 'about')
+      .first<Row>()
+  ])
+  return mapSettingsToProfile(settingsRow, stats, resolveAboutSubtitle(aboutRow))
+}
+
 async function loadBlogBootstrap(env: Env, owner: { id: string; email: string }, isOwner: boolean): Promise<BlogBootstrap> {
   const visibilityClause = isOwner ? '' : "AND visibility <> 'private'"
   const commentVisibilityClause = isOwner ? '' : "AND p.visibility <> 'private'"
 
-  const [settingsRow, postsRes, commentCountRow] = await Promise.all([
-    loadOwnerSettingsRow(env, owner.id),
+  const [baseProfile, postsRes, commentCountRow] = await Promise.all([
+    loadBlogProfile(env, owner.id),
     env.DB.prepare(
       `SELECT type, category, tags_json FROM blog_posts WHERE user_id = ? ${visibilityClause}`
     ).bind(owner.id).all<Row>(),
@@ -898,7 +926,7 @@ async function loadBlogBootstrap(env: Env, owner: { id: string; email: string },
     configured: true,
     isOwner,
     ownerEmail: isOwner ? owner.email : null,
-    profile: mapSettingsToProfile(settingsRow, stats),
+    profile: { ...baseProfile, stats },
     categories,
     tags
   }
@@ -1902,8 +1930,8 @@ async function loadBlogRailSummary(
 ): Promise<BlogRailSummary> {
   const visClause = isOwner ? '' : "AND visibility <> 'private'"
   const [aboutRow, albumPostsRes, equipmentRes, labsRes, friendsRes] = await Promise.all([
-    env.DB.prepare("SELECT subtitle, content FROM blog_pages WHERE user_id = ? AND slug = 'about'")
-      .bind(ownerId)
+    env.DB.prepare('SELECT subtitle, content FROM blog_pages WHERE user_id = ? AND slug = ?')
+      .bind(ownerId, 'about')
       .first<Row>(),
     env.DB.prepare(
       `SELECT id, short_id, title, excerpt, images_json, visibility, password_hash FROM blog_posts WHERE user_id = ? ${visClause} ORDER BY published_at DESC, created_at DESC LIMIT 50`
@@ -1928,8 +1956,8 @@ async function loadBlogRailSummary(
   ])
 
   const aboutSubtitle = aboutRow
-    ? String(aboutRow.subtitle ?? '').trim() || profile.siteName || ''
-    : '数字花园与个人简介'
+    ? String(aboutRow.subtitle ?? '').trim() || profile.aboutSubtitle || profile.siteName || DEFAULT_ABOUT_SUBTITLE
+    : profile.aboutSubtitle || DEFAULT_ABOUT_SUBTITLE
 
   let aboutExcerpt = ''
   if (aboutRow?.content && String(aboutRow.content).trim()) {
@@ -2962,6 +2990,47 @@ async function handleBlogApiInner(
       now
     ).run()
 
+    if (hasOwn(body, 'aboutSubtitle')) {
+      const nextAboutSubtitle = String(body.aboutSubtitle ?? '').trim().slice(0, 120)
+      const existingAbout = await env.DB.prepare(
+        'SELECT * FROM blog_pages WHERE user_id = ? AND slug = ?'
+      )
+        .bind(owner.id, 'about')
+        .first<Row>()
+
+      const pageTitle = existingAbout?.title ? String(existingAbout.title) : '关于我'
+      const pageContent =
+        existingAbout?.content !== undefined && existingAbout?.content !== null
+          ? String(existingAbout.content)
+          : ''
+      const pageCoverMediaId = existingAbout?.cover_media_id
+        ? String(existingAbout.cover_media_id)
+        : null
+      const pageAllowComments =
+        existingAbout?.allow_comments === undefined
+          ? 1
+          : Boolean(Number(existingAbout.allow_comments))
+            ? 1
+            : 0
+
+      await env.DB.prepare(
+        'INSERT INTO blog_pages (slug, user_id, title, subtitle, content, cover_media_id, allow_comments, updated_at) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(user_id, slug) DO UPDATE SET title = excluded.title, subtitle = excluded.subtitle, content = excluded.content, cover_media_id = excluded.cover_media_id, allow_comments = excluded.allow_comments, updated_at = excluded.updated_at'
+      )
+        .bind(
+          'about',
+          owner.id,
+          pageTitle,
+          nextAboutSubtitle,
+          pageContent,
+          pageCoverMediaId,
+          pageAllowComments,
+          now
+        )
+        .run()
+    }
+
     const removedSettingsMedia = [current.avatarMediaId, current.coverMediaId].filter(
       (id): id is string => Boolean(id && id !== avatarMediaId && id !== coverMediaId)
     )
@@ -3022,12 +3091,13 @@ async function handleBlogApiInner(
           const bytes = new Uint8Array(await singleFile.arrayBuffer())
           const detectedMime = detectImageMime(bytes)
           if (!detectedMime || !ALLOWED_IMAGE_TYPES.has(detectedMime)) {
-            throw new ApiError(400, '只支持 PNG、JPEG 和 WebP 图片')
+            throw new ApiError(400, '只支持 PNG、JPEG、WebP 和 GIF 图片')
           }
           const ext = extensionFor(detectedMime)
           const storageKey = `blog/${owner.id}/${mediaId}/original.${ext}`
-          let thumbKey: string | null = null
-          let thumbMimeType: string | null = null
+          const isGif = detectedMime === 'image/gif'
+          let thumbKey: string | null = isGif ? storageKey : null
+          let thumbMimeType: string | null = isGif ? 'image/gif' : null
 
           const puts: Promise<unknown>[] = [
             env.IMAGES.put(storageKey, bytes, {
@@ -3042,7 +3112,7 @@ async function handleBlogApiInner(
           const thumbs = form.getAll('thumbs').filter((v): v is File => v instanceof File)
           const meta = parseImageMeta(form.get('imageMeta'))
           const thumbFile = thumbs[0]
-          if (thumbFile && thumbFile.size > 0 && thumbFile.size <= 5 * 1024 * 1024) {
+          if (!isGif && thumbFile && thumbFile.size > 0 && thumbFile.size <= 5 * 1024 * 1024) {
             const thumbBytes = new Uint8Array(await thumbFile.arrayBuffer())
             const detectedThumb = detectImageMime(thumbBytes)
             if (detectedThumb) {
@@ -3213,14 +3283,15 @@ async function handleBlogApiInner(
         const bytes = new Uint8Array(await file.arrayBuffer())
         const detectedMime = detectImageMime(bytes)
         if (!detectedMime || !ALLOWED_IMAGE_TYPES.has(detectedMime)) {
-          throw new ApiError(400, '只支持 PNG、JPEG 和 WebP 图片')
+          throw new ApiError(400, '只支持 PNG、JPEG、WebP 和 GIF 图片')
         }
 
         const mediaId = crypto.randomUUID()
         const ext = extensionFor(detectedMime)
         const storageKey = `blog/${owner.id}/${mediaId}/original.${ext}`
-        let thumbKey: string | null = null
-        let thumbMimeType: string | null = null
+        const isGif = detectedMime === 'image/gif'
+        let thumbKey: string | null = isGif ? storageKey : null
+        let thumbMimeType: string | null = isGif ? 'image/gif' : null
 
         const puts: Promise<unknown>[] = [
           env.IMAGES.put(storageKey, bytes, {
@@ -3230,7 +3301,7 @@ async function handleBlogApiInner(
         uploadedKeys.push(storageKey)
 
         const thumbFile = thumbs[i]
-        if (thumbFile && thumbFile.size > 0 && thumbFile.size <= 5 * 1024 * 1024) {
+        if (!isGif && thumbFile && thumbFile.size > 0 && thumbFile.size <= 5 * 1024 * 1024) {
           const thumbBytes = new Uint8Array(await thumbFile.arrayBuffer())
           const detectedThumb = detectImageMime(thumbBytes)
           if (detectedThumb) {

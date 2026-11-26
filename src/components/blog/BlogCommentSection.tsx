@@ -4,7 +4,8 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type KeyboardEvent
+  type KeyboardEvent,
+  type ReactNode
 } from 'react'
 import {
   createBlogComment,
@@ -14,9 +15,11 @@ import {
   saveVisitorProfile,
   toggleBlogCommentLike
 } from '../../blog-api'
+import { ANIMATED_EMOJI_REGEX, resolveAnimatedEmoji } from '../../blog-emojis'
 import type { BlogComment } from '../../blog-types'
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
+import { BlogEmojiTrigger, InlineAnimatedEmoji } from './BlogEmojiPicker'
 
 export interface BlogCommentSectionProps {
   postId: string
@@ -35,7 +38,28 @@ interface ReplyTarget {
   replyToName: string
 }
 
-const QUICK_EMOJIS = ['👍', '❤️', '🎉', '😄', '🤔', '🔥', '✨', '👏'] as const
+function renderCommentText(text: string): ReactNode {
+  if (!text || !text.includes(':')) return text
+  const parts: ReactNode[] = []
+  const regex = new RegExp(ANIMATED_EMOJI_REGEX.source, 'g')
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(text)) !== null) {
+    const code = match[0]
+    const resolved = resolveAnimatedEmoji(code)
+    if (!resolved) continue
+    if (match.index > cursor) {
+      parts.push(text.slice(cursor, match.index))
+    }
+    parts.push(<InlineAnimatedEmoji key={`${match.index}-${code}`} code={resolved.code} />)
+    cursor = match.index + code.length
+  }
+  if (parts.length === 0) return text
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor))
+  }
+  return parts
+}
 
 function getMonogram(name: string): string {
   const trimmed = (name || '').trim()
@@ -492,27 +516,15 @@ export function BlogCommentSection({
                   display: 'flex',
                   alignItems: 'center',
                   flexWrap: 'wrap',
-                  gap: 4
+                  gap: 6
                 }}
-                aria-label="快捷表情"
+                aria-label="表情工具栏"
               >
-                {QUICK_EMOJIS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    className="blog-floor-action-btn"
-                    onClick={() => handleInsertEmoji(emoji)}
-                    disabled={submitting}
-                    aria-label={`插入表情 ${emoji}`}
-                    style={{
-                      fontSize: 15,
-                      padding: '3px 6px',
-                      lineHeight: 1.2
-                    }}
-                  >
-                    {emoji}
-                  </button>
-                ))}
+                <BlogEmojiTrigger
+                  label="表情"
+                  onSelect={handleInsertEmoji}
+                  disabled={submitting}
+                />
               </div>
 
               {error && (
@@ -583,7 +595,7 @@ export function BlogCommentSection({
                     </span>
                   </div>
 
-                  <div className="blog-floor-content">{root.content}</div>
+                  <div className="blog-floor-content">{renderCommentText(root.content)}</div>
 
                   <div className="blog-floor-actions">
                     {canComment && (
@@ -641,7 +653,7 @@ export function BlogCommentSection({
                                   <span style={{ color: 'var(--blog-text-muted)', marginRight: 4 }}>
                                     ：
                                   </span>
-                                  <span style={{ whiteSpace: 'pre-wrap' }}>{reply.content}</span>
+                                  <span style={{ whiteSpace: 'pre-wrap' }}>{renderCommentText(reply.content)}</span>
                                 </div>
 
                                 <div className="blog-floor-actions" style={{ marginTop: 4 }}>

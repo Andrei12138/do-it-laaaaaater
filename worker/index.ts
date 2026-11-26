@@ -133,6 +133,7 @@ function cleanOriginalName(value: string): string {
 function extensionFor(mimeType: string): string {
   if (mimeType === 'image/png') return 'png'
   if (mimeType === 'image/jpeg') return 'jpg'
+  if (mimeType === 'image/gif') return 'gif'
   return 'webp'
 }
 
@@ -467,7 +468,7 @@ async function uploadImageToR2(
   const bytes = new Uint8Array(await input.file.arrayBuffer())
   const detectedMime = detectImageMime(bytes)
   if (!detectedMime || !ALLOWED_IMAGE_TYPES.has(detectedMime)) {
-    throw new ApiError(400, '只支持 PNG、JPEG 和 WebP 图片')
+    throw new ApiError(400, '只支持 PNG、JPEG、WebP 和 GIF 图片')
   }
 
   const ext = extensionFor(detectedMime)
@@ -481,7 +482,7 @@ async function uploadImageToR2(
     })
   ]
 
-  if (input.thumbFile && input.thumbFile.size > 0 && input.thumbFile.size <= 5 * 1024 * 1024) {
+  if (detectedMime !== 'image/gif' && input.thumbFile && input.thumbFile.size > 0 && input.thumbFile.size <= 5 * 1024 * 1024) {
     const thumbBytes = new Uint8Array(await input.thumbFile.arrayBuffer())
     const detectedThumb = detectImageMime(thumbBytes)
     if (detectedThumb) {
@@ -1418,7 +1419,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     const body = await readJson(request)
     const coverUrl = String(body.coverUrl || '').trim()
     if (!coverUrl) throw new ApiError(400, '封面地址无效')
-    let cover: { bytes: Uint8Array; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' }
+    let cover: { bytes: Uint8Array; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' }
     try {
       cover = await fetchImage(coverUrl)
     } catch {

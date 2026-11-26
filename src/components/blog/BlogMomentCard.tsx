@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   createBlogComment,
   deleteBlogComment,
@@ -7,10 +7,12 @@ import {
   saveVisitorProfile,
   toggleBlogPostLike
 } from '../../blog-api'
+import { ANIMATED_EMOJI_REGEX, resolveAnimatedEmoji } from '../../blog-emojis'
 import { formatMomentText } from '../../blog-markdown'
 import type { BlogComment, BlogPostMetadata, BlogPostSummary, BlogProfile } from '../../blog-types'
 import { AppIcon } from '../AppIcon'
 import { showToast } from '../Toast'
+import { BlogEmojiTrigger, InlineAnimatedEmoji } from './BlogEmojiPicker'
 import { BlogImageGrid } from './BlogImageGrid'
 import { BlogMusicCard } from './BlogMusicCard'
 import { BlogVideoCard } from './BlogVideoCard'
@@ -47,6 +49,29 @@ function extractHostname(url: string): string {
   } catch {
     return url
   }
+}
+
+function renderCommentText(text: string): ReactNode {
+  if (!text || !text.includes(':')) return text
+  const parts: ReactNode[] = []
+  const regex = new RegExp(ANIMATED_EMOJI_REGEX.source, 'g')
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(text)) !== null) {
+    const code = match[0]
+    const resolved = resolveAnimatedEmoji(code)
+    if (!resolved) continue
+    if (match.index > cursor) {
+      parts.push(text.slice(cursor, match.index))
+    }
+    parts.push(<InlineAnimatedEmoji key={`${match.index}-${code}`} code={resolved.code} />)
+    cursor = match.index + code.length
+  }
+  if (parts.length === 0) return text
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor))
+  }
+  return parts
 }
 
 export function BlogMomentCard({
@@ -167,6 +192,23 @@ export function BlogMomentCard({
       parentId: comment.parentId || comment.id,
       replyToId: comment.id,
       replyToName: comment.authorName || '访客'
+    })
+  }
+
+  const handleInsertCommentEmoji = (emoji: string) => {
+    const input = commentInputRef.current
+    if (!input) {
+      setCommentText((prev) => prev + emoji)
+      return
+    }
+    const start = input.selectionStart ?? commentText.length
+    const end = input.selectionEnd ?? commentText.length
+    const nextValue = commentText.slice(0, start) + emoji + commentText.slice(end)
+    setCommentText(nextValue)
+    window.requestAnimationFrame(() => {
+      input.focus()
+      const caret = start + emoji.length
+      input.setSelectionRange(caret, caret)
     })
   }
 
@@ -381,6 +423,9 @@ export function BlogMomentCard({
                           {seg.value}
                         </button>
                       )
+                    }
+                    if (seg.type === 'emoji') {
+                      return <InlineAnimatedEmoji key={segIdx} code={seg.code} />
                     }
                     return <Fragment key={segIdx}>{seg.value}</Fragment>
                   })}
@@ -624,7 +669,7 @@ export function BlogMomentCard({
                         <span className="blog-comment-author">{comment.replyToName}</span>
                       </>
                     )}
-                    <span>: {comment.content}</span>
+                    <span>: {renderCommentText(comment.content)}</span>
                     {isOwner && (
                       <button
                         type="button"
@@ -722,6 +767,12 @@ export function BlogMomentCard({
                       }
                     }}
                     maxLength={1000}
+                  />
+                  <BlogEmojiTrigger
+                    compact
+                    align="right"
+                    onSelect={handleInsertCommentEmoji}
+                    disabled={submittingComment}
                   />
                   <button
                     type="submit"

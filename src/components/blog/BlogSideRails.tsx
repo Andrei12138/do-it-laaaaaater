@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent,
   type ReactNode
 } from 'react'
@@ -14,7 +15,12 @@ import {
   fetchBlogPage
 } from '../../blog-api'
 import { generateExcerpt, type TocHeading } from '../../blog-markdown'
-import { parseLrc, useOptionalBlogMusic } from '../../blog-music'
+import {
+  parseLrc,
+  useBlogMusicActions,
+  useBlogMusicProgress,
+  type BlogAmbientMode
+} from '../../blog-music'
 import type {
   BlogArchiveItem,
   BlogCatalogItem,
@@ -105,12 +111,14 @@ export interface BlogSideRailDataProps {
   onNavigate: (path: string) => void
   onOpenLightbox: (images: Array<{ url: string; alt?: string }>, index: number) => void
   onOpenCompose: (type?: BlogPostType) => void
+  onOpenSettings?: () => void
 }
 
 export interface BlogLeftRailProps extends BlogSideRailDataProps {
   articleHeadings?: TocHeading[]
   activeHeadingId?: string
   onJumpHeading?: (id: string) => void
+  onOpenSettings?: () => void
 }
 
 // Lightweight session cache keyed by owner/guest scope and refreshTick so route switches stay flicker-free.
@@ -293,7 +301,8 @@ function AboutRailWidget({
   refreshTick,
   initialSummary,
   summaryLoading = false,
-  onNavigate
+  onNavigate,
+  onOpenSettings
 }: BlogSideRailDataProps) {
   const scope = getRailScope(isOwner)
   const [aboutPage, setAboutPage] = useState<BlogPageData | null>(
@@ -334,9 +343,12 @@ function AboutRailWidget({
     !(railCache[scope].about && railCache[scope].about?.tick === refreshTick)
 
   const displayName = profile.nickname || profile.siteName || '个人博客'
-  const subtitle = useSummaryAbout
-    ? initialSummary?.aboutSubtitle?.trim() || profile.siteName || ''
-    : aboutPage?.subtitle?.trim() || profile.siteName || ''
+  const subtitle =
+    (profile.aboutSubtitle !== undefined
+      ? profile.aboutSubtitle.trim()
+      : useSummaryAbout
+        ? initialSummary?.aboutSubtitle?.trim()
+        : aboutPage?.subtitle?.trim()) || '数字花园与个人简介'
   const aboutExcerpt = useMemo(() => {
     if (useSummaryAbout && initialSummary) {
       if (initialSummary.aboutExcerpt?.trim()) return initialSummary.aboutExcerpt.trim()
@@ -364,18 +376,31 @@ function AboutRailWidget({
           <span>关于我</span>
           {isCurrent && <span className="blog-rail-active-badge">当前</span>}
         </div>
-        <a
-          href="/about"
-          className="blog-rail-more"
-          onClick={(event) => {
-            if (!isPlainLeftClick(event)) return
-            event.preventDefault()
-            onNavigate('/about')
-          }}
-        >
-          <span>详情</span>
-          <span aria-hidden="true">→</span>
-        </a>
+        <div className="blog-rail-head-actions">
+          {isOwner && onOpenSettings && (
+            <button
+              type="button"
+              className="blog-rail-icon-btn"
+              onClick={onOpenSettings}
+              title="自定义简介与副标题"
+              aria-label="自定义简介与副标题"
+            >
+              <AppIcon name="edit" size={13} />
+            </button>
+          )}
+          <a
+            href="/about"
+            className="blog-rail-more"
+            onClick={(event) => {
+              if (!isPlainLeftClick(event)) return
+              event.preventDefault()
+              onNavigate('/about')
+            }}
+          >
+            <span>详情</span>
+            <span aria-hidden="true">→</span>
+          </a>
+        </div>
       </header>
 
       <div className="blog-rail-about-author">
@@ -400,11 +425,7 @@ function AboutRailWidget({
           >
             {displayName}
           </button>
-          {subtitle && subtitle !== displayName ? (
-            <span className="blog-rail-about-sub">{subtitle}</span>
-          ) : (
-            <span className="blog-rail-about-sub">Digital Garden</span>
-          )}
+          <span className="blog-rail-about-sub">{subtitle}</span>
         </div>
       </div>
 
@@ -584,13 +605,42 @@ function AlbumRailWidget({
    Right Widget 1: Persistent Music Player Card (音乐播放器)
    -------------------------------------------------------------------------- */
 
+const AMBIENT_MODE_NEXT: Record<BlogAmbientMode, BlogAmbientMode> = {
+  glow: 'wallpaper',
+  wallpaper: 'minimal',
+  minimal: 'glow'
+}
+
+const AMBIENT_MODE_SHORT_LABELS: Record<BlogAmbientMode, string> = {
+  glow: '流光',
+  wallpaper: '壁纸',
+  minimal: '极简'
+}
+
 function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
-  const music = useOptionalBlogMusic()
+  const {
+    tracks,
+    currentTrack,
+    isPlaying,
+    volume,
+    setVolume,
+    muted,
+    toggleMute,
+    ambientMode,
+    setAmbientMode,
+    openImmersion,
+    togglePlay,
+    prevTrack,
+    nextTrack,
+    seekTo,
+    openDrawer,
+    openManager
+  } = useBlogMusicActions()
+  const { currentTime, duration, currentLyricLine } = useBlogMusicProgress()
 
   const displayTrack: BlogPostMusic | null = useMemo(() => {
-    if (!music) return null
-    if (music.currentTrack) return music.currentTrack
-    const first = music.tracks[0]
+    if (currentTrack) return currentTrack
+    const first = tracks[0]
     if (!first) return null
     return {
       trackId: first.id,
@@ -600,22 +650,22 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
       audioUrl: first.audioUrl,
       lrc: first.lrcText || undefined
     }
-  }, [music])
+  }, [currentTrack, tracks])
 
   const parsedLyrics = useMemo(() => {
-    if (!music || !displayTrack) return []
+    if (!displayTrack) return []
     const rawLrc =
       displayTrack.lrc ??
-      music.tracks.find((item) => item.id === displayTrack.trackId)?.lrcText ??
+      tracks.find((item) => item.id === displayTrack.trackId)?.lrcText ??
       ''
     return parseLrc(rawLrc)
-  }, [music, displayTrack])
+  }, [tracks, displayTrack])
 
   const nextLyricLine = useMemo(() => {
-    if (!music || parsedLyrics.length === 0) return ''
+    if (parsedLyrics.length === 0) return ''
     let activeIdx = -1
     for (let i = 0; i < parsedLyrics.length; i += 1) {
-      if (parsedLyrics[i].time <= music.currentTime + 0.12) {
+      if (parsedLyrics[i].time <= currentTime + 0.12) {
         activeIdx = i
       } else {
         break
@@ -628,11 +678,9 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
       return parsedLyrics[0].text
     }
     return ''
-  }, [music, parsedLyrics])
+  }, [currentTime, parsedLyrics])
 
-  if (!music) return null
-
-  const hasMusic = music.tracks.length > 0 || Boolean(displayTrack)
+  const hasMusic = tracks.length > 0 || Boolean(displayTrack)
 
   if (!hasMusic) {
     if (!isOwner) return null
@@ -649,7 +697,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
           <button
             type="button"
             className="blog-rail-empty-btn"
-            onClick={music.openManager}
+            onClick={openManager}
           >
             <AppIcon name="upload" size={12} />
             <span>上传歌曲</span>
@@ -662,55 +710,68 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
   if (!displayTrack) return null
 
   const effectiveDuration =
-    music.duration > 0
-      ? music.duration
-      : music.tracks.find((item) => item.id === displayTrack.trackId)?.durationSec || 0
+    duration > 0
+      ? duration
+      : tracks.find((item) => item.id === displayTrack.trackId)?.durationSec || 0
 
   const primaryLyric =
-    music.currentLyricLine ||
+    currentLyricLine ||
     (parsedLyrics.length > 0
-      ? music.isPlaying
+      ? isPlaying
         ? '♪ 前奏播放中…'
         : parsedLyrics[0].text
-      : music.isPlaying
+      : isPlaying
         ? '正在播放 · 点击展开歌单'
         : '点击播放 · 边听边逛')
 
   const secondaryLyric =
-    music.currentLyricLine && nextLyricLine
+    currentLyricLine && nextLyricLine
       ? nextLyricLine
-      : !music.currentLyricLine && parsedLyrics.length > 1 && !music.isPlaying
+      : !currentLyricLine && parsedLyrics.length > 1 && !isPlaying
         ? parsedLyrics[1].text
         : ''
 
+  const displayVol = muted ? 0 : volume
+  const volPercent = Math.round(displayVol * 100)
+  const ambientLabel = AMBIENT_MODE_SHORT_LABELS[ambientMode]
+
+  const footerPillBaseStyle: CSSProperties = {
+    height: 28,
+    padding: '0 10px',
+    borderRadius: 'var(--blog-radius-pill, 50px)',
+    fontSize: 12,
+    gap: 5,
+    minWidth: 0
+  }
+
   return (
     <section
-      className={`blog-rail-card blog-rail-music${music.isPlaying ? ' is-playing' : ''}`}
+      className={`blog-rail-card blog-rail-music${isPlaying ? ' is-playing' : ''}`}
       aria-label="音乐播放器"
     >
       <header className="blog-rail-card-head">
         <div className="blog-rail-card-title">
           <AppIcon name="music" size={14} />
-          <span>{music.isPlaying ? '正在播放' : '音乐播放器'}</span>
+          <span>{isPlaying ? '正在播放' : '音乐播放器'}</span>
         </div>
 
         <div className="blog-rail-head-actions">
           <button
             type="button"
             className="blog-rail-more"
-            onClick={music.openDrawer}
+            onClick={openDrawer}
             title="展开歌词与完整歌单"
           >
             <span>歌单</span>
-            {music.tracks.length > 0 && (
-              <span className="blog-rail-inline-count">{music.tracks.length}</span>
+            {tracks.length > 0 && (
+              <span className="blog-rail-inline-count">{tracks.length}</span>
             )}
           </button>
           {isOwner && (
             <button
               type="button"
               className="blog-rail-more"
-              onClick={music.openManager}
+              onClick={openManager}
               title="管理博客歌单"
             >
               <span>管理</span>
@@ -722,10 +783,10 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
       <div className="blog-rail-music-top">
         <button
           type="button"
-          className={`blog-rail-music-disc${music.isPlaying ? ' is-playing' : ''}`}
-          onClick={music.togglePlay}
-          title={music.isPlaying ? '暂停' : '播放'}
-          aria-label={music.isPlaying ? '暂停音乐' : '播放音乐'}
+          className={`blog-rail-music-disc${isPlaying ? ' is-playing' : ''}`}
+          onClick={togglePlay}
+          title={isPlaying ? '暂停' : '播放'}
+          aria-label={isPlaying ? '暂停音乐' : '播放音乐'}
         >
           {displayTrack.coverUrl ? (
             <img src={displayTrack.coverUrl} alt={displayTrack.title} />
@@ -747,7 +808,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
       <button
         type="button"
         className="blog-rail-music-lyrics"
-        onClick={music.openDrawer}
+        onClick={openDrawer}
         title="点击展开同步歌词抽屉"
       >
         <span
@@ -767,34 +828,25 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
           min={0}
           max={effectiveDuration > 0 ? effectiveDuration : 100}
           step={0.1}
-          value={effectiveDuration > 0 ? Math.min(music.currentTime, effectiveDuration) : 0}
+          value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
           disabled={effectiveDuration <= 0}
-          onChange={(event) => music.seekTo(Number(event.target.value))}
+          style={{ accentColor: 'var(--blog-link)' }}
+          onChange={(event) => seekTo(Number(event.target.value))}
           aria-label="音乐播放进度"
         />
         <div className="blog-rail-music-times">
-          <span>{formatAudioTime(music.currentTime)}</span>
+          <span>{formatAudioTime(currentTime)}</span>
           <span>{formatAudioTime(effectiveDuration)}</span>
         </div>
       </div>
 
-      <div className="blog-rail-music-controls">
-        <button
-          type="button"
-          className="blog-rail-music-btn"
-          onClick={music.toggleMute}
-          title={music.muted ? '取消静音' : '静音'}
-          aria-label={music.muted ? '取消静音' : '静音'}
-        >
-          <AppIcon name={music.muted ? 'volumeOff' : 'volume'} size={14} />
-        </button>
-
+      <div className="blog-rail-music-controls" style={{ justifyContent: 'center' }}>
         <div className="blog-rail-music-transport">
           <button
             type="button"
             className="blog-rail-music-btn"
-            onClick={music.prevTrack}
-            disabled={music.tracks.length <= 1}
+            onClick={prevTrack}
+            disabled={tracks.length <= 1}
             title="上一首"
             aria-label="上一首"
           >
@@ -804,33 +856,89 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
           <button
             type="button"
             className="blog-rail-music-play"
-            onClick={music.togglePlay}
-            title={music.isPlaying ? '暂停' : '播放'}
-            aria-label={music.isPlaying ? '暂停' : '播放'}
+            onClick={togglePlay}
+            style={{ background: 'var(--blog-link)', borderColor: 'var(--blog-link)' }}
+            title={isPlaying ? '暂停' : '播放'}
+            aria-label={isPlaying ? '暂停' : '播放'}
           >
-            <AppIcon name={music.isPlaying ? 'pause' : 'play'} size={15} />
+            <AppIcon name={isPlaying ? 'pause' : 'play'} size={15} />
           </button>
 
           <button
             type="button"
             className="blog-rail-music-btn"
-            onClick={music.nextTrack}
-            disabled={music.tracks.length <= 1}
+            onClick={nextTrack}
+            disabled={tracks.length <= 1}
             title="下一首"
             aria-label="下一首"
           >
             <AppIcon name="skipForward" size={14} />
           </button>
         </div>
+      </div>
+
+      <div className="blog-volume-row">
+        <button
+          type="button"
+          className="blog-volume-mute-btn"
+          onClick={toggleMute}
+          title={muted || volume === 0 ? '取消静音' : '静音'}
+          aria-label={muted || volume === 0 ? '取消静音' : '静音'}
+        >
+          <AppIcon name={muted || volume === 0 ? 'volumeOff' : 'volume'} size={14} />
+        </button>
+        <input
+          type="range"
+          className="blog-volume-slider"
+          min={0}
+          max={1}
+          step={0.01}
+          value={muted ? 0 : volume}
+          style={{ '--vol-pct': `${volPercent}%` } as CSSProperties}
+          onChange={(e) => setVolume(Number(e.target.value))}
+          aria-label="音量"
+        />
+        <span className="blog-volume-pct">{volPercent}%</span>
+      </div>
+
+      <div
+        className="blog-rail-music-footer"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gap: 6,
+          paddingTop: 2
+        }}
+      >
+        <button
+          type="button"
+          className="blog-btn blog-btn-subtle blog-btn-sm"
+          style={footerPillBaseStyle}
+          onClick={openImmersion}
+          title="打开全屏沉浸封面与歌词舞台"
+        >
+          <AppIcon name="sparkles" size={12} />
+          <span>沉浸舞台</span>
+        </button>
 
         <button
           type="button"
-          className="blog-rail-music-btn"
-          onClick={music.openDrawer}
-          title="打开歌词与播放列表"
-          aria-label="打开歌词与播放列表"
+          className="blog-btn blog-btn-subtle blog-btn-sm"
+          style={
+            ambientMode !== 'minimal'
+              ? {
+                  ...footerPillBaseStyle,
+                  background: 'var(--blog-link-soft)',
+                  color: 'var(--blog-link)',
+                  borderColor: 'transparent'
+                }
+              : footerPillBaseStyle
+          }
+          onClick={() => setAmbientMode(AMBIENT_MODE_NEXT[ambientMode])}
+          title="循环切换音乐播放背景氛围（流光 / 壁纸 / 极简）"
+          aria-label={`背景氛围：${ambientLabel}，点击切换`}
         >
-          <AppIcon name="list" size={14} />
+          <span>氛围 · {ambientLabel}</span>
         </button>
       </div>
     </section>

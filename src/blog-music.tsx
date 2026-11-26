@@ -6,12 +6,22 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ChangeEvent,
   type FormEvent,
   type ReactNode
 } from 'react'
 import { createPortal } from 'react-dom'
 import { errorMessage } from './api-error'
+import {
+  DEFAULT_AMBIENT_PALETTE,
+  extractCoverPalette,
+  readAmbientMode,
+  saveAmbientMode,
+  type BlogAmbientMode,
+  type BlogAmbientPalette
+} from './blog-ambient'
+import './blog-ambient.css'
 import {
   createBlogMusicTrack,
   deleteBlogMusicTrack,
@@ -20,9 +30,12 @@ import {
   uploadBlogFile,
   uploadBlogMedia
 } from './blog-api'
+import { extractAudioMetadata } from './blog-audio-meta'
 import type { BlogMusicTrack, BlogPostMusic } from './blog-types'
 import { AppIcon } from './components/AppIcon'
 import { showToast } from './components/Toast'
+
+export type { BlogAmbientMode, BlogAmbientPalette } from './blog-ambient'
 
 export interface LrcLine {
   time: number
@@ -35,12 +48,20 @@ export interface BlogMusicProgressValue {
   currentLyricLine: string
 }
 
-export interface BlogMusicStableValue {
+export interface BlogMusicActionsContextValue {
   tracks: BlogMusicTrack[]
   loading: boolean
   currentTrack: BlogPostMusic | null
   isPlaying: boolean
   muted: boolean
+  volume: number
+  setVolume: (vol: number) => void
+  ambientMode: BlogAmbientMode
+  setAmbientMode: (mode: BlogAmbientMode) => void
+  palette: BlogAmbientPalette | null
+  immersionOpen: boolean
+  openImmersion: () => void
+  closeImmersion: () => void
   refreshTracks: () => Promise<void>
   playTrack: (track: BlogPostMusic) => void
   togglePlay: () => void
@@ -52,7 +73,11 @@ export interface BlogMusicStableValue {
   openManager: () => void
 }
 
-export interface BlogMusicContextValue extends BlogMusicStableValue, BlogMusicProgressValue {}
+export type BlogMusicStableValue = BlogMusicActionsContextValue
+
+export interface BlogMusicContextValue
+  extends BlogMusicActionsContextValue,
+    BlogMusicProgressValue {}
 
 const DEFAULT_MUSIC_PROGRESS: BlogMusicProgressValue = {
   currentTime: 0,
@@ -60,8 +85,12 @@ const DEFAULT_MUSIC_PROGRESS: BlogMusicProgressValue = {
   currentLyricLine: ''
 }
 
-export const BlogMusicContext = createContext<BlogMusicStableValue | null>(null)
-export const BlogMusicProgressContext = createContext<BlogMusicProgressValue>(DEFAULT_MUSIC_PROGRESS)
+const BLOG_VOLUME_STORAGE_KEY = 'do-it-laaaaaater.blog.volume.v1'
+const DEFAULT_BLOG_VOLUME = 0.85
+
+export const BlogMusicContext = createContext<BlogMusicActionsContextValue | null>(null)
+export const BlogMusicProgressContext =
+  createContext<BlogMusicProgressValue>(DEFAULT_MUSIC_PROGRESS)
 
 const LRC_TIMESTAMP_GLOBAL_RE = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g
 const LRC_TIMESTAMP_STRIP_RE = /\[\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?\]/g
@@ -111,11 +140,11 @@ export function useBlogMusicProgress(): BlogMusicProgressValue {
   return useContext(BlogMusicProgressContext)
 }
 
-export function useOptionalBlogMusicActions(): BlogMusicStableValue | null {
+export function useOptionalBlogMusicActions(): BlogMusicActionsContextValue | null {
   return useContext(BlogMusicContext)
 }
 
-export function useBlogMusicActions(): BlogMusicStableValue {
+export function useBlogMusicActions(): BlogMusicActionsContextValue {
   const ctx = useContext(BlogMusicContext)
   if (!ctx) {
     throw new Error('useBlogMusicActions must be used within a BlogMusicProvider')
@@ -136,6 +165,29 @@ export function useBlogMusic(): BlogMusicContextValue {
     throw new Error('useBlogMusic must be used within a BlogMusicProvider')
   }
   return useMemo(() => ({ ...stable, ...progress }), [stable, progress])
+}
+
+function readInitialVolume(): number {
+  try {
+    const raw = globalThis.localStorage?.getItem(BLOG_VOLUME_STORAGE_KEY)
+    if (raw !== null && raw !== undefined && raw.trim() !== '') {
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+        return Math.round(parsed * 100) / 100
+      }
+    }
+  } catch {
+    // Ignore storage read errors.
+  }
+  return DEFAULT_BLOG_VOLUME
+}
+
+function persistVolume(vol: number): void {
+  try {
+    globalThis.localStorage?.setItem(BLOG_VOLUME_STORAGE_KEY, String(vol))
+  } catch {
+    // Ignore storage write errors.
+  }
 }
 
 function getErrorMessage(err: unknown, fallback = '操作失败，请稍后重试'): string {
@@ -243,6 +295,457 @@ function useSyncedBlogTheme(active: boolean): 'light' | 'dark' {
   return theme
 }
 
+function normalizeClipboardImageFile(rawFile: File): File {
+  if (rawFile.name && /\.[a-z0-9]{2,5}$/i.test(rawFile.name)) {
+    return rawFile
+  }
+  const mime = (rawFile.type || 'image/png').toLowerCase()
+  const ext = mime.includes('gif')
+    ? 'gif'
+    : mime.includes('webp')
+      ? 'webp'
+      : mime.includes('jpeg') || mime.includes('jpg')
+        ? 'jpg'
+        : 'png'
+  return new File([rawFile], `pasted-cover-${Date.now()}.${ext}`, { type: mime })
+}
+
+/* --------------------------------------------------------------------------
+   Apple Music Fullscreen Immersion Stage Modal
+   -------------------------------------------------------------------------- */
+
+interface BlogMusicImmersionModalProps {
+  open: boolean
+  managerOpen: boolean
+  isOwner: boolean
+  track: BlogPostMusic
+  tracks: BlogMusicTrack[]
+  isPlaying: boolean
+  muted: boolean
+  volume: number
+  currentTime: number
+  effectiveDuration: number
+  parsedLyrics: LrcLine[]
+  activeLyricIndex: number
+  ambientMode: BlogAmbientMode
+  palette: BlogAmbientPalette | null
+  onClose: () => void
+  onSetAmbientMode: (mode: BlogAmbientMode) => void
+  onTogglePlay: () => void
+  onPrev: () => void
+  onNext: () => void
+  onSeek: (seconds: number) => void
+  onSetVolume: (vol: number) => void
+  onToggleMute: () => void
+  onPlayTrack: (track: BlogMusicTrack) => void
+  onOpenManager: () => void
+}
+
+const AMBIENT_MODE_OPTIONS: ReadonlyArray<{ mode: BlogAmbientMode; label: string }> = [
+  { mode: 'glow', label: '流光氛围' },
+  { mode: 'wallpaper', label: '浓郁壁纸' },
+  { mode: 'minimal', label: '纯白极简' }
+]
+
+function BlogMusicImmersionModal({
+  open,
+  managerOpen,
+  isOwner,
+  track,
+  tracks,
+  isPlaying,
+  muted,
+  volume,
+  currentTime,
+  effectiveDuration,
+  parsedLyrics,
+  activeLyricIndex,
+  ambientMode,
+  palette,
+  onClose,
+  onSetAmbientMode,
+  onTogglePlay,
+  onPrev,
+  onNext,
+  onSeek,
+  onSetVolume,
+  onToggleMute,
+  onPlayTrack,
+  onOpenManager
+}: BlogMusicImmersionModalProps) {
+  const [showPlaylist, setShowPlaylist] = useState(false)
+  const lrcScrollRef = useRef<HTMLDivElement | null>(null)
+  const activeLineRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      setShowPlaylist(false)
+    }
+  }, [open])
+
+  // Escape & Space keyboard shortcuts + body scroll lock
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (managerOpen) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key === ' ' || event.code === 'Space') {
+        const target = event.target as HTMLElement | null
+        const tag = target?.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'SELECT') {
+          return
+        }
+        event.preventDefault()
+        onTogglePlay()
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [open, managerOpen, onClose, onTogglePlay])
+
+  // Keep active lyric centered inside .blog-immersion-lrc
+  useEffect(() => {
+    if (!open || showPlaylist) return
+    const container = lrcScrollRef.current
+    const activeEl = activeLineRef.current
+    if (!container || !activeEl) return
+
+    const targetTop =
+      activeEl.offsetTop - container.clientHeight / 2 + activeEl.clientHeight / 2
+    const reducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    container.scrollTo({
+      top: Math.max(0, targetTop),
+      behavior: reducedMotion ? 'auto' : 'smooth'
+    })
+  }, [open, showPlaylist, activeLyricIndex, track.audioUrl])
+
+  if (!open || typeof document === 'undefined') return null
+
+  const effectivePalette = palette ?? DEFAULT_AMBIENT_PALETTE
+  const matchedLibraryTrack = tracks.find(
+    (item) => (track.trackId && item.id === track.trackId) || item.audioUrl === track.audioUrl
+  )
+  const albumLabel = matchedLibraryTrack?.album?.trim() || ''
+
+  const stageStyle = {
+    '--immersion-glow-a': effectivePalette.glowA,
+    '--immersion-glow-b': effectivePalette.glowB,
+    '--immersion-glow-c': effectivePalette.glowC
+  } as CSSProperties
+
+  const bgImageStyle: CSSProperties | undefined = track.coverUrl
+    ? { backgroundImage: `url("${track.coverUrl.replace(/"/g, '\\"')}")` }
+    : undefined
+
+  const clampedTime =
+    effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0
+  const seekPercent =
+    effectiveDuration > 0 ? Math.min(100, Math.max(0, (clampedTime / effectiveDuration) * 100)) : 0
+  const displayVol = muted ? 0 : volume
+  const volPercent = Math.round(displayVol * 100)
+
+  return createPortal(
+    <div
+      className={`blog-immersion-stage${isPlaying ? ' is-playing' : ''}`}
+      style={stageStyle}
+      role="dialog"
+      aria-modal="true"
+      aria-label="全屏沉浸音乐舞台"
+    >
+      {/* Dynamic Blurred Rotating Cover Wallpaper */}
+      <div className="blog-immersion-bg" aria-hidden="true">
+        <div className="blog-immersion-bg-layer blog-immersion-bg-a" style={bgImageStyle} />
+        <div className="blog-immersion-bg-layer blog-immersion-bg-b" style={bgImageStyle} />
+        <div className="blog-immersion-bg-scrim" />
+      </div>
+
+      {/* Top Bar: Ambient Mode Switcher Pills + Close */}
+      <header className="blog-immersion-topbar">
+        <div className="blog-immersion-mode-pills" role="group" aria-label="背景氛围模式">
+          {AMBIENT_MODE_OPTIONS.map((opt) => (
+            <button
+              key={opt.mode}
+              type="button"
+              className={`blog-immersion-mode-pill${ambientMode === opt.mode ? ' is-active' : ''}`}
+              aria-pressed={ambientMode === opt.mode}
+              onClick={() => onSetAmbientMode(opt.mode)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="blog-immersion-top-actions">
+          {isOwner && (
+            <button
+              type="button"
+              className="blog-immersion-close-btn"
+              onClick={onOpenManager}
+              title="管理歌单"
+            >
+              <AppIcon name="settings" size={14} />
+              <span>管理歌单</span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="blog-immersion-close-btn"
+            onClick={onClose}
+            aria-label="关闭全屏歌词"
+          >
+            <span className="blog-immersion-esc-kbd">Esc</span>
+            <AppIcon name="close" size={15} />
+          </button>
+        </div>
+      </header>
+
+      {/* Main 2-Column Stage: Floating Album Art (Left) + Large Scrolling LRC (Right) */}
+      <div className="blog-immersion-main">
+        <div className="blog-immersion-art-col">
+          <div className={`blog-immersion-artwork${isPlaying ? ' is-playing' : ''}`}>
+            {track.coverUrl ? (
+              <img src={track.coverUrl} alt={track.title} />
+            ) : (
+              <AppIcon name="music" size={64} />
+            )}
+          </div>
+
+          <div className="blog-immersion-track-info">
+            <h2 className="blog-immersion-title" title={track.title}>
+              {track.title}
+            </h2>
+            <p className="blog-immersion-artist">
+              {track.artist || '未知歌手'}
+              {albumLabel ? ` · ${albumLabel}` : ''}
+            </p>
+          </div>
+        </div>
+
+        <div className="blog-immersion-lyrics-col">
+          {showPlaylist && tracks.length > 0 ? (
+            <div className="blog-immersion-playlist-panel" aria-label="播放列表">
+              <div className="blog-immersion-playlist-head">
+                <span>播放列表（{tracks.length} 首）</span>
+                <button
+                  type="button"
+                  className="blog-immersion-mode-pill"
+                  onClick={() => setShowPlaylist(false)}
+                >
+                  返回歌词
+                </button>
+              </div>
+              {tracks.map((item, idx) => {
+                const active =
+                  track.trackId === item.id || track.audioUrl === item.audioUrl
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`blog-immersion-playlist-item${active ? ' is-active' : ''}`}
+                    onClick={() => {
+                      if (active) onTogglePlay()
+                      else onPlayTrack(item)
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 24,
+                        fontFamily: 'var(--blog-font-mono, monospace)',
+                        fontSize: 12,
+                        opacity: 0.72
+                      }}
+                    >
+                      {active && isPlaying ? '♪' : String(idx + 1).padStart(2, '0')}
+                    </span>
+                    <span
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {item.title}
+                    </span>
+                    <span
+                      style={{
+                        maxWidth: 160,
+                        fontSize: 12.5,
+                        opacity: 0.68,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {item.artist || '未知歌手'}
+                    </span>
+                    {item.durationSec ? (
+                      <span
+                        style={{
+                          fontFamily: 'var(--blog-font-mono, monospace)',
+                          fontSize: 11.5,
+                          opacity: 0.65
+                        }}
+                      >
+                        {formatAudioTime(item.durationSec)}
+                      </span>
+                    ) : null}
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
+            <div ref={lrcScrollRef} className="blog-immersion-lrc" aria-label="沉浸式同步歌词">
+              {parsedLyrics.length === 0 ? (
+                <div className="blog-immersion-lrc-empty">
+                  <AppIcon name="music" size={28} />
+                  <span>纯音乐或暂无 LRC 同步歌词</span>
+                </div>
+              ) : (
+                parsedLyrics.map((line, idx) => {
+                  const isActive = idx === activeLyricIndex
+                  const distance =
+                    activeLyricIndex >= 0 ? Math.abs(idx - activeLyricIndex) : idx + 1
+                  const tierClass = isActive
+                    ? 'is-active'
+                    : distance <= 2
+                      ? 'is-near'
+                      : 'is-far'
+
+                  return (
+                    <button
+                      key={`${line.time}-${idx}`}
+                      ref={isActive ? activeLineRef : null}
+                      type="button"
+                      className={`blog-immersion-lrc-line ${tierClass}`}
+                      onClick={() => {
+                        onSeek(line.time)
+                        if (!isPlaying) onTogglePlay()
+                      }}
+                    >
+                      {line.text}
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Bottom Frosted Glass Transport Bar */}
+      <footer className="blog-immersion-bottombar">
+        <div className="blog-immersion-scrubber-row">
+          <span className="blog-immersion-time">{formatAudioTime(currentTime)}</span>
+          <input
+            type="range"
+            className="blog-immersion-scrubber"
+            min={0}
+            max={effectiveDuration > 0 ? effectiveDuration : 100}
+            step={0.1}
+            value={clampedTime}
+            disabled={effectiveDuration <= 0}
+            style={{ '--seek-pct': `${seekPercent.toFixed(2)}%` } as CSSProperties}
+            onChange={(e) => onSeek(Number(e.target.value))}
+            aria-label="播放进度"
+          />
+          <span className="blog-immersion-time is-end">{formatAudioTime(effectiveDuration)}</span>
+        </div>
+
+        <div className="blog-immersion-controls-row">
+          <div className="blog-volume-row blog-immersion-vol-wrap">
+            <button
+              type="button"
+              className="blog-volume-mute-btn"
+              onClick={onToggleMute}
+              title={muted || volume === 0 ? '取消静音' : '静音'}
+              aria-label={muted || volume === 0 ? '取消静音' : '静音'}
+            >
+              <AppIcon name={muted || volume === 0 ? 'volumeOff' : 'volume'} size={16} />
+            </button>
+            <input
+              type="range"
+              className="blog-volume-slider"
+              min={0}
+              max={1}
+              step={0.01}
+              value={displayVol}
+              style={{ '--vol-pct': `${volPercent}%` } as CSSProperties}
+              onChange={(e) => onSetVolume(Number(e.target.value))}
+              aria-label="音量调节"
+            />
+          </div>
+
+          <div className="blog-immersion-transport">
+            <button
+              type="button"
+              className="blog-immersion-ctrl-btn"
+              onClick={onPrev}
+              title="上一首"
+              aria-label="上一首"
+            >
+              <AppIcon name="skipBack" size={18} />
+            </button>
+            <button
+              type="button"
+              className="blog-immersion-play-btn"
+              onClick={onTogglePlay}
+              title={isPlaying ? '暂停' : '播放'}
+              aria-label={isPlaying ? '暂停' : '播放'}
+            >
+              <AppIcon name={isPlaying ? 'pause' : 'play'} size={20} />
+            </button>
+            <button
+              type="button"
+              className="blog-immersion-ctrl-btn"
+              onClick={onNext}
+              title="下一首"
+              aria-label="下一首"
+            >
+              <AppIcon name="skipForward" size={18} />
+            </button>
+          </div>
+
+          <div className="blog-immersion-right-tools">
+            {tracks.length > 0 && (
+              <button
+                type="button"
+                className={`blog-immersion-playlist-btn${showPlaylist ? ' is-active' : ''}`}
+                aria-pressed={showPlaylist}
+                onClick={() => setShowPlaylist((prev) => !prev)}
+              >
+                <AppIcon name="list" size={14} />
+                <span>歌单 {tracks.length}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </footer>
+    </div>,
+    document.body
+  )
+}
+
+/* --------------------------------------------------------------------------
+   Owner Playlist Manager Modal (Auto Embedded Cover/Tag Extraction + Ctrl+V)
+   -------------------------------------------------------------------------- */
+
 interface BlogMusicManagerModalProps {
   open: boolean
   blogTheme: 'light' | 'dark'
@@ -272,12 +775,14 @@ function BlogMusicManagerModal({
   const [durationSec, setDurationSec] = useState<number | null>(null)
   const [coverMediaId, setCoverMediaId] = useState<string | null>(null)
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null)
+  const [embeddedCoverFile, setEmbeddedCoverFile] = useState<File | null>(null)
   const [title, setTitle] = useState('')
   const [artist, setArtist] = useState('')
   const [album, setAlbum] = useState('')
   const [lrcText, setLrcText] = useState('')
 
   const [uploadingAudio, setUploadingAudio] = useState(false)
+  const [parsingMeta, setParsingMeta] = useState(false)
   const [uploadingCover, setUploadingCover] = useState(false)
   const [creating, setCreating] = useState(false)
   const [formError, setFormError] = useState('')
@@ -300,7 +805,40 @@ function BlogMusicManagerModal({
   const editCoverInputRef = useRef<HTMLInputElement | null>(null)
   const editLrcFileInputRef = useRef<HTMLInputElement | null>(null)
 
-  const busy = uploadingAudio || uploadingCover || creating || savingEdit || uploadingEditCover
+  // Track object URLs created by embedded cover extraction so we revoke them cleanly
+  const blobUrlRef = useRef<string | null>(null)
+  // Remember values auto-populated from previous audio selection so selecting a new file refreshes them cleanly
+  const autoPopulatedRef = useRef<{
+    title: string
+    artist: string
+    album: string
+    lrcText: string
+  }>({ title: '', artist: '', album: '', lrcText: '' })
+
+  const revokeActiveBlobUrl = useCallback(() => {
+    if (blobUrlRef.current && typeof URL !== 'undefined') {
+      try {
+        URL.revokeObjectURL(blobUrlRef.current)
+      } catch {
+        // Ignore revoke errors.
+      }
+      blobUrlRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      revokeActiveBlobUrl()
+    }
+  }, [revokeActiveBlobUrl])
+
+  const busy =
+    uploadingAudio ||
+    parsingMeta ||
+    uploadingCover ||
+    creating ||
+    savingEdit ||
+    uploadingEditCover
 
   useEffect(() => {
     if (!open) return
@@ -325,17 +863,100 @@ function BlogMusicManagerModal({
     }
   }, [open, busy, onClose])
 
+  const uploadCoverImageFile = useCallback(
+    async (rawFile: File, target: 'create' | 'edit', fromPaste = false) => {
+      const normalizedFile = normalizeClipboardImageFile(rawFile)
+      if (target === 'edit') {
+        setUploadingEditCover(true)
+        try {
+          const [uploaded] = await uploadBlogMedia([normalizedFile])
+          if (uploaded) {
+            setEditCoverMediaId(uploaded.id)
+            setEditCoverUrl(uploaded.thumbUrl || uploaded.url)
+            showToast('success', fromPaste ? '已粘贴并更新封面' : '封面已上传')
+          }
+        } catch (err) {
+          showToast('error', getErrorMessage(err, '封面上传失败'))
+        } finally {
+          setUploadingEditCover(false)
+        }
+        return
+      }
+
+      setUploadingCover(true)
+      setFormError('')
+      try {
+        const [uploaded] = await uploadBlogMedia([normalizedFile])
+        if (uploaded) {
+          revokeActiveBlobUrl()
+          setEmbeddedCoverFile(null)
+          setCoverMediaId(uploaded.id)
+          setCoverPreviewUrl(uploaded.thumbUrl || uploaded.url)
+          showToast('success', fromPaste ? '已粘贴并上传专辑封面' : '封面已上传')
+        }
+      } catch (err) {
+        const msg = getErrorMessage(err, '封面上传失败')
+        setFormError(msg)
+        showToast('error', msg)
+      } finally {
+        setUploadingCover(false)
+      }
+    },
+    [revokeActiveBlobUrl]
+  )
+
+  // Clipboard Ctrl+V image / GIF cover paste listener
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return
+
+    const onPaste = (event: ClipboardEvent) => {
+      if (busy) return
+      const clipboard = event.clipboardData
+      if (!clipboard) return
+
+      let pastedImage: File | null = null
+      if (clipboard.items && clipboard.items.length > 0) {
+        for (let i = 0; i < clipboard.items.length; i += 1) {
+          const item = clipboard.items[i]
+          if (item.kind === 'file' && item.type.startsWith('image/')) {
+            pastedImage = item.getAsFile()
+            if (pastedImage) break
+          }
+        }
+      }
+      if (!pastedImage && clipboard.files && clipboard.files.length > 0) {
+        for (let i = 0; i < clipboard.files.length; i += 1) {
+          const candidate = clipboard.files[i]
+          if (candidate.type.startsWith('image/')) {
+            pastedImage = candidate
+            break
+          }
+        }
+      }
+
+      if (!pastedImage) return
+      event.preventDefault()
+      void uploadCoverImageFile(pastedImage, editingId ? 'edit' : 'create', true)
+    }
+
+    document.addEventListener('paste', onPaste)
+    return () => document.removeEventListener('paste', onPaste)
+  }, [open, busy, editingId, uploadCoverImageFile])
+
   const resetAddForm = () => {
+    revokeActiveBlobUrl()
     setAudioMediaId('')
     setAudioFilename('')
     setDurationSec(null)
     setCoverMediaId(null)
     setCoverPreviewUrl(null)
+    setEmbeddedCoverFile(null)
     setTitle('')
     setArtist('')
     setAlbum('')
     setLrcText('')
     setFormError('')
+    autoPopulatedRef.current = { title: '', artist: '', album: '', lrcText: '' }
   }
 
   const handleAudioFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -344,22 +965,106 @@ function BlogMusicManagerModal({
     if (!file) return
 
     setUploadingAudio(true)
+    setParsingMeta(true)
     setFormError('')
+
+    const inferred = parseFilenameMeta(file.name)
+
+    // Start browser-side ID3 / Vorbis / MP4 tag & embedded cover extraction immediately
+    const metaPromise = extractAudioMetadata(file)
+      .then((extracted) => {
+        const prevAuto = autoPopulatedRef.current
+
+        const nextTitle = extracted.title || inferred.title || '未命名单曲'
+        setTitle((prev) => {
+          if (!prev.trim() || prev === prevAuto.title) {
+            autoPopulatedRef.current.title = nextTitle
+            return nextTitle
+          }
+          return prev
+        })
+
+        const nextArtist = extracted.artist || inferred.artist
+        if (nextArtist) {
+          setArtist((prev) => {
+            if (!prev.trim() || prev === prevAuto.artist) {
+              autoPopulatedRef.current.artist = nextArtist
+              return nextArtist
+            }
+            return prev
+          })
+        }
+
+        if (extracted.album) {
+          setAlbum((prev) => {
+            if (!prev.trim() || prev === prevAuto.album) {
+              autoPopulatedRef.current.album = extracted.album
+              return extracted.album
+            }
+            return prev
+          })
+        }
+
+        if (extracted.lrcText) {
+          setLrcText((prev) => {
+            if (!prev.trim() || prev === prevAuto.lrcText) {
+              autoPopulatedRef.current.lrcText = extracted.lrcText
+              return extracted.lrcText
+            }
+            return prev
+          })
+        }
+
+        if (extracted.durationSec) {
+          setDurationSec(extracted.durationSec)
+        }
+
+        // Apply embedded album cover preview if user hasn't uploaded a custom cover
+        if (extracted.coverFile && extracted.coverPreviewUrl) {
+          setCoverMediaId((currentCustomId) => {
+            if (currentCustomId) {
+              if (typeof URL !== 'undefined') {
+                try {
+                  URL.revokeObjectURL(extracted.coverPreviewUrl!)
+                } catch {
+                  // Ignore revoke errors.
+                }
+              }
+              return currentCustomId
+            }
+            revokeActiveBlobUrl()
+            blobUrlRef.current = extracted.coverPreviewUrl
+            setEmbeddedCoverFile(extracted.coverFile)
+            setCoverPreviewUrl(extracted.coverPreviewUrl)
+            return null
+          })
+        } else if (extracted.coverPreviewUrl && typeof URL !== 'undefined') {
+          try {
+            URL.revokeObjectURL(extracted.coverPreviewUrl)
+          } catch {
+            // Ignore revoke errors.
+          }
+        }
+
+        return extracted
+      })
+      .finally(() => {
+        setParsingMeta(false)
+      })
+
     try {
-      const [uploaded, detectedDuration] = await Promise.all([
+      const [uploaded, detectedDuration, extracted] = await Promise.all([
         uploadBlogFile(file, 'audio'),
-        probeLocalAudioDuration(file)
+        probeLocalAudioDuration(file),
+        metaPromise
       ])
       setAudioMediaId(uploaded.id)
       setAudioFilename(file.name)
-      setDurationSec(detectedDuration)
-
-      const inferred = parseFilenameMeta(file.name)
-      setTitle((prev) => (prev.trim() ? prev : inferred.title || '未命名单曲'))
-      if (inferred.artist) {
-        setArtist((prev) => (prev.trim() ? prev : inferred.artist))
-      }
-      showToast('success', '音频已上传至 R2')
+      setDurationSec(extracted.durationSec ?? detectedDuration)
+      showToast(
+        'success',
+        extracted.coverFile ? '音频已上传，已自动提取内嵌封面与标签' : '音频已上传至 R2'
+      )
     } catch (err) {
       const msg = getErrorMessage(err, '音频上传失败')
       setFormError(msg)
@@ -373,23 +1078,7 @@ function BlogMusicManagerModal({
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
-
-    setUploadingCover(true)
-    setFormError('')
-    try {
-      const [uploaded] = await uploadBlogMedia([file])
-      if (uploaded) {
-        setCoverMediaId(uploaded.id)
-        setCoverPreviewUrl(uploaded.thumbUrl || uploaded.url)
-        showToast('success', '封面已上传')
-      }
-    } catch (err) {
-      const msg = getErrorMessage(err, '封面上传失败')
-      setFormError(msg)
-      showToast('error', msg)
-    } finally {
-      setUploadingCover(false)
-    }
+    await uploadCoverImageFile(file, 'create', false)
   }
 
   const handleImportLrcFile = async (
@@ -429,6 +1118,14 @@ function BlogMusicManagerModal({
     setCreating(true)
     setFormError('')
     try {
+      let resolvedCoverMediaId = coverMediaId
+      if (!resolvedCoverMediaId && embeddedCoverFile) {
+        const [uploadedEmbedded] = await uploadBlogMedia([embeddedCoverFile])
+        if (uploadedEmbedded) {
+          resolvedCoverMediaId = uploadedEmbedded.id
+        }
+      }
+
       const nextSortOrder =
         tracks.length > 0 ? Math.max(...tracks.map((item) => item.sortOrder)) + 1 : 0
       await createBlogMusicTrack({
@@ -436,7 +1133,7 @@ function BlogMusicManagerModal({
         artist: artist.trim(),
         album: album.trim(),
         audioMediaId,
-        coverMediaId,
+        coverMediaId: resolvedCoverMediaId,
         lrcText: lrcText.trim(),
         durationSec,
         sortOrder: nextSortOrder
@@ -467,20 +1164,7 @@ function BlogMusicManagerModal({
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
-
-    setUploadingEditCover(true)
-    try {
-      const [uploaded] = await uploadBlogMedia([file])
-      if (uploaded) {
-        setEditCoverMediaId(uploaded.id)
-        setEditCoverUrl(uploaded.thumbUrl || uploaded.url)
-        showToast('success', '封面已上传')
-      }
-    } catch (err) {
-      showToast('error', getErrorMessage(err, '封面上传失败'))
-    } finally {
-      setUploadingEditCover(false)
-    }
+    await uploadCoverImageFile(file, 'edit', false)
   }
 
   const handleSaveEdit = async (trackId: string) => {
@@ -517,7 +1201,9 @@ function BlogMusicManagerModal({
       reordered[targetIndex] = current
       await Promise.all(
         reordered.map((item, idx) =>
-          item.sortOrder !== idx ? updateBlogMusicTrack(item.id, { sortOrder: idx }) : Promise.resolve(item)
+          item.sortOrder !== idx
+            ? updateBlogMusicTrack(item.id, { sortOrder: idx })
+            : Promise.resolve(item)
         )
       )
       await onTracksChanged()
@@ -566,7 +1252,10 @@ function BlogMusicManagerModal({
         className="blog-p2-manager-modal"
       >
         <header className="blog-modal-header">
-          <h2 className="blog-modal-title" style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <h2
+            className="blog-modal-title"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
+          >
             <AppIcon name="music" size={17} />
             <span>管理博客歌单</span>
             <span className="blog-floor-count">{tracks.length}</span>
@@ -585,9 +1274,15 @@ function BlogMusicManagerModal({
         <div className="blog-modal-body">
           {/* Add New Track Form */}
           <form className="blog-p2-manager-form" onSubmit={(e) => void handleCreateTrack(e)}>
-            <div className="blog-p2-manager-section-title">
-              <AppIcon name="plus" size={14} />
-              <span>上传新单曲（R2 原生音频流 + LRC 同步歌词）</span>
+            <div
+              className="blog-p2-manager-section-title"
+              style={{ justifyContent: 'space-between', width: '100%', flexWrap: 'wrap' }}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <AppIcon name="plus" size={14} />
+                <span>上传新单曲（R2 原生音频流 + 自动提取内嵌封面/标签）</span>
+              </span>
+              <span className="blog-paste-hint">支持 Ctrl+V 粘贴图片/GIF</span>
             </div>
 
             <div className="blog-p2-manager-upload-row">
@@ -609,7 +1304,11 @@ function BlogMusicManagerModal({
                   >
                     <AppIcon name="upload" size={14} />
                     <span>
-                      {uploadingAudio ? '上传音频中…' : audioMediaId ? '重新选择音频' : '上传音频 *'}
+                      {uploadingAudio
+                        ? '上传音频中…'
+                        : audioMediaId
+                          ? '重新选择音频'
+                          : '上传音频 *'}
                     </span>
                   </button>
 
@@ -629,6 +1328,8 @@ function BlogMusicManagerModal({
                       className="blog-btn blog-btn-ghost blog-btn-sm"
                       disabled={creating}
                       onClick={() => {
+                        revokeActiveBlobUrl()
+                        setEmbeddedCoverFile(null)
                         setCoverMediaId(null)
                         setCoverPreviewUrl(null)
                       }}
@@ -638,11 +1339,20 @@ function BlogMusicManagerModal({
                   )}
                 </div>
 
-                <span className="blog-field-hint">
-                  {audioFilename
-                    ? `已就绪：${audioFilename}${durationSec ? ` (${formatAudioTime(durationSec)})` : ''}`
-                    : '支持 MP3 / M4A / WAV / OGG / FLAC / WebM，单文件最大 40 MB'}
-                </span>
+                {parsingMeta ? (
+                  <span className="blog-audio-meta-status">
+                    <AppIcon name="sparkles" size={13} />
+                    <span>正在解析歌曲封面与标签…</span>
+                  </span>
+                ) : (
+                  <span className="blog-field-hint">
+                    {audioFilename
+                      ? `已就绪：${audioFilename}${durationSec ? ` (${formatAudioTime(durationSec)})` : ''}${
+                          embeddedCoverFile && !coverMediaId ? ' · 已提取内嵌专辑封面' : ''
+                        }`
+                      : '支持 MP3 / M4A / WAV / OGG / FLAC / WebM（最大 40 MB），封面支持 PNG / JPG / WebP / GIF'}
+                  </span>
+                )}
               </div>
 
               <input
@@ -655,7 +1365,7 @@ function BlogMusicManagerModal({
               <input
                 ref={coverInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,image/gif"
                 hidden
                 onChange={(e) => void handleCoverFileChange(e)}
               />
@@ -697,7 +1407,14 @@ function BlogMusicManagerModal({
             </label>
 
             <div className="blog-field">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8
+                }}
+              >
                 <span className="blog-field-label">LRC 同步歌词（选填）</span>
                 <button
                   type="button"
@@ -721,7 +1438,9 @@ function BlogMusicManagerModal({
                 rows={4}
                 value={lrcText}
                 onChange={(e) => setLrcText(e.target.value)}
-                placeholder={'支持粘贴标准 LRC 时间轴，例如：\n[00:12.30] 第一句歌词\n[00:18.65] 第二句歌词'}
+                placeholder={
+                  '支持粘贴标准 LRC 时间轴，例如：\n[00:12.30] 第一句歌词\n[00:18.65] 第二句歌词'
+                }
                 style={{ fontFamily: 'var(--blog-font-mono)', fontSize: 12.5, minHeight: 88 }}
               />
             </div>
@@ -733,7 +1452,7 @@ function BlogMusicManagerModal({
             )}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              {(audioMediaId || title || artist || album || lrcText) && (
+              {(audioMediaId || title || artist || album || lrcText || coverPreviewUrl) && (
                 <button
                   type="button"
                   className="blog-btn blog-btn-ghost blog-btn-sm"
@@ -766,7 +1485,8 @@ function BlogMusicManagerModal({
               <div className="blog-p2-track-list">
                 {tracks.map((track, idx) => {
                   const isCurrent =
-                    currentTrack?.trackId === track.id || currentTrack?.audioUrl === track.audioUrl
+                    currentTrack?.trackId === track.id ||
+                    currentTrack?.audioUrl === track.audioUrl
                   const activePlaying = isCurrent && isPlaying
                   const isEditing = editingId === track.id
                   const rowBusy = busyTrackId === track.id
@@ -888,7 +1608,14 @@ function BlogMusicManagerModal({
                                 onChange={(e) => setEditAlbum(e.target.value)}
                               />
                             </label>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                flexWrap: 'wrap'
+                              }}
+                            >
                               <button
                                 type="button"
                                 className="blog-btn blog-btn-subtle blog-btn-sm"
@@ -910,10 +1637,11 @@ function BlogMusicManagerModal({
                                   移除封面
                                 </button>
                               )}
+                              <span className="blog-paste-hint">支持 Ctrl+V</span>
                               <input
                                 ref={editCoverInputRef}
                                 type="file"
-                                accept="image/png,image/jpeg,image/webp"
+                                accept="image/png,image/jpeg,image/webp,image/gif"
                                 hidden
                                 onChange={(e) => void handleEditCoverChange(e)}
                               />
@@ -921,7 +1649,13 @@ function BlogMusicManagerModal({
                           </div>
 
                           <div className="blog-field">
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between'
+                              }}
+                            >
                               <span className="blog-field-label">LRC 歌词</span>
                               <button
                                 type="button"
@@ -979,7 +1713,12 @@ function BlogMusicManagerModal({
 
         <footer className="blog-modal-footer">
           <span className="blog-field-hint">页面切换时播放器持续不断流</span>
-          <button type="button" className="blog-btn blog-btn-subtle" disabled={busy} onClick={onClose}>
+          <button
+            type="button"
+            className="blog-btn blog-btn-subtle"
+            disabled={busy}
+            onClick={onClose}
+          >
             完成
           </button>
         </footer>
@@ -988,6 +1727,10 @@ function BlogMusicManagerModal({
     document.body
   )
 }
+
+/* --------------------------------------------------------------------------
+   Global Music Provider
+   -------------------------------------------------------------------------- */
 
 export function BlogMusicProvider({
   isOwner,
@@ -1017,7 +1760,11 @@ export function BlogMusicProvider({
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [muted, setMuted] = useState(false)
+  const [volume, setVolumeState] = useState<number>(() => readInitialVolume())
+  const [ambientMode, setAmbientModeState] = useState<BlogAmbientMode>(() => readAmbientMode())
+  const [palette, setPalette] = useState<BlogAmbientPalette | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [immersionOpen, setImmersionOpen] = useState(false)
   const [managerOpen, setManagerOpen] = useState(false)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -1029,9 +1776,70 @@ export function BlogMusicProvider({
   const manualRefreshCountRef = useRef(0)
   const durationRef = useRef(0)
   durationRef.current = duration
+  const lastNonZeroVolumeRef = useRef<number>(volume > 0 ? volume : DEFAULT_BLOG_VOLUME)
 
-  const showFloatingUi = tracks.length > 0 || currentTrack !== null || drawerOpen || managerOpen
+  const showFloatingUi =
+    tracks.length > 0 || currentTrack !== null || drawerOpen || immersionOpen || managerOpen
   const blogTheme = useSyncedBlogTheme(showFloatingUi)
+
+  // Extract WCAG-safe cover palette whenever currentTrack?.coverUrl changes
+  const activeCoverUrl = currentTrack?.coverUrl || null
+  useEffect(() => {
+    if (!activeCoverUrl) {
+      setPalette(null)
+      return
+    }
+    let cancelled = false
+    void extractCoverPalette(activeCoverUrl).then((extracted) => {
+      if (!cancelled) {
+        setPalette(extracted)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [activeCoverUrl])
+
+  // Sync audio.volume on mount and whenever volume changes
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = volume
+    }
+    if (volume > 0) {
+      lastNonZeroVolumeRef.current = volume
+    }
+  }, [volume])
+
+  const setVolume = useCallback((rawVol: number) => {
+    const safe = Number.isFinite(rawVol) ? Math.max(0, Math.min(1, rawVol)) : DEFAULT_BLOG_VOLUME
+    const rounded = Math.round(safe * 100) / 100
+    setVolumeState(rounded)
+    persistVolume(rounded)
+    if (rounded > 0) {
+      lastNonZeroVolumeRef.current = rounded
+      setMuted(false)
+      if (audioRef.current) {
+        audioRef.current.volume = rounded
+        audioRef.current.muted = false
+      }
+    } else if (audioRef.current) {
+      audioRef.current.volume = 0
+    }
+  }, [])
+
+  const setAmbientMode = useCallback((mode: BlogAmbientMode) => {
+    setAmbientModeState(mode)
+    saveAmbientMode(mode)
+  }, [])
+
+  const openImmersion = useCallback(() => {
+    setDrawerOpen(false)
+    setImmersionOpen(true)
+  }, [])
+
+  const closeImmersion = useCallback(() => {
+    setImmersionOpen(false)
+  }, [])
 
   const fetchAndApplyTracks = useCallback(async (isManual: boolean) => {
     if (isManual) {
@@ -1052,7 +1860,6 @@ export function BlogMusicProvider({
           if (matched) {
             return trackToPostMusic(matched)
           }
-          // Current playlist track was deleted
           if (audioRef.current) {
             audioRef.current.pause()
           }
@@ -1095,7 +1902,8 @@ export function BlogMusicProvider({
   const resolveTrackWithLibrary = useCallback(
     (incoming: BlogPostMusic): BlogPostMusic => {
       const match = tracks.find(
-        (t) => (incoming.trackId && t.id === incoming.trackId) || t.audioUrl === incoming.audioUrl
+        (t) =>
+          (incoming.trackId && t.id === incoming.trackId) || t.audioUrl === incoming.audioUrl
       )
       if (!match) return incoming
       return {
@@ -1124,6 +1932,7 @@ export function BlogMusicProvider({
 
       if (audio && isSameSource) {
         audio.muted = muted
+        audio.volume = volume
         void audio.play().catch(() => {
           setIsPlaying(false)
         })
@@ -1134,7 +1943,7 @@ export function BlogMusicProvider({
       setCurrentTime(0)
       setDuration(0)
     },
-    [currentTrack?.audioUrl, muted, resolveTrackWithLibrary]
+    [currentTrack?.audioUrl, muted, resolveTrackWithLibrary, volume]
   )
 
   // Sync <audio src> when currentTrack.audioUrl changes
@@ -1154,6 +1963,7 @@ export function BlogMusicProvider({
     if (currentAttrSrc !== currentTrack.audioUrl) {
       audio.src = currentTrack.audioUrl
       audio.muted = muted
+      audio.volume = volume
       audio.load()
     }
 
@@ -1163,7 +1973,7 @@ export function BlogMusicProvider({
         setIsPlaying(false)
       })
     }
-  }, [currentTrack?.audioUrl, muted])
+  }, [currentTrack?.audioUrl, muted, volume])
 
   const togglePlay = useCallback(() => {
     userInitiatedRef.current = true
@@ -1186,6 +1996,11 @@ export function BlogMusicProvider({
   }, [currentTrack, playTrack, tracks])
 
   const toggleMute = useCallback(() => {
+    if (volume === 0) {
+      const restored = lastNonZeroVolumeRef.current || DEFAULT_BLOG_VOLUME
+      setVolume(restored)
+      return
+    }
     setMuted((prev) => {
       const next = !prev
       if (audioRef.current) {
@@ -1193,7 +2008,7 @@ export function BlogMusicProvider({
       }
       return next
     })
-  }, [])
+  }, [setVolume, volume])
 
   const findCurrentPlaylistIndex = useCallback((): number => {
     if (!currentTrack || tracks.length === 0) return -1
@@ -1296,7 +2111,7 @@ export function BlogMusicProvider({
 
   // Close drawer on Escape
   useEffect(() => {
-    if (!drawerOpen || managerOpen || typeof document === 'undefined') return
+    if (!drawerOpen || managerOpen || immersionOpen || typeof document === 'undefined') return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -1305,15 +2120,23 @@ export function BlogMusicProvider({
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [drawerOpen, managerOpen])
+  }, [drawerOpen, managerOpen, immersionOpen])
 
-  const stableContextValue = useMemo<BlogMusicStableValue>(
+  const stableContextValue = useMemo<BlogMusicActionsContextValue>(
     () => ({
       tracks,
       loading,
       currentTrack,
       isPlaying,
       muted,
+      volume,
+      setVolume,
+      ambientMode,
+      setAmbientMode,
+      palette,
+      immersionOpen,
+      openImmersion,
+      closeImmersion,
       refreshTracks,
       playTrack,
       togglePlay,
@@ -1330,6 +2153,14 @@ export function BlogMusicProvider({
       currentTrack,
       isPlaying,
       muted,
+      volume,
+      setVolume,
+      ambientMode,
+      setAmbientMode,
+      palette,
+      immersionOpen,
+      openImmersion,
+      closeImmersion,
       refreshTracks,
       playTrack,
       togglePlay,
@@ -1359,315 +2190,408 @@ export function BlogMusicProvider({
       ? duration
       : tracks.find((t) => t.id === displayTrack?.trackId)?.durationSec || 0
 
+  // Sync dynamic cover accent variables onto floating portals when ambient is active
+  const portalAmbientVars = useMemo<CSSProperties | undefined>(() => {
+    if (!isPlaying || ambientMode === 'minimal' || !palette) return undefined
+    const isDark = blogTheme === 'dark'
+    return {
+      '--blog-link': isDark ? palette.accentDark : palette.accentLight,
+      '--blog-link-hover': isDark ? palette.accentDarkHover : palette.accentLightHover,
+      '--blog-link-soft': isDark ? palette.accentDarkSoft : palette.accentLightSoft
+    } as CSSProperties
+  }, [isPlaying, ambientMode, palette, blogTheme])
+
+  const displayVol = muted ? 0 : volume
+  const volPercent = Math.round(displayVol * 100)
+
   return (
     <BlogMusicContext.Provider value={stableContextValue}>
       <BlogMusicProgressContext.Provider value={progressContextValue}>
         {children}
 
-      {/* Persistent Global Audio Element — never unmounts across SPA blog routes */}
-      <audio
-        ref={audioRef}
-        preload="metadata"
-        onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => {
-          const d = e.currentTarget.duration
-          if (Number.isFinite(d) && d > 0) setDuration(d)
-        }}
-        onDurationChange={(e) => {
-          const d = e.currentTarget.duration
-          if (Number.isFinite(d) && d > 0) setDuration(d)
-        }}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onEnded={() => {
-          if (tracks.length > 0) {
-            nextTrack()
-          } else {
+        {/* Persistent Global Audio Element — never unmounts across SPA blog routes */}
+        <audio
+          ref={audioRef}
+          preload="metadata"
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onLoadedMetadata={(e) => {
+            const d = e.currentTarget.duration
+            if (Number.isFinite(d) && d > 0) setDuration(d)
+          }}
+          onDurationChange={(e) => {
+            const d = e.currentTarget.duration
+            if (Number.isFinite(d) && d > 0) setDuration(d)
+          }}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => {
+            if (tracks.length > 0) {
+              nextTrack()
+            } else {
+              setIsPlaying(false)
+            }
+          }}
+          onError={() => {
             setIsPlaying(false)
-          }
-        }}
-        onError={() => {
-          setIsPlaying(false)
-          if (userInitiatedRef.current) {
-            showToast('error', '音频播放失败，请稍后重试')
-          }
-        }}
-      />
+            if (userInitiatedRef.current) {
+              showToast('error', '音频播放失败，请稍后重试')
+            }
+          }}
+        />
 
-      {/* Floating Mini Music Pill (bottom-left) */}
-      {showPill && displayTrack && typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            className="blog-root blog-p2-floating-scope"
-            data-blog-theme={blogTheme}
-          >
+        {/* Floating Mini Music Pill (bottom-left) */}
+        {showPill &&
+          displayTrack &&
+          typeof document !== 'undefined' &&
+          createPortal(
             <div
-              className={`blog-p2-music-pill${isPlaying ? ' is-playing' : ''}${hasBottomBar ? ' has-bottom-bar' : ''}${desktopRailActive ? ' is-desktop-rail-active' : ''}`}
-              role="region"
-              aria-label="全局音乐播放器"
+              className="blog-root blog-p2-floating-scope"
+              data-blog-theme={blogTheme}
+              style={portalAmbientVars}
             >
-              <button
-                type="button"
-                className={`blog-p2-music-disc${isPlaying ? ' is-playing' : ''}`}
-                onClick={openDrawer}
-                title="展开歌词与歌单"
-                aria-label="展开歌词与歌单"
+              <div
+                className={`blog-p2-music-pill${isPlaying ? ' is-playing' : ''}${
+                  hasBottomBar ? ' has-bottom-bar' : ''
+                }${desktopRailActive ? ' is-desktop-rail-active' : ''}`}
+                role="region"
+                aria-label="全局音乐播放器"
               >
-                {displayTrack.coverUrl ? (
-                  <img src={displayTrack.coverUrl} alt={displayTrack.title} />
-                ) : (
-                  <AppIcon name="music" size={16} />
-                )}
-              </button>
-
-              <button
-                type="button"
-                className="blog-p2-music-pill-body"
-                onClick={openDrawer}
-                title="点击查看同步歌词与歌单"
-              >
-                <span className="blog-p2-music-pill-title">
-                  {displayTrack.title}
-                  {displayTrack.artist ? ` · ${displayTrack.artist}` : ''}
-                </span>
-                <span className="blog-p2-music-pill-lyric">
-                  {currentLyricLine || (isPlaying ? '正在播放…' : '点击展开歌词与歌单')}
-                </span>
-              </button>
-
-              <div className="blog-p2-music-pill-controls">
                 <button
                   type="button"
-                  className="blog-p2-music-pill-btn is-primary"
-                  onClick={togglePlay}
-                  title={isPlaying ? '暂停' : '播放'}
-                  aria-label={isPlaying ? '暂停' : '播放'}
+                  className={`blog-p2-music-disc${isPlaying ? ' is-playing' : ''}`}
+                  onClick={openImmersion}
+                  title="打开全屏沉浸歌词舞台"
+                  aria-label="打开全屏沉浸歌词舞台"
                 >
-                  <AppIcon name={isPlaying ? 'pause' : 'play'} size={13} />
+                  {displayTrack.coverUrl ? (
+                    <img src={displayTrack.coverUrl} alt={displayTrack.title} />
+                  ) : (
+                    <AppIcon name="music" size={16} />
+                  )}
                 </button>
+
                 <button
                   type="button"
-                  className="blog-p2-music-pill-btn"
+                  className="blog-p2-music-pill-body"
                   onClick={openDrawer}
-                  title="展开歌单抽屉"
-                  aria-label="展开歌单抽屉"
+                  title="点击查看同步歌词与歌单"
                 >
-                  <AppIcon name="list" size={14} />
+                  <span className="blog-p2-music-pill-title">
+                    {displayTrack.title}
+                    {displayTrack.artist ? ` · ${displayTrack.artist}` : ''}
+                  </span>
+                  <span className="blog-p2-music-pill-lyric">
+                    {currentLyricLine || (isPlaying ? '正在播放…' : '点击展开歌词与歌单')}
+                  </span>
                 </button>
-              </div>
-            </div>
-          </div>,
-          document.body
-        )}
 
-      {/* Music & Synchronized LRC Lyrics Drawer */}
-      {drawerOpen && displayTrack && typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            className="blog-root blog-modal-backdrop blog-p2-drawer-backdrop"
-            data-blog-theme={blogTheme}
-            style={{ minHeight: 0, zIndex: 1015 }}
-            role="presentation"
-            onMouseDown={(e) => {
-              if (e.target === e.currentTarget) setDrawerOpen(false)
-            }}
-          >
-            <section
-              role="dialog"
-              aria-modal="true"
-              aria-label="音乐与歌词"
-              className="blog-p2-music-drawer"
-            >
-              <header className="blog-p2-drawer-header">
-                <div className="blog-p2-drawer-now">
-                  <div className={`blog-p2-music-disc is-large${isPlaying ? ' is-playing' : ''}`}>
-                    {displayTrack.coverUrl ? (
-                      <img src={displayTrack.coverUrl} alt={displayTrack.title} />
-                    ) : (
-                      <AppIcon name="music" size={22} />
-                    )}
-                  </div>
-                  <div className="blog-p2-drawer-meta">
-                    <h2 className="blog-p2-drawer-title">{displayTrack.title}</h2>
-                    <p className="blog-p2-drawer-artist">
-                      {displayTrack.artist || '未知歌手'}
-                    </p>
-                  </div>
+                <div className="blog-p2-music-pill-controls">
+                  <button
+                    type="button"
+                    className="blog-p2-music-pill-btn is-primary"
+                    onClick={togglePlay}
+                    title={isPlaying ? '暂停' : '播放'}
+                    aria-label={isPlaying ? '暂停' : '播放'}
+                  >
+                    <AppIcon name={isPlaying ? 'pause' : 'play'} size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="blog-p2-music-pill-btn"
+                    onClick={openDrawer}
+                    title="展开歌单抽屉"
+                    aria-label="展开歌单抽屉"
+                  >
+                    <AppIcon name="list" size={14} />
+                  </button>
                 </div>
+              </div>
+            </div>,
+            document.body
+          )}
 
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  {isOwner && (
+        {/* Music & Synchronized LRC Lyrics Drawer */}
+        {drawerOpen &&
+          displayTrack &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div
+              className="blog-root blog-modal-backdrop blog-p2-drawer-backdrop"
+              data-blog-theme={blogTheme}
+              style={{ minHeight: 0, zIndex: 1015, ...portalAmbientVars }}
+              role="presentation"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) setDrawerOpen(false)
+              }}
+            >
+              <section
+                role="dialog"
+                aria-modal="true"
+                aria-label="音乐与歌词"
+                className="blog-p2-music-drawer"
+              >
+                <header className="blog-p2-drawer-header">
+                  <div className="blog-p2-drawer-now">
+                    <button
+                      type="button"
+                      className={`blog-p2-music-disc is-large${isPlaying ? ' is-playing' : ''}`}
+                      style={{ cursor: 'pointer' }}
+                      onClick={openImmersion}
+                      title="进入全屏沉浸歌词"
+                      aria-label="进入全屏沉浸歌词"
+                    >
+                      {displayTrack.coverUrl ? (
+                        <img src={displayTrack.coverUrl} alt={displayTrack.title} />
+                      ) : (
+                        <AppIcon name="music" size={22} />
+                      )}
+                    </button>
+                    <div className="blog-p2-drawer-meta">
+                      <h2 className="blog-p2-drawer-title">{displayTrack.title}</h2>
+                      <p className="blog-p2-drawer-artist">
+                        {displayTrack.artist || '未知歌手'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     <button
                       type="button"
                       className="blog-btn blog-btn-subtle blog-btn-sm"
-                      onClick={() => setManagerOpen(true)}
+                      onClick={openImmersion}
+                      title="打开全屏沉浸歌词舞台"
                     >
-                      <AppIcon name="settings" size={13} />
-                      <span>管理歌单</span>
+                      <AppIcon name="sparkles" size={13} />
+                      <span>沉浸舞台</span>
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="blog-btn blog-btn-icon blog-btn-sm"
-                    onClick={() => setDrawerOpen(false)}
-                    aria-label="收起播放器"
-                  >
-                    <AppIcon name="close" size={15} />
-                  </button>
-                </div>
-              </header>
-
-              {/* Progress & Playback Controls */}
-              <div className="blog-p2-drawer-controls-wrap">
-                <div className="blog-p2-progress-row">
-                  <span className="blog-p2-time-mono">{formatAudioTime(currentTime)}</span>
-                  <input
-                    type="range"
-                    className="blog-p2-seek-slider"
-                    min={0}
-                    max={effectiveDuration > 0 ? effectiveDuration : 100}
-                    step={0.1}
-                    value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
-                    disabled={effectiveDuration <= 0}
-                    onChange={(e) => seekTo(Number(e.target.value))}
-                    aria-label="播放进度"
-                  />
-                  <span className="blog-p2-time-mono">{formatAudioTime(effectiveDuration)}</span>
-                </div>
-
-                <div className="blog-p2-transport-row">
-                  <button
-                    type="button"
-                    className="blog-btn blog-btn-icon blog-btn-sm"
-                    onClick={toggleMute}
-                    title={muted ? '取消静音' : '静音'}
-                    aria-label={muted ? '取消静音' : '静音'}
-                  >
-                    <AppIcon name={muted ? 'volumeOff' : 'volume'} size={15} />
-                  </button>
-
-                  <div className="blog-p2-transport-main">
-                    <button
-                      type="button"
-                      className="blog-btn blog-btn-icon"
-                      onClick={prevTrack}
-                      title="上一首"
-                      aria-label="上一首"
-                    >
-                      <AppIcon name="skipBack" size={16} />
-                    </button>
-                    <button
-                      type="button"
-                      className="blog-p2-play-fab"
-                      onClick={togglePlay}
-                      title={isPlaying ? '暂停' : '播放'}
-                      aria-label={isPlaying ? '暂停' : '播放'}
-                    >
-                      <AppIcon name={isPlaying ? 'pause' : 'play'} size={18} />
-                    </button>
-                    <button
-                      type="button"
-                      className="blog-btn blog-btn-icon"
-                      onClick={nextTrack}
-                      title="下一首"
-                      aria-label="下一首"
-                    >
-                      <AppIcon name="skipForward" size={16} />
-                    </button>
-                  </div>
-
-                  <span className="blog-p2-time-mono" style={{ minWidth: 34, textAlign: 'right' }}>
-                    {tracks.length > 0 ? `${tracks.length} 首` : '单曲'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Synchronized Scrolling LRC Panel */}
-              <div ref={lrcBoxRef} className="blog-p2-lrc-box" aria-label="同步歌词">
-                {parsedLyrics.length === 0 ? (
-                  <div className="blog-p2-lrc-empty">
-                    <AppIcon name="music" size={20} />
-                    <span>纯音乐或暂无 LRC 同步歌词</span>
-                  </div>
-                ) : (
-                  parsedLyrics.map((line, idx) => {
-                    const isActive = idx === activeLyricIndex
-                    return (
+                    {isOwner && (
                       <button
-                        key={`${line.time}-${idx}`}
-                        ref={isActive ? activeLrcLineRef : null}
                         type="button"
-                        className={`blog-p2-lrc-line${isActive ? ' is-active' : ''}`}
-                        onClick={() => {
-                          seekTo(line.time)
-                          if (!isPlaying) togglePlay()
-                        }}
+                        className="blog-btn blog-btn-subtle blog-btn-sm"
+                        onClick={() => setManagerOpen(true)}
                       >
-                        {line.text}
+                        <AppIcon name="settings" size={13} />
+                        <span>管理歌单</span>
                       </button>
-                    )
-                  })
-                )}
-              </div>
-
-              {/* Playlist Track List */}
-              {tracks.length > 0 && (
-                <div className="blog-p2-drawer-playlist">
-                  <div className="blog-p2-drawer-playlist-head">
-                    <span>播放列表</span>
-                    <span className="blog-p2-time-mono">{tracks.length} TRACKS</span>
+                    )}
+                    <button
+                      type="button"
+                      className="blog-btn blog-btn-icon blog-btn-sm"
+                      onClick={() => setDrawerOpen(false)}
+                      aria-label="收起播放器"
+                    >
+                      <AppIcon name="close" size={15} />
+                    </button>
                   </div>
-                  <div className="blog-p2-track-list">
-                    {tracks.map((item, idx) => {
-                      const active =
-                        displayTrack.trackId === item.id || displayTrack.audioUrl === item.audioUrl
+                </header>
+
+                {/* Progress, Transport & Sleek Volume Slider */}
+                <div className="blog-p2-drawer-controls-wrap">
+                  <div className="blog-p2-progress-row">
+                    <span className="blog-p2-time-mono">{formatAudioTime(currentTime)}</span>
+                    <input
+                      type="range"
+                      className="blog-p2-seek-slider"
+                      min={0}
+                      max={effectiveDuration > 0 ? effectiveDuration : 100}
+                      step={0.1}
+                      value={effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0}
+                      disabled={effectiveDuration <= 0}
+                      onChange={(e) => seekTo(Number(e.target.value))}
+                      aria-label="播放进度"
+                    />
+                    <span className="blog-p2-time-mono">{formatAudioTime(effectiveDuration)}</span>
+                  </div>
+
+                  <div className="blog-p2-transport-row">
+                    <span className="blog-p2-time-mono" style={{ minWidth: 42 }}>
+                      {ambientMode === 'glow'
+                        ? '流光'
+                        : ambientMode === 'wallpaper'
+                          ? '壁纸'
+                          : '极简'}
+                    </span>
+
+                    <div className="blog-p2-transport-main">
+                      <button
+                        type="button"
+                        className="blog-btn blog-btn-icon"
+                        onClick={prevTrack}
+                        title="上一首"
+                        aria-label="上一首"
+                      >
+                        <AppIcon name="skipBack" size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        className="blog-p2-play-fab"
+                        onClick={togglePlay}
+                        title={isPlaying ? '暂停' : '播放'}
+                        aria-label={isPlaying ? '暂停' : '播放'}
+                      >
+                        <AppIcon name={isPlaying ? 'pause' : 'play'} size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        className="blog-btn blog-btn-icon"
+                        onClick={nextTrack}
+                        title="下一首"
+                        aria-label="下一首"
+                      >
+                        <AppIcon name="skipForward" size={16} />
+                      </button>
+                    </div>
+
+                    <span
+                      className="blog-p2-time-mono"
+                      style={{ minWidth: 42, textAlign: 'right' }}
+                    >
+                      {tracks.length > 0 ? `${tracks.length} 首` : '单曲'}
+                    </span>
+                  </div>
+
+                  <div className="blog-volume-row">
+                    <button
+                      type="button"
+                      className="blog-volume-mute-btn"
+                      onClick={toggleMute}
+                      title={muted || volume === 0 ? '取消静音' : '静音'}
+                      aria-label={muted || volume === 0 ? '取消静音' : '静音'}
+                    >
+                      <AppIcon name={muted || volume === 0 ? 'volumeOff' : 'volume'} size={15} />
+                    </button>
+                    <input
+                      type="range"
+                      className="blog-volume-slider"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={displayVol}
+                      style={{ '--vol-pct': `${volPercent}%` } as CSSProperties}
+                      onChange={(e) => setVolume(Number(e.target.value))}
+                      aria-label="音量调节"
+                    />
+                    <span className="blog-volume-pct">{volPercent}%</span>
+                  </div>
+                </div>
+
+                {/* Synchronized Scrolling LRC Panel */}
+                <div ref={lrcBoxRef} className="blog-p2-lrc-box" aria-label="同步歌词">
+                  {parsedLyrics.length === 0 ? (
+                    <div className="blog-p2-lrc-empty">
+                      <AppIcon name="music" size={20} />
+                      <span>纯音乐或暂无 LRC 同步歌词</span>
+                    </div>
+                  ) : (
+                    parsedLyrics.map((line, idx) => {
+                      const isActive = idx === activeLyricIndex
                       return (
                         <button
-                          key={item.id}
+                          key={`${line.time}-${idx}`}
+                          ref={isActive ? activeLrcLineRef : null}
                           type="button"
-                          className={`blog-p2-track-row is-clickable${active ? ' is-active' : ''}`}
+                          className={`blog-p2-lrc-line${isActive ? ' is-active' : ''}`}
                           onClick={() => {
-                            if (active) togglePlay()
-                            else playTrack(trackToPostMusic(item))
+                            seekTo(line.time)
+                            if (!isPlaying) togglePlay()
                           }}
                         >
-                          <span className="blog-p2-track-num">
-                            {active && isPlaying ? '♪' : String(idx + 1).padStart(2, '0')}
-                          </span>
-                          <span className="blog-p2-track-row-title">{item.title}</span>
-                          <span className="blog-p2-track-row-artist">
-                            {item.artist || '未知歌手'}
-                          </span>
-                          {item.durationSec ? (
-                            <span className="blog-p2-time-mono">
-                              {formatAudioTime(item.durationSec)}
-                            </span>
-                          ) : null}
+                          {line.text}
                         </button>
                       )
-                    })}
-                  </div>
+                    })
+                  )}
                 </div>
-              )}
-            </section>
-          </div>,
-          document.body
+
+                {/* Playlist Track List */}
+                {tracks.length > 0 && (
+                  <div className="blog-p2-drawer-playlist">
+                    <div className="blog-p2-drawer-playlist-head">
+                      <span>播放列表</span>
+                      <span className="blog-p2-time-mono">{tracks.length} TRACKS</span>
+                    </div>
+                    <div className="blog-p2-track-list">
+                      {tracks.map((item, idx) => {
+                        const active =
+                          displayTrack.trackId === item.id ||
+                          displayTrack.audioUrl === item.audioUrl
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className={`blog-p2-track-row is-clickable${active ? ' is-active' : ''}`}
+                            onClick={() => {
+                              if (active) togglePlay()
+                              else playTrack(trackToPostMusic(item))
+                            }}
+                          >
+                            <span className="blog-p2-track-num">
+                              {active && isPlaying ? '♪' : String(idx + 1).padStart(2, '0')}
+                            </span>
+                            <span className="blog-p2-track-row-title">{item.title}</span>
+                            <span className="blog-p2-track-row-artist">
+                              {item.artist || '未知歌手'}
+                            </span>
+                            {item.durationSec ? (
+                              <span className="blog-p2-time-mono">
+                                {formatAudioTime(item.durationSec)}
+                              </span>
+                            ) : null}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </section>
+            </div>,
+            document.body
+          )}
+
+        {/* Apple Music Fullscreen Immersion Stage */}
+        {immersionOpen && displayTrack && (
+          <BlogMusicImmersionModal
+            open={immersionOpen}
+            managerOpen={managerOpen}
+            isOwner={isOwner}
+            track={displayTrack}
+            tracks={tracks}
+            isPlaying={isPlaying}
+            muted={muted}
+            volume={volume}
+            currentTime={currentTime}
+            effectiveDuration={effectiveDuration}
+            parsedLyrics={parsedLyrics}
+            activeLyricIndex={activeLyricIndex}
+            ambientMode={ambientMode}
+            palette={palette}
+            onClose={closeImmersion}
+            onSetAmbientMode={setAmbientMode}
+            onTogglePlay={togglePlay}
+            onPrev={prevTrack}
+            onNext={nextTrack}
+            onSeek={seekTo}
+            onSetVolume={setVolume}
+            onToggleMute={toggleMute}
+            onPlayTrack={(track) => playTrack(trackToPostMusic(track))}
+            onOpenManager={openManager}
+          />
         )}
 
-      {/* Owner Playlist Manager Modal */}
-      {isOwner && (
-        <BlogMusicManagerModal
-          open={managerOpen}
-          blogTheme={blogTheme}
-          tracks={tracks}
-          currentTrack={currentTrack}
-          isPlaying={isPlaying}
-          onClose={() => setManagerOpen(false)}
-          onPlayPreview={(track) => playTrack(trackToPostMusic(track))}
-          onTogglePlay={togglePlay}
-          onTracksChanged={refreshTracks}
-        />
-      )}
+        {/* Owner Playlist Manager Modal */}
+        {isOwner && (
+          <BlogMusicManagerModal
+            open={managerOpen}
+            blogTheme={blogTheme}
+            tracks={tracks}
+            currentTrack={currentTrack}
+            isPlaying={isPlaying}
+            onClose={() => setManagerOpen(false)}
+            onPlayPreview={(track) => playTrack(trackToPostMusic(track))}
+            onTogglePlay={togglePlay}
+            onTracksChanged={refreshTracks}
+          />
+        )}
       </BlogMusicProgressContext.Provider>
     </BlogMusicContext.Provider>
   )

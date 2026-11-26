@@ -205,7 +205,7 @@ export function parsePageMetadata(html: string, pageUrl: string): PageMetadata {
   return { url: normalizedUrl, normalizedUrl, title, siteName, coverUrl }
 }
 
-export function detectImageMime(bytes: Uint8Array): 'image/png' | 'image/jpeg' | 'image/webp' | null {
+export function detectImageMime(bytes: Uint8Array): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | null {
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
     return 'image/png'
   }
@@ -218,6 +218,17 @@ export function detectImageMime(bytes: Uint8Array): 'image/png' | 'image/jpeg' |
     bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
   ) {
     return 'image/webp'
+  }
+  if (
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38 &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return 'image/gif'
   }
   return null
 }
@@ -235,8 +246,10 @@ export async function fetchPageMetadata(input: string): Promise<PageMetadata> {
   return parsePageMetadata(html, result.finalUrl)
 }
 
-export async function fetchImage(input: string): Promise<{ bytes: Uint8Array; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' }> {
-  const result = await safeFetch(input, 'image/png,image/jpeg,image/webp,image/*;q=0.5', IMAGE_LIMIT)
+export async function fetchImage(
+  input: string
+): Promise<{ bytes: Uint8Array; mimeType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' }> {
+  const result = await safeFetch(input, 'image/png,image/jpeg,image/webp,image/gif,image/*;q=0.5', IMAGE_LIMIT)
   const mimeType = detectImageMime(result.bytes)
   if (!mimeType) throw new Error('封面格式不支持')
   return { bytes: result.bytes, mimeType }
