@@ -5,7 +5,9 @@ import type {
   BlogFriend,
   BlogMediaKind,
   BlogMusicTrack,
-  BlogPageData
+  BlogPageData,
+  BlogTrackVisualConfig,
+  BlogWaveStyle
 } from '../src/blog-types'
 import { ApiError, type Env } from './types'
 
@@ -228,6 +230,75 @@ function defaultPageMeta(slug: string): { title: string; subtitle: string } {
   }
 }
 
+const VISUAL_CONFIG_NUMERIC_BOUNDS: ReadonlyArray<
+  readonly [Exclude<keyof BlogTrackVisualConfig, 'waveStyle'>, number, number]
+> = [
+  ['sensitivity', 0.2, 2.5],
+  ['bassGain', 0, 2.0],
+  ['midGain', 0, 2.0],
+  ['trebleGain', 0, 2.0],
+  ['beatBoost', 0, 2.0],
+  ['smoothing', 0.1, 0.9],
+  ['silkSpeed', 0.2, 2.2],
+  ['silkWarp', 0.2, 2.0],
+  ['silkOpacity', 0.15, 0.95],
+  ['silkSoftness', 0, 1.0],
+  ['waveScale', 0.3, 2.0],
+  ['waveOpacity', 0.2, 1.0]
+]
+
+const VALID_WAVE_STYLES = new Set<BlogWaveStyle>(['bars', 'horizon', 'wings'])
+
+function finiteVisualNumber(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+export function sanitizeTrackVisualConfig(input: unknown): Partial<BlogTrackVisualConfig> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return {}
+  }
+  const obj = input as Record<string, unknown>
+  const result: Partial<BlogTrackVisualConfig> = {}
+
+  for (const [key, min, max] of VISUAL_CONFIG_NUMERIC_BOUNDS) {
+    if (!hasOwn(obj, key)) continue
+    const num = finiteVisualNumber(obj[key])
+    if (num === null) continue
+    result[key] = Math.min(max, Math.max(min, num))
+  }
+
+  if (hasOwn(obj, 'waveStyle')) {
+    const rawStyle = obj.waveStyle
+    if (typeof rawStyle === 'string' && VALID_WAVE_STYLES.has(rawStyle as BlogWaveStyle)) {
+      result.waveStyle = rawStyle as BlogWaveStyle
+    }
+  }
+
+  return result
+}
+
+function parseTrackVisualConfigJson(raw: unknown): Partial<BlogTrackVisualConfig> {
+  if (!raw) return {}
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    return sanitizeTrackVisualConfig(raw)
+  }
+  if (typeof raw !== 'string') return {}
+  const trimmed = raw.trim()
+  if (!trimmed || trimmed === '{}') return {}
+  try {
+    return sanitizeTrackVisualConfig(JSON.parse(trimmed))
+  } catch {
+    return {}
+  }
+}
+
 export function serializeMusicTrack(
   row: Row,
   blogMediaUrl: (mediaId: string, variant?: 'original' | 'thumb') => string
@@ -247,6 +318,7 @@ export function serializeMusicTrack(
     durationSec:
       row.duration_sec !== null && row.duration_sec !== undefined ? Number(row.duration_sec) : null,
     sortOrder: Number(row.sort_order || 0),
+    visualConfig: parseTrackVisualConfigJson(row.visual_config_json),
     createdAt: Number(row.created_at)
   }
 }
@@ -401,7 +473,7 @@ export async function handleBlogPhase2Api(
   if (path === '/api/blog/music/tracks' && method === 'GET') {
     if (!auth.owner) return json({ tracks: [] as BlogMusicTrack[] })
     const res = await env.DB.prepare(
-      'SELECT * FROM blog_music_tracks WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC'
+      'SELECT id, user_id, title, artist, album, audio_media_id, cover_media_id, lrc_text, duration_sec, sort_order, visual_config_json, created_at FROM blog_music_tracks WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC'
     )
       .bind(auth.owner.id)
       .all<Row>()
@@ -431,13 +503,14 @@ export async function handleBlogPhase2Api(
     const durationSec = durationRaw !== null && durationRaw >= 0 ? Math.round(durationRaw) : null
     const sortRaw = numberOrNull(body.sortOrder)
     const sortOrder = sortRaw !== null ? Math.round(sortRaw) : 0
+    const visualConfigJson = JSON.stringify(sanitizeTrackVisualConfig(body.visualConfig))
 
     const id = crypto.randomUUID()
     const createdAt = Date.now()
 
     await env.DB.prepare(
-      'INSERT INTO blog_music_tracks (id, user_id, title, artist, album, audio_media_id, cover_media_id, lrc_text, duration_sec, sort_order, created_at) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO blog_music_tracks (id, user_id, title, artist, album, audio_media_id, cover_media_id, lrc_text, duration_sec, sort_order, visual_config_json, created_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
       .bind(
         id,
@@ -450,6 +523,7 @@ export async function handleBlogPhase2Api(
         lrcText,
         durationSec,
         sortOrder,
+        visualConfigJson,
         createdAt
       )
       .run()
@@ -523,6 +597,10 @@ export async function handleBlogPhase2Api(
         const sort = numberOrNull(body.sortOrder)
         fields.push('sort_order = ?')
         values.push(sort !== null ? Math.round(sort) : 0)
+      }
+      if (hasOwn(body, 'visualConfig')) {
+        fields.push('visual_config_json = ?')
+        values.push(JSON.stringify(sanitizeTrackVisualConfig(body.visualConfig)))
       }
 
       if (fields.length) {

@@ -370,6 +370,7 @@ function BlogAppInner({
     ambientMode,
     palette,
     getAudioFrame,
+    activeVisualConfig,
     openDrawer,
     openManager
   } = useBlogMusicActions()
@@ -1094,6 +1095,7 @@ function BlogAppInner({
           palette={palette}
           coverUrl={currentTrack?.coverUrl ?? null}
           getAudioFrame={getAudioFrame}
+          visualConfig={activeVisualConfig}
         />
 
         <div className="blog-bento-stage">

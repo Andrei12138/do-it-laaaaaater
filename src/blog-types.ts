@@ -13,6 +13,27 @@ export interface BlogImageItem {
   liveVideoUrl?: string
 }
 
+export type BlogWaveStyle = 'bars' | 'horizon' | 'wings'
+
+export interface BlogTrackVisualConfig {
+  /** Audio DSP sensitivity & band weighting */
+  sensitivity: number // 0.2 .. 2.5 (default 1.0)
+  bassGain: number // 0 .. 2.0 (default 1.1)
+  midGain: number // 0 .. 2.0 (default 1.0)
+  trebleGain: number // 0 .. 2.0 (default 0.9)
+  beatBoost: number // 0 .. 2.0 (default 1.0)
+  smoothing: number // 0.1 .. 0.9 (default 0.55)
+  /** Silk WebGL aurora tuning */
+  silkSpeed: number // 0.2 .. 2.2 (default 0.85)
+  silkWarp: number // 0.2 .. 2.0 (default 0.72)
+  silkOpacity: number // 0.15 .. 0.95 (default 0.62)
+  silkSoftness: number // 0 .. 1.0 (default 0.88 — higher = softer matte whatamesh, 0 = glossy)
+  /** Waves visualizer tuning */
+  waveStyle: BlogWaveStyle // 'bars' | 'horizon' | 'wings'
+  waveScale: number // 0.3 .. 2.0 (default 1.0)
+  waveOpacity: number // 0.2 .. 1.0 (default 0.78)
+}
+
 export interface BlogPostMusic {
   trackId?: string
   title: string
@@ -20,6 +41,7 @@ export interface BlogPostMusic {
   coverUrl?: string | null
   audioUrl: string
   lrc?: string
+  visualConfig?: Partial<BlogTrackVisualConfig> | null
 }
 
 export interface BlogPostVideo {
@@ -268,6 +290,7 @@ export interface BlogMusicTrack {
   lrcText: string
   durationSec: number | null
   sortOrder: number
+  visualConfig: Partial<BlogTrackVisualConfig>
   createdAt: number
 }
 
@@ -280,6 +303,7 @@ export interface BlogMusicTrackInput {
   lrcText?: string
   durationSec?: number | null
   sortOrder?: number
+  visualConfig?: Partial<BlogTrackVisualConfig>
 }
 
 export interface BlogPageData {

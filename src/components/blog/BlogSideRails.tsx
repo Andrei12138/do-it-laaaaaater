@@ -634,7 +634,9 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
     nextTrack,
     seekTo,
     openDrawer,
-    openManager
+    openManager,
+    openTuner,
+    tunerOpen
   } = useBlogMusicActions()
   const { currentTime, duration, currentLyricLine } = useBlogMusicProgress()
 
@@ -738,6 +740,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
       ? Math.min(100, Math.max(0, (currentTime / effectiveDuration) * 100))
       : 0
   const ambientLabel = AMBIENT_MODE_SHORT_LABELS[ambientMode] ?? '声波'
+  const showTuner = isOwner && Boolean(currentTrack)
 
   const footerPillBaseStyle: CSSProperties = {
     height: 28,
@@ -908,7 +911,9 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
         className="blog-rail-music-footer"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+          gridTemplateColumns: showTuner
+            ? 'minmax(0, 1.15fr) minmax(0, 1.15fr) minmax(0, 0.8fr)'
+            : 'repeat(2, minmax(0, 1fr))',
           gap: 6,
           paddingTop: 2
         }}
@@ -943,6 +948,31 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
         >
           <span>氛围 · {ambientLabel}</span>
         </button>
+
+        {showTuner && (
+          <button
+            type="button"
+            className="blog-btn blog-btn-subtle blog-btn-sm"
+            style={
+              tunerOpen
+                ? {
+                    ...footerPillBaseStyle,
+                    padding: '0 8px',
+                    background: 'var(--blog-link-soft)',
+                    color: 'var(--blog-link)',
+                    borderColor: 'transparent'
+                  }
+                : { ...footerPillBaseStyle, padding: '0 8px' }
+            }
+            onClick={() => openTuner(currentTrack?.trackId)}
+            title="打开本曲实时视觉调参面板（音频响应 / 丝绸极光 / 声波形态）"
+            aria-label="打开本曲实时视觉调参面板"
+            aria-pressed={tunerOpen}
+          >
+            <AppIcon name="settings" size={12} />
+            <span>调参</span>
+          </button>
+        )}
       </div>
     </section>
   )

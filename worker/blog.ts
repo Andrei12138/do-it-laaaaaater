@@ -27,6 +27,7 @@ import {
   MAX_LYRIC_BYTES,
   MAX_VIDEO_BYTES,
   parseByteRange,
+  sanitizeTrackVisualConfig,
   serializeCatalogItem,
   serializeFriend,
   serializeMusicTrack,
@@ -48,6 +49,7 @@ export {
   MAX_LYRIC_BYTES,
   MAX_VIDEO_BYTES,
   parseByteRange,
+  sanitizeTrackVisualConfig,
   validateCatalogSection,
   validateMediaKind,
   validatePageSlug,
@@ -2241,7 +2243,7 @@ async function handleBlogApiInner(
       loadBlogBootstrap(env, auth.owner, auth.isOwner),
       queryBlogPostsPage(env, request, auth, { page: 1, limit: 15 }),
       env.DB.prepare(
-        'SELECT * FROM blog_music_tracks WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC'
+        'SELECT id, user_id, title, artist, album, audio_media_id, cover_media_id, lrc_text, duration_sec, sort_order, visual_config_json, created_at FROM blog_music_tracks WHERE user_id = ? ORDER BY sort_order ASC, created_at DESC'
       )
         .bind(auth.owner.id)
         .all<Row>()

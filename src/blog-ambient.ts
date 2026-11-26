@@ -1,4 +1,7 @@
+import type { BlogTrackVisualConfig, BlogWaveStyle } from './blog-types'
+
 export type BlogAmbientMode = 'waves' | 'silk' | 'minimal'
+export type { BlogTrackVisualConfig, BlogWaveStyle } from './blog-types'
 
 export interface BlogAmbientPalette {
   accentLight: string       // hex clamped to WCAG-legible lightness 36%-46% on white
@@ -503,6 +506,183 @@ export function extractCoverPalette(imageUrl: string): Promise<BlogAmbientPalett
 }
 
 /* ==========================================================================
+   Per-track visual tuning (audio response · silk aurora · waves visualiser)
+   ========================================================================== */
+
+export const BLOG_WAVE_STYLES: readonly BlogWaveStyle[] = ['bars', 'horizon', 'wings']
+
+export const DEFAULT_TRACK_VISUAL_CONFIG: Readonly<BlogTrackVisualConfig> = Object.freeze({
+  sensitivity: 1.0,
+  bassGain: 1.1,
+  midGain: 1.0,
+  trebleGain: 0.9,
+  beatBoost: 1.0,
+  smoothing: 0.55,
+  silkSpeed: 0.85,
+  silkWarp: 0.72,
+  silkOpacity: 0.62,
+  silkSoftness: 0.88,
+  waveStyle: 'bars',
+  waveScale: 1.0,
+  waveOpacity: 0.78
+})
+
+export type BlogTrackVisualNumericKey = Exclude<keyof BlogTrackVisualConfig, 'waveStyle'>
+
+/** Inclusive slider ranges + step for every numeric tuning knob. */
+export const TRACK_VISUAL_RANGES: Readonly<
+  Record<BlogTrackVisualNumericKey, { min: number; max: number; step: number }>
+> = Object.freeze({
+  sensitivity: { min: 0.2, max: 2.5, step: 0.05 },
+  bassGain: { min: 0, max: 2, step: 0.05 },
+  midGain: { min: 0, max: 2, step: 0.05 },
+  trebleGain: { min: 0, max: 2, step: 0.05 },
+  beatBoost: { min: 0, max: 2, step: 0.05 },
+  smoothing: { min: 0.1, max: 0.9, step: 0.01 },
+  silkSpeed: { min: 0.2, max: 2.2, step: 0.05 },
+  silkWarp: { min: 0.2, max: 2, step: 0.01 },
+  silkOpacity: { min: 0.15, max: 0.95, step: 0.01 },
+  silkSoftness: { min: 0, max: 1, step: 0.01 },
+  waveScale: { min: 0.3, max: 2, step: 0.05 },
+  waveOpacity: { min: 0.2, max: 1, step: 0.01 }
+})
+
+const TRACK_VISUAL_NUMERIC_KEYS = Object.keys(TRACK_VISUAL_RANGES) as BlogTrackVisualNumericKey[]
+
+export function isBlogWaveStyle(value: unknown): value is BlogWaveStyle {
+  return value === 'bars' || value === 'horizon' || value === 'wings'
+}
+
+/**
+ * Fills missing / invalid fields with defaults and clamps every number into its range.
+ * Accepts raw JSON (strings, nulls, junk) safely — always returns a fresh, complete config.
+ */
+export function normalizeTrackVisualConfig(
+  partial?: Partial<BlogTrackVisualConfig> | null
+): BlogTrackVisualConfig {
+  const src = (partial && typeof partial === 'object' ? partial : {}) as Record<string, unknown>
+  const out = { ...DEFAULT_TRACK_VISUAL_CONFIG } as BlogTrackVisualConfig
+  for (const key of TRACK_VISUAL_NUMERIC_KEYS) {
+    const raw = src[key]
+    const num = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN
+    if (Number.isFinite(num)) {
+      const range = TRACK_VISUAL_RANGES[key]
+      out[key] = Math.round(clamp(num, range.min, range.max) * 1000) / 1000
+    }
+  }
+  if (isBlogWaveStyle(src.waveStyle)) out.waveStyle = src.waveStyle
+  return out
+}
+
+export function trackVisualConfigEquals(a: BlogTrackVisualConfig, b: BlogTrackVisualConfig): boolean {
+  if (a.waveStyle !== b.waveStyle) return false
+  for (const key of TRACK_VISUAL_NUMERIC_KEYS) {
+    if (Math.abs(a[key] - b[key]) > 0.0051) return false
+  }
+  return true
+}
+
+export interface TrackVisualPreset {
+  id: 'balanced' | 'lyrical' | 'pop' | 'bass' | 'liquid-metal'
+  label: string
+  hint: string
+  config: BlogTrackVisualConfig
+}
+
+export const TRACK_VISUAL_PRESETS: readonly TrackVisualPreset[] = Object.freeze([
+  {
+    id: 'balanced',
+    label: '默认均衡',
+    hint: '哑光丝绸 · 胶囊频谱，适合大多数歌曲',
+    config: normalizeTrackVisualConfig(DEFAULT_TRACK_VISUAL_CONFIG)
+  },
+  {
+    id: 'lyrical',
+    label: '柔和抒情',
+    hint: '慢速柔光、平滑阻尼高，适合钢琴 / 民谣 / 抒情',
+    config: normalizeTrackVisualConfig({
+      sensitivity: 0.85,
+      bassGain: 0.9,
+      midGain: 1.2,
+      trebleGain: 0.85,
+      beatBoost: 0.55,
+      smoothing: 0.78,
+      silkSpeed: 0.55,
+      silkWarp: 0.55,
+      silkOpacity: 0.52,
+      silkSoftness: 0.96,
+      waveStyle: 'horizon',
+      waveScale: 0.85,
+      waveOpacity: 0.68
+    })
+  },
+  {
+    id: 'pop',
+    label: '动感流行',
+    hint: '中高频清亮、节拍弹跳明显，适合流行 / 舞曲',
+    config: normalizeTrackVisualConfig({
+      sensitivity: 1.25,
+      bassGain: 1.15,
+      midGain: 1.1,
+      trebleGain: 1.15,
+      beatBoost: 1.4,
+      smoothing: 0.42,
+      silkSpeed: 1.2,
+      silkWarp: 0.9,
+      silkOpacity: 0.7,
+      silkSoftness: 0.82,
+      waveStyle: 'bars',
+      waveScale: 1.15,
+      waveOpacity: 0.85
+    })
+  },
+  {
+    id: 'bass',
+    label: '重低音电音',
+    hint: '低频权重拉满、冲击强，适合 EDM / Hip-hop',
+    config: normalizeTrackVisualConfig({
+      sensitivity: 1.35,
+      bassGain: 1.75,
+      midGain: 0.85,
+      trebleGain: 0.8,
+      beatBoost: 1.8,
+      smoothing: 0.35,
+      silkSpeed: 1.45,
+      silkWarp: 1.15,
+      silkOpacity: 0.78,
+      silkSoftness: 0.74,
+      waveStyle: 'wings',
+      waveScale: 1.3,
+      waveOpacity: 0.88
+    })
+  },
+  {
+    id: 'liquid-metal',
+    label: '液态金属',
+    hint: '高光褶皱与镜面脊线，呈现流动的液态金属质感',
+    config: normalizeTrackVisualConfig({
+      sensitivity: 1.1,
+      bassGain: 1.2,
+      midGain: 1.0,
+      trebleGain: 1.0,
+      beatBoost: 1.15,
+      smoothing: 0.5,
+      silkSpeed: 1.05,
+      silkWarp: 1.35,
+      silkOpacity: 0.72,
+      silkSoftness: 0.08,
+      waveStyle: 'bars',
+      waveScale: 1.0,
+      waveOpacity: 0.8
+    })
+  }
+])
+
+export function findMatchingVisualPreset(config: BlogTrackVisualConfig): TrackVisualPreset | null {
+  return TRACK_VISUAL_PRESETS.find((preset) => trackVisualConfigEquals(preset.config, config)) ?? null
+}
+
+/* ==========================================================================
    Real-time music analysis (zero-allocation DSP frame)
    ========================================================================== */
 
@@ -595,6 +775,28 @@ export function computeLogBandEdges(
 
 type ByteSpectrum = ArrayLike<number>
 
+function finiteOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+/**
+ * Per-band weight from the bass / mid / treble gains, crossfaded over ±2 bands at each
+ * region boundary so dragging one gain never opens a hard step in the spectrum.
+ */
+function writeBandGains(out: Float32Array, cfg: BlogTrackVisualConfig): void {
+  const bass = clamp(finiteOr(cfg.bassGain, 1.1), 0, 2)
+  const mid = clamp(finiteOr(cfg.midGain, 1), 0, 2)
+  const treble = clamp(finiteOr(cfg.trebleGain, 0.9), 0, 2)
+  const blend = 2
+  for (let b = 0; b < out.length; b += 1) {
+    const centre = b + 0.5
+    const toMid = clamp((centre - (BASS_BANDS_END - blend)) / (blend * 2), 0, 1)
+    const toTreble = clamp((centre - (MID_BANDS_END - blend)) / (blend * 2), 0, 1)
+    const low = bass + (mid - bass) * toMid
+    out[b] = low + (treble - low) * toTreble
+  }
+}
+
 /**
  * Turns raw AnalyserNode byte data into an expressive, musically-shaped frame:
  * log bands, adaptive auto-gain (rolling peak tracker), spectral-flux beat onsets
@@ -604,6 +806,7 @@ export class AudioFrameAnalyzer {
   readonly frame: AudioAnalysisFrame = createAudioAnalysisFrame()
 
   private readonly raw = new Float32Array(AUDIO_BAND_COUNT)
+  private readonly bandGains = new Float32Array(AUDIO_BAND_COUNT).fill(1)
   private readonly fluxHistory = new Float32Array(FLUX_HISTORY)
   private fluxIndex = 0
   private fluxFilled = 0
@@ -643,22 +846,32 @@ export class AudioFrameAnalyzer {
    * @param sampleRate AudioContext.sampleRate
    * @param dtSeconds  time since the previous processed frame
    * @param volume     element volume (0..1); its pre-analyser attenuation is compensated in dB
+   * @param config     per-track tuning — read EVERY call, so slider changes land on the very next frame
    */
   process(
     freq: ByteSpectrum | null,
     timeDomain: ByteSpectrum | null,
     sampleRate: number,
     dtSeconds: number,
-    volume = 1
+    volume = 1,
+    config: BlogTrackVisualConfig = DEFAULT_TRACK_VISUAL_CONFIG
   ): AudioAnalysisFrame {
     const f = this.frame
     const raw = this.raw
     const n = AUDIO_BAND_COUNT
     const dt = clamp(Number.isFinite(dtSeconds) ? dtSeconds : 1 / 60, 1 / 240, 0.1)
     const k = dt * 60
-    const attack = 1 - Math.pow(1 - BAND_ATTACK, k)
-    const release = 1 - Math.pow(1 - BAND_RELEASE, k)
+    const cfg = config ?? DEFAULT_TRACK_VISUAL_CONFIG
+    const sensitivity = clamp(finiteOr(cfg.sensitivity, 1), 0.2, 2.5)
+    const beatBoost = clamp(finiteOr(cfg.beatBoost, 1), 0, 2)
+    // smoothing 0.55 ≙ the hand-tuned 0.55 attack / 0.14 release; higher = calmer, lower = snappier
+    const smoothing = clamp(finiteOr(cfg.smoothing, 0.55), 0.1, 0.9)
+    const attackBase = clamp(BAND_ATTACK * (1 - (smoothing - 0.55) * 1.2), 0.12, 0.92)
+    const releaseBase = clamp(BAND_RELEASE * (1 - (smoothing - 0.55) * 1.6), 0.03, 0.4)
+    const attack = 1 - Math.pow(1 - attackBase, k)
+    const release = 1 - Math.pow(1 - releaseBase, k)
     this.clock += dt
+    writeBandGains(this.bandGains, cfg)
 
     // 1) Log-band magnitudes (avg/max blend keeps transients crisp inside wide treble bands)
     let anyNonZero = false
@@ -711,18 +924,22 @@ export class AudioFrameAnalyzer {
     this.bandPeak = Math.max(maxRaw, this.bandPeak * Math.pow(BAND_PEAK_DECAY, k), BAND_PEAK_FLOOR)
     const relative = Math.pow(clamp(instant / this.peak, 0, 1), 1.5)
     const absolute = clamp(instant / 0.55, 0, 1)
-    const targetLevel = active ? clamp(relative * 0.62 + absolute * 0.38, 0, 1) : 0
+    const targetLevel = active
+      ? clamp((relative * 0.62 + absolute * 0.38) * Math.pow(sensitivity, 0.8), 0, 1)
+      : 0
     f.level += (targetLevel - f.level) * (targetLevel > f.level ? attack : release)
 
-    // 3) Bands: contour relative to the loudest band, scaled by the loudness envelope
+    // 3) Bands: contour relative to the loudest band, scaled by the loudness envelope,
+    //    then weighted by the per-track sensitivity × bass / mid / treble gains.
     const gain = 0.35 + 0.65 * targetLevel
     const bands = f.bands
+    const bandGains = this.bandGains
     let bassSum = 0
     let midSum = 0
     let trebleSum = 0
     for (let b = 0; b < n; b += 1) {
       const shaped = Math.pow(clamp(raw[b] / this.bandPeak, 0, 1), 1.6) * gain
-      const target = active ? clamp((shaped - 0.02) / 0.98, 0, 1) : 0
+      const target = active ? clamp(((shaped - 0.02) / 0.98) * sensitivity * bandGains[b], 0, 1) : 0
       const cur = bands[b]
       const next = cur + (target - cur) * (target > cur ? attack : release)
       bands[b] = next
@@ -745,19 +962,22 @@ export class AudioFrameAnalyzer {
       baseline = histSum / this.fluxFilled
     }
     const flux = lowEnergy - baseline
-    const threshold = 0.025 + baseline * 0.14
+    // beatBoost > 1 → more onsets register and each punch rings longer; < 1 → weaker, stricter
+    const threshold = (0.025 + baseline * 0.14) / Math.max(0.4, beatBoost)
     if (
       active &&
+      beatBoost > 0 &&
       this.fluxFilled >= 8 &&
       flux > threshold &&
       lowEnergy > 0.1 &&
       this.clock - this.lastBeatAt > BEAT_COOLDOWN_S
     ) {
-      f.beatPulse = 1
+      f.beatPulse = Math.min(1, beatBoost)
       f.beatId += 1
       this.lastBeatAt = this.clock
     } else {
-      f.beatPulse *= Math.pow(BEAT_DECAY, k)
+      const decay = Math.pow(BEAT_DECAY, 1 / Math.max(0.5, beatBoost))
+      f.beatPulse *= Math.pow(decay, k)
       if (f.beatPulse < 0.0005) f.beatPulse = 0
     }
     this.fluxHistory[this.fluxIndex] = lowEnergy

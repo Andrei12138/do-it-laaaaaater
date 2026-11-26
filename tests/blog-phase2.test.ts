@@ -12,6 +12,7 @@ import {
   isValidPageSlug,
   parseByteRange,
   sanitizeImages,
+  sanitizeTrackVisualConfig,
   validateCatalogSection,
   validateMediaKind,
   validatePageSlug
@@ -298,6 +299,116 @@ describe('Phase 2 朋友圈博客纯函数单元测试', () => {
         { time: 18.5, text: '第二句' },
         { time: 25.25, text: '副歌重复' }
       ])
+    })
+  })
+
+  describe('sanitizeTrackVisualConfig (单曲视觉与声学响应配置净化)', () => {
+    it('对越界数值执行精确钳制，保留合法局部覆盖，并过滤非法 waveStyle、NaN 与未知字段', () => {
+      // 1. 下界钳制
+      expect(
+        sanitizeTrackVisualConfig({
+          sensitivity: -1,
+          bassGain: -0.5,
+          midGain: -10,
+          trebleGain: -0.01,
+          beatBoost: -2,
+          smoothing: 0,
+          silkSpeed: 0.01,
+          silkWarp: -3,
+          silkOpacity: 0.02,
+          silkSoftness: -0.4,
+          waveScale: 0.05,
+          waveOpacity: 0.01,
+          waveStyle: 'bars'
+        })
+      ).toEqual({
+        sensitivity: 0.2,
+        bassGain: 0,
+        midGain: 0,
+        trebleGain: 0,
+        beatBoost: 0,
+        smoothing: 0.1,
+        silkSpeed: 0.2,
+        silkWarp: 0.2,
+        silkOpacity: 0.15,
+        silkSoftness: 0,
+        waveScale: 0.3,
+        waveOpacity: 0.2,
+        waveStyle: 'bars'
+      })
+
+      // 2. 上界钳制
+      expect(
+        sanitizeTrackVisualConfig({
+          sensitivity: 9.9,
+          bassGain: 5,
+          midGain: 3.2,
+          trebleGain: 2.5,
+          beatBoost: 100,
+          smoothing: 0.99,
+          silkSpeed: 4.5,
+          silkWarp: 3.1,
+          silkOpacity: 1.5,
+          silkSoftness: 2,
+          waveScale: 8,
+          waveOpacity: 1.8,
+          waveStyle: 'wings'
+        })
+      ).toEqual({
+        sensitivity: 2.5,
+        bassGain: 2.0,
+        midGain: 2.0,
+        trebleGain: 2.0,
+        beatBoost: 2.0,
+        smoothing: 0.9,
+        silkSpeed: 2.2,
+        silkWarp: 2.0,
+        silkOpacity: 0.95,
+        silkSoftness: 1.0,
+        waveScale: 2.0,
+        waveOpacity: 1.0,
+        waveStyle: 'wings'
+      })
+
+      // 3. 保留合法的局部覆盖且不注入未设置字段
+      expect(
+        sanitizeTrackVisualConfig({
+          sensitivity: 1.35,
+          bassGain: 1.6,
+          silkOpacity: 0.72,
+          waveStyle: 'horizon'
+        })
+      ).toEqual({
+        sensitivity: 1.35,
+        bassGain: 1.6,
+        silkOpacity: 0.72,
+        waveStyle: 'horizon'
+      })
+
+      // 4. 拒绝非法 waveStyle、NaN、Infinity、布尔值及未知字段
+      expect(
+        sanitizeTrackVisualConfig({
+          sensitivity: Number.NaN,
+          bassGain: Number.POSITIVE_INFINITY,
+          midGain: Number.NEGATIVE_INFINITY,
+          trebleGain: 'not-a-number',
+          beatBoost: null,
+          smoothing: undefined,
+          silkSpeed: true,
+          silkSoftness: '',
+          waveStyle: 'spiral',
+          waveScale: 1.25,
+          unknownField: 42
+        })
+      ).toEqual({
+        waveScale: 1.25
+      })
+
+      // 5. 非普通对象输入安全返回空对象
+      expect(sanitizeTrackVisualConfig(null)).toEqual({})
+      expect(sanitizeTrackVisualConfig(undefined)).toEqual({})
+      expect(sanitizeTrackVisualConfig('invalid')).toEqual({})
+      expect(sanitizeTrackVisualConfig([1, 2, 3])).toEqual({})
     })
   })
 })
@@ -662,7 +773,20 @@ function createPhase2TestEnv() {
           return { success: true }
         }
         if (normalized.startsWith('INSERT INTO blog_music_tracks')) {
-          const [id, userId, title, artist, album, audioMediaId, coverMediaId, lrcText, durationSec, sortOrder, createdAt] = bound
+          const [
+            id,
+            userId,
+            title,
+            artist,
+            album,
+            audioMediaId,
+            coverMediaId,
+            lrcText,
+            durationSec,
+            sortOrder,
+            visualConfigJson,
+            createdAt
+          ] = bound
           musicRows.set(String(id), {
             id,
             user_id: userId,
@@ -674,6 +798,7 @@ function createPhase2TestEnv() {
             lrc_text: lrcText,
             duration_sec: durationSec,
             sort_order: sortOrder,
+            visual_config_json: visualConfigJson,
             created_at: createdAt
           })
           return { success: true }
@@ -1085,7 +1210,7 @@ describe('Phase 2 Worker 接口集成测试', () => {
     )
     const audioId = ((await mediaRes.json()) as { media: Array<{ id: string }> }).media[0].id
 
-    // 1. Music Tracks CRUD
+    // 1. Music Tracks CRUD + visualConfig 净化持久化与 bootstrap?full=1 下发
     const trackCreateRes = await handleBlogApi(
       new Request('https://blog.example.com/api/blog/music/tracks', {
         method: 'POST',
@@ -1095,7 +1220,13 @@ describe('Phase 2 Worker 接口集成测试', () => {
           artist: 'Jay',
           audioMediaId: audioId,
           lrcText: '[00:01.00] 一群嗜血的蚂蚁',
-          sortOrder: 1
+          sortOrder: 1,
+          visualConfig: {
+            sensitivity: 9.0,
+            bassGain: 1.45,
+            waveStyle: 'horizon',
+            extraBadKey: 'ignored'
+          }
         })
       }),
       env,
@@ -1104,7 +1235,13 @@ describe('Phase 2 Worker 接口集成测试', () => {
     expect(trackCreateRes.status).toBe(201)
     const track = (await trackCreateRes.json()) as BlogMusicTrack
     expect(track.audioUrl).toBe(`/api/blog/media/${audioId}`)
+    expect(track.visualConfig).toEqual({
+      sensitivity: 2.5,
+      bassGain: 1.45,
+      waveStyle: 'horizon'
+    })
 
+    // 未携带 visualConfig 的 PATCH 必须原样保留既有 visualConfig
     const trackPatchRes = await handleBlogApi(
       new Request(`https://blog.example.com/api/blog/music/tracks/${track.id}`, {
         method: 'PATCH',
@@ -1115,14 +1252,66 @@ describe('Phase 2 Worker 接口集成测试', () => {
       ctx
     )
     expect(trackPatchRes.status).toBe(200)
-    expect(((await trackPatchRes.json()) as BlogMusicTrack).album).toBe('十一月的萧邦')
+    const patchedTrackMeta = (await trackPatchRes.json()) as BlogMusicTrack
+    expect(patchedTrackMeta.album).toBe('十一月的萧邦')
+    expect(patchedTrackMeta.visualConfig).toEqual({
+      sensitivity: 2.5,
+      bassGain: 1.45,
+      waveStyle: 'horizon'
+    })
+
+    // 携带 visualConfig 的 PATCH 会重新净化并覆盖存储
+    const trackVisualPatchRes = await handleBlogApi(
+      new Request(`https://blog.example.com/api/blog/music/tracks/${track.id}`, {
+        method: 'PATCH',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          visualConfig: {
+            silkSpeed: 1.3,
+            silkOpacity: 0.01,
+            waveStyle: 'wings',
+            waveScale: 1.4
+          }
+        })
+      }),
+      env,
+      ctx
+    )
+    expect(trackVisualPatchRes.status).toBe(200)
+    expect(((await trackVisualPatchRes.json()) as BlogMusicTrack).visualConfig).toEqual({
+      silkSpeed: 1.3,
+      silkOpacity: 0.15,
+      waveStyle: 'wings',
+      waveScale: 1.4
+    })
 
     const tracksListRes = await handleBlogApi(
       new Request('https://blog.example.com/api/blog/music/tracks'),
       env,
       ctx
     )
-    expect(((await tracksListRes.json()) as { tracks: BlogMusicTrack[] }).tracks).toHaveLength(1)
+    const listedTracks = ((await tracksListRes.json()) as { tracks: BlogMusicTrack[] }).tracks
+    expect(listedTracks).toHaveLength(1)
+    expect(listedTracks[0].visualConfig).toEqual({
+      silkSpeed: 1.3,
+      silkOpacity: 0.15,
+      waveStyle: 'wings',
+      waveScale: 1.4
+    })
+
+    const bootWithTrackRes = await handleBlogApi(
+      new Request('https://blog.example.com/api/blog/bootstrap?full=1'),
+      env,
+      ctx
+    )
+    const bootWithTrack = (await bootWithTrackRes.json()) as { tracks: BlogMusicTrack[] }
+    expect(bootWithTrack.tracks).toHaveLength(1)
+    expect(bootWithTrack.tracks[0].visualConfig).toEqual({
+      silkSpeed: 1.3,
+      silkOpacity: 0.15,
+      waveStyle: 'wings',
+      waveScale: 1.4
+    })
 
     // 2. Standalone Page (/about) 默认值、PUT 更新与留言板
     const defaultAboutRes = await handleBlogApi(
