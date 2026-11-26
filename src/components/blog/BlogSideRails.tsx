@@ -14,12 +14,12 @@ import {
   fetchBlogFriends,
   fetchBlogPage
 } from '../../blog-api'
+import { getAmbientEffectMeta } from '../../blog-ambient'
 import { generateExcerpt, type TocHeading } from '../../blog-markdown'
 import {
   parseLrc,
   useBlogMusicActions,
-  useBlogMusicProgress,
-  type BlogAmbientMode
+  useBlogMusicProgress
 } from '../../blog-music'
 import type {
   BlogArchiveItem,
@@ -605,18 +605,6 @@ function AlbumRailWidget({
    Right Widget 1: Persistent Music Player Card (音乐播放器)
    -------------------------------------------------------------------------- */
 
-const AMBIENT_MODE_NEXT: Record<BlogAmbientMode, BlogAmbientMode> = {
-  waves: 'silk',
-  silk: 'minimal',
-  minimal: 'waves'
-}
-
-const AMBIENT_MODE_SHORT_LABELS: Record<BlogAmbientMode, string> = {
-  waves: '声波',
-  silk: '极光',
-  minimal: '极简'
-}
-
 function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
   const {
     tracks,
@@ -628,6 +616,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
     toggleMute,
     ambientMode,
     setAmbientMode,
+    activeVisualConfig,
     openImmersion,
     togglePlay,
     prevTrack,
@@ -739,7 +728,9 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
     effectiveDuration > 0
       ? Math.min(100, Math.max(0, (currentTime / effectiveDuration) * 100))
       : 0
-  const ambientLabel = AMBIENT_MODE_SHORT_LABELS[ambientMode] ?? '声波'
+  const effectMeta = getAmbientEffectMeta(activeVisualConfig.effect)
+  const ambientLabel =
+    ambientMode === 'minimal' ? '特效 · 已关闭' : `特效 · ${effectMeta.name}`
   const showTuner = isOwner && Boolean(currentTrack)
 
   const footerPillBaseStyle: CSSProperties = {
@@ -912,7 +903,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
         style={{
           display: 'grid',
           gridTemplateColumns: showTuner
-            ? 'minmax(0, 1.15fr) minmax(0, 1.15fr) minmax(0, 0.8fr)'
+            ? 'minmax(0, 1fr) minmax(0, 1.25fr) auto'
             : 'repeat(2, minmax(0, 1fr))',
           gap: 6,
           paddingTop: 2
@@ -926,7 +917,9 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
           title="打开全屏沉浸封面与歌词舞台"
         >
           <AppIcon name="sparkles" size={12} />
-          <span>沉浸舞台</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            沉浸舞台
+          </span>
         </button>
 
         <button
@@ -942,11 +935,18 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
                 }
               : footerPillBaseStyle
           }
-          onClick={() => setAmbientMode(AMBIENT_MODE_NEXT[ambientMode] ?? 'waves')}
-          title="循环切换音乐播放背景氛围（声波 / 极光 / 极简）"
-          aria-label={`背景氛围：${ambientLabel}，点击切换`}
+          onClick={() => setAmbientMode(ambientMode === 'minimal' ? 'active' : 'minimal')}
+          title={
+            ambientMode === 'minimal'
+              ? `点击开启背景特效（当前本曲特效：${effectMeta.name}）`
+              : `当前特效：${effectMeta.name}（${effectMeta.enName}），点击关闭背景特效`
+          }
+          aria-label={`${ambientLabel}，点击切换`}
+          aria-pressed={ambientMode !== 'minimal'}
         >
-          <span>氛围 · {ambientLabel}</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {ambientLabel}
+          </span>
         </button>
 
         {showTuner && (
@@ -957,15 +957,15 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
               tunerOpen
                 ? {
                     ...footerPillBaseStyle,
-                    padding: '0 8px',
+                    padding: '0 9px',
                     background: 'var(--blog-link-soft)',
                     color: 'var(--blog-link)',
                     borderColor: 'transparent'
                   }
-                : { ...footerPillBaseStyle, padding: '0 8px' }
+                : { ...footerPillBaseStyle, padding: '0 9px' }
             }
             onClick={() => openTuner(currentTrack?.trackId)}
-            title="打开本曲实时视觉调参面板（音频响应 / 丝绸极光 / 声波形态）"
+            title="打开本曲实时视觉调参面板（15 款开源特效 / 特效参数 / 音频响应）"
             aria-label="打开本曲实时视觉调参面板"
             aria-pressed={tunerOpen}
           >

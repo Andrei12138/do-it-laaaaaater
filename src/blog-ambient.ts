@@ -1,7 +1,15 @@
-import type { BlogTrackVisualConfig, BlogWaveStyle } from './blog-types'
+import type {
+  BlogAmbientEffectGroup,
+  BlogAmbientEffectId,
+  BlogTrackVisualConfig
+} from './blog-types'
 
-export type BlogAmbientMode = 'waves' | 'silk' | 'minimal'
-export type { BlogTrackVisualConfig, BlogWaveStyle } from './blog-types'
+export type BlogAmbientMode = 'active' | 'minimal'
+export type {
+  BlogAmbientEffectGroup,
+  BlogAmbientEffectId,
+  BlogTrackVisualConfig
+} from './blog-types'
 
 export interface BlogAmbientPalette {
   accentLight: string       // hex clamped to WCAG-legible lightness 36%-46% on white
@@ -41,19 +49,19 @@ export const DEFAULT_AMBIENT_PALETTE: BlogAmbientPalette = {
   glowC: '56, 189, 248'
 }
 
-export const BLOG_AMBIENT_MODES: readonly BlogAmbientMode[] = ['waves', 'silk', 'minimal']
+export const BLOG_AMBIENT_MODES: readonly BlogAmbientMode[] = ['active', 'minimal']
 
-/** Legacy persisted modes (removed vinyl wall / wallpaper / glow) all migrate to the silk shader. */
-const LEGACY_AMBIENT_MODES = new Set(['vinyl', 'wallpaper', 'glow'])
+/** Legacy persisted modes all migrate cleanly to `'active'` so existing visitors keep visual effects on. */
+const LEGACY_ACTIVE_AMBIENT_MODES = new Set(['waves', 'silk', 'vinyl', 'wallpaper', 'glow'])
 
 export function isBlogAmbientMode(value: unknown): value is BlogAmbientMode {
-  return value === 'waves' || value === 'silk' || value === 'minimal'
+  return value === 'active' || value === 'minimal'
 }
 
 export function normalizeAmbientMode(raw: unknown): BlogAmbientMode {
   if (isBlogAmbientMode(raw)) return raw
-  if (typeof raw === 'string' && LEGACY_AMBIENT_MODES.has(raw)) return 'silk'
-  return 'waves'
+  if (typeof raw === 'string' && LEGACY_ACTIVE_AMBIENT_MODES.has(raw)) return 'active'
+  return 'active'
 }
 
 export function readAmbientMode(): BlogAmbientMode {
@@ -62,14 +70,14 @@ export function readAmbientMode(): BlogAmbientMode {
     const raw = storage?.getItem(BLOG_AMBIENT_MODE_KEY)
     const mode = normalizeAmbientMode(raw)
     // Rewrite legacy values once so storage stays clean for every later read.
-    if (raw && raw !== mode && LEGACY_AMBIENT_MODES.has(raw)) {
+    if (raw && raw !== mode && LEGACY_ACTIVE_AMBIENT_MODES.has(raw)) {
       storage?.setItem(BLOG_AMBIENT_MODE_KEY, mode)
     }
     return mode
   } catch {
     // Ignore storage access errors in restricted browsing modes.
   }
-  return 'waves'
+  return 'active'
 }
 
 export function saveAmbientMode(mode: BlogAmbientMode): void {
@@ -506,28 +514,192 @@ export function extractCoverPalette(imageUrl: string): Promise<BlogAmbientPalett
 }
 
 /* ==========================================================================
-   Per-track visual tuning (audio response · silk aurora · waves visualiser)
+   Per-track visual tuning (15 curated open-source effects + audio response)
    ========================================================================== */
 
-export const BLOG_WAVE_STYLES: readonly BlogWaveStyle[] = ['bars', 'horizon', 'wings']
+export interface BlogAmbientEffectMeta {
+  id: BlogAmbientEffectId
+  group: BlogAmbientEffectGroup
+  name: string
+  enName: string
+  tagline: string
+  intensityLabel: string
+  scaleLabel: string
+}
+
+export const BLOG_AMBIENT_EFFECTS: readonly BlogAmbientEffectMeta[] = Object.freeze([
+  // React Bits (7 MIT WebGL shaders)
+  {
+    id: 'threads',
+    group: 'react-bits',
+    name: '共振丝线',
+    enName: 'Threads',
+    tagline: '纤细发丝全屏交织，随旋律与节拍拨动起伏',
+    intensityLabel: '波动幅度',
+    scaleLabel: '丝线间距'
+  },
+  {
+    id: 'iridescence',
+    group: 'react-bits',
+    name: '虹彩流体膜',
+    enName: 'Iridescence',
+    tagline: '珍珠母贝般的液态彩光曲面，色彩流动感极强',
+    intensityLabel: '虹彩扰动',
+    scaleLabel: '色带密度'
+  },
+  {
+    id: 'liquid-chrome',
+    group: 'react-bits',
+    name: '液态铬金属',
+    enName: 'Liquid Chrome',
+    tagline: '丝滑水银涡流与镜面高光，支持音频与鼠标扰动',
+    intensityLabel: '涡流振幅',
+    scaleLabel: '波纹频率'
+  },
+  {
+    id: 'aurora',
+    group: 'react-bits',
+    name: '北极光幕',
+    enName: 'Aurora',
+    tagline: '轻盈飘动的极光幕帘，柔和铺满背景不抢视线',
+    intensityLabel: '极光振幅',
+    scaleLabel: '光幕柔和度'
+  },
+  {
+    id: 'light-rays',
+    group: 'react-bits',
+    name: '丁达尔光束',
+    enName: 'Light Rays',
+    tagline: '顶部垂落的体积光柱与柔雾散射，通透高级',
+    intensityLabel: '光束扩散',
+    scaleLabel: '光柱长度'
+  },
+  {
+    id: 'prism',
+    group: 'react-bits',
+    name: '旋转棱镜光',
+    enName: 'Prism',
+    tagline: '立体旋转光谱棱镜，色散光芒随鼓点呼吸',
+    intensityLabel: '光谱辉度',
+    scaleLabel: '棱镜尺度'
+  },
+  {
+    id: 'color-bends',
+    group: 'react-bits',
+    name: '流动彩带',
+    enName: 'Color Bends',
+    tagline: '流畅弯折的多色光谱丝带，干净通透富有动感',
+    intensityLabel: '弯折扭曲',
+    scaleLabel: '彩带尺度'
+  },
+  // Paper Shaders (8 Apache-2.0 zero-dependency WebGL shaders)
+  {
+    id: 'mesh-gradient',
+    group: 'paper',
+    name: '流光网格',
+    enName: 'MeshGradient',
+    tagline: '大幅度有机旋涡流动的多色丝绸网格（默认推荐）',
+    intensityLabel: '扭曲与旋涡',
+    scaleLabel: '网格尺度'
+  },
+  {
+    id: 'warp',
+    group: 'paper',
+    name: '丝绸波浪',
+    enName: 'Warp',
+    tagline: '流动丝绸褶皱与大理石纹波浪，动效饱满',
+    intensityLabel: '褶皱扭曲',
+    scaleLabel: '波浪尺度'
+  },
+  {
+    id: 'liquid-metal',
+    group: 'paper',
+    name: '液态水银',
+    enName: 'LiquidMetal',
+    tagline: 'Paper 官方物理折光与色散液态金属质感',
+    intensityLabel: '折光变形',
+    scaleLabel: '纹路尺度'
+  },
+  {
+    id: 'god-rays',
+    group: 'paper',
+    name: '圣光光束',
+    enName: 'GodRays',
+    tagline: '中心散射的耀眼圣光射线，层次分明',
+    intensityLabel: '光束强度',
+    scaleLabel: '射线密度'
+  },
+  {
+    id: 'neuro-noise',
+    group: 'paper',
+    name: '神经光脉',
+    enName: 'NeuroNoise',
+    tagline: '液态发光神经网络脉络，交点随节拍律动',
+    intensityLabel: '脉络对比',
+    scaleLabel: '脉络尺度'
+  },
+  {
+    id: 'metaballs',
+    group: 'paper',
+    name: '融球流体',
+    enName: 'Metaballs',
+    tagline: '多色有机光球在画布游走、拉丝融合',
+    intensityLabel: '光球数量',
+    scaleLabel: '光球尺度'
+  },
+  {
+    id: 'grain-gradient',
+    group: 'paper',
+    name: '胶片颗粒',
+    enName: 'GrainGradient',
+    tagline: '电影质感颗粒与抽象流体渐变结合',
+    intensityLabel: '颗粒质感',
+    scaleLabel: '形态尺度'
+  },
+  {
+    id: 'smoke-ring',
+    group: 'paper',
+    name: '烟雾光环',
+    enName: 'SmokeRing',
+    tagline: '层叠噪声塑造的柔和彩烟环形光晕',
+    intensityLabel: '烟雾厚度',
+    scaleLabel: '光环半径'
+  }
+])
+
+export const BLOG_AMBIENT_EFFECT_IDS: readonly BlogAmbientEffectId[] = Object.freeze(
+  BLOG_AMBIENT_EFFECTS.map((item) => item.id)
+)
+
+const AMBIENT_EFFECT_SET = new Set<string>(BLOG_AMBIENT_EFFECT_IDS)
+
+export function isBlogAmbientEffectId(value: unknown): value is BlogAmbientEffectId {
+  return typeof value === 'string' && AMBIENT_EFFECT_SET.has(value)
+}
+
+export function getAmbientEffectMeta(effect: BlogAmbientEffectId): BlogAmbientEffectMeta {
+  return (
+    BLOG_AMBIENT_EFFECTS.find((item) => item.id === effect) ??
+    BLOG_AMBIENT_EFFECTS.find((item) => item.id === 'mesh-gradient')!
+  )
+}
 
 export const DEFAULT_TRACK_VISUAL_CONFIG: Readonly<BlogTrackVisualConfig> = Object.freeze({
+  effect: 'mesh-gradient',
   sensitivity: 1.0,
   bassGain: 1.1,
   midGain: 1.0,
   trebleGain: 0.9,
   beatBoost: 1.0,
   smoothing: 0.55,
-  silkSpeed: 0.85,
-  silkWarp: 0.72,
-  silkOpacity: 0.62,
-  silkSoftness: 0.88,
-  waveStyle: 'bars',
-  waveScale: 1.0,
-  waveOpacity: 0.78
+  speed: 1.0,
+  intensity: 1.0,
+  scale: 1.0,
+  audioReactivity: 1.0,
+  opacity: 0.78
 })
 
-export type BlogTrackVisualNumericKey = Exclude<keyof BlogTrackVisualConfig, 'waveStyle'>
+export type BlogTrackVisualNumericKey = Exclude<keyof BlogTrackVisualConfig, 'effect'>
 
 /** Inclusive slider ranges + step for every numeric tuning knob. */
 export const TRACK_VISUAL_RANGES: Readonly<
@@ -539,43 +711,89 @@ export const TRACK_VISUAL_RANGES: Readonly<
   trebleGain: { min: 0, max: 2, step: 0.05 },
   beatBoost: { min: 0, max: 2, step: 0.05 },
   smoothing: { min: 0.1, max: 0.9, step: 0.01 },
-  silkSpeed: { min: 0.2, max: 2.2, step: 0.05 },
-  silkWarp: { min: 0.2, max: 2, step: 0.01 },
-  silkOpacity: { min: 0.15, max: 0.95, step: 0.01 },
-  silkSoftness: { min: 0, max: 1, step: 0.01 },
-  waveScale: { min: 0.3, max: 2, step: 0.05 },
-  waveOpacity: { min: 0.2, max: 1, step: 0.01 }
+  speed: { min: 0.1, max: 2.5, step: 0.05 },
+  intensity: { min: 0.1, max: 2.0, step: 0.05 },
+  scale: { min: 0.3, max: 2.2, step: 0.05 },
+  audioReactivity: { min: 0, max: 2.0, step: 0.05 },
+  opacity: { min: 0.15, max: 1.0, step: 0.01 }
 })
 
 const TRACK_VISUAL_NUMERIC_KEYS = Object.keys(TRACK_VISUAL_RANGES) as BlogTrackVisualNumericKey[]
 
-export function isBlogWaveStyle(value: unknown): value is BlogWaveStyle {
-  return value === 'bars' || value === 'horizon' || value === 'wings'
+function parseFiniteNum(raw: unknown): number {
+  return typeof raw === 'number'
+    ? raw
+    : typeof raw === 'string' && raw.trim()
+      ? Number(raw)
+      : Number.NaN
 }
 
 /**
  * Fills missing / invalid fields with defaults and clamps every number into its range.
- * Accepts raw JSON (strings, nulls, junk) safely — always returns a fresh, complete config.
+ * Gracefully migrates legacy pre-v10 configs (silkSpeed / silkWarp / silkSoftness / waveStyle).
  */
 export function normalizeTrackVisualConfig(
   partial?: Partial<BlogTrackVisualConfig> | null
 ): BlogTrackVisualConfig {
   const src = (partial && typeof partial === 'object' ? partial : {}) as Record<string, unknown>
   const out = { ...DEFAULT_TRACK_VISUAL_CONFIG } as BlogTrackVisualConfig
+
   for (const key of TRACK_VISUAL_NUMERIC_KEYS) {
-    const raw = src[key]
-    const num = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() ? Number(raw) : NaN
+    const num = parseFiniteNum(src[key])
     if (Number.isFinite(num)) {
       const range = TRACK_VISUAL_RANGES[key]
       out[key] = Math.round(clamp(num, range.min, range.max) * 1000) / 1000
     }
   }
-  if (isBlogWaveStyle(src.waveStyle)) out.waveStyle = src.waveStyle
+
+  // Legacy field fallback when new keys are absent
+  if (!Number.isFinite(parseFiniteNum(src.speed))) {
+    const legacySpeed = parseFiniteNum(src.silkSpeed)
+    if (Number.isFinite(legacySpeed)) {
+      const r = TRACK_VISUAL_RANGES.speed
+      out.speed = Math.round(clamp(legacySpeed, r.min, r.max) * 1000) / 1000
+    }
+  }
+  if (!Number.isFinite(parseFiniteNum(src.intensity))) {
+    const legacyWarp = parseFiniteNum(src.silkWarp)
+    if (Number.isFinite(legacyWarp)) {
+      const r = TRACK_VISUAL_RANGES.intensity
+      out.intensity = Math.round(clamp(legacyWarp, r.min, r.max) * 1000) / 1000
+    }
+  }
+  if (!Number.isFinite(parseFiniteNum(src.scale))) {
+    const legacyScale = parseFiniteNum(src.waveScale)
+    if (Number.isFinite(legacyScale)) {
+      const r = TRACK_VISUAL_RANGES.scale
+      out.scale = Math.round(clamp(legacyScale, r.min, r.max) * 1000) / 1000
+    }
+  }
+  if (!Number.isFinite(parseFiniteNum(src.opacity))) {
+    const legacyOpacity = Number.isFinite(parseFiniteNum(src.silkOpacity))
+      ? parseFiniteNum(src.silkOpacity)
+      : parseFiniteNum(src.waveOpacity)
+    if (Number.isFinite(legacyOpacity)) {
+      const r = TRACK_VISUAL_RANGES.opacity
+      out.opacity = Math.round(clamp(legacyOpacity, r.min, r.max) * 1000) / 1000
+    }
+  }
+
+  if (isBlogAmbientEffectId(src.effect)) {
+    out.effect = src.effect
+  } else {
+    const legacySoftness = parseFiniteNum(src.silkSoftness)
+    if (Number.isFinite(legacySoftness) && legacySoftness <= 0.35) {
+      out.effect = 'liquid-metal'
+    } else if (typeof src.waveStyle === 'string') {
+      out.effect = 'threads'
+    }
+  }
+
   return out
 }
 
 export function trackVisualConfigEquals(a: BlogTrackVisualConfig, b: BlogTrackVisualConfig): boolean {
-  if (a.waveStyle !== b.waveStyle) return false
+  if (a.effect !== b.effect) return false
   for (const key of TRACK_VISUAL_NUMERIC_KEYS) {
     if (Math.abs(a[key] - b[key]) > 0.0051) return false
   }
@@ -583,7 +801,7 @@ export function trackVisualConfigEquals(a: BlogTrackVisualConfig, b: BlogTrackVi
 }
 
 export interface TrackVisualPreset {
-  id: 'balanced' | 'lyrical' | 'pop' | 'bass' | 'liquid-metal'
+  id: 'mesh-silk' | 'threads-pulse' | 'liquid-metal' | 'aurora-dream' | 'iridescence-pop' | 'chrome-bass'
   label: string
   hint: string
   config: BlogTrackVisualConfig
@@ -591,89 +809,104 @@ export interface TrackVisualPreset {
 
 export const TRACK_VISUAL_PRESETS: readonly TrackVisualPreset[] = Object.freeze([
   {
-    id: 'balanced',
-    label: '默认均衡',
-    hint: '哑光丝绸 · 胶囊频谱，适合大多数歌曲',
+    id: 'mesh-silk',
+    label: '流光丝绸',
+    hint: 'Paper 流光网格 · 灵动多色旋涡，适合大多数曲目',
     config: normalizeTrackVisualConfig(DEFAULT_TRACK_VISUAL_CONFIG)
   },
   {
-    id: 'lyrical',
-    label: '柔和抒情',
-    hint: '慢速柔光、平滑阻尼高，适合钢琴 / 民谣 / 抒情',
+    id: 'threads-pulse',
+    label: '共振丝线',
+    hint: 'React Bits 纤细丝线随旋律交织起伏，克制雅致',
     config: normalizeTrackVisualConfig({
-      sensitivity: 0.85,
-      bassGain: 0.9,
-      midGain: 1.2,
-      trebleGain: 0.85,
-      beatBoost: 0.55,
-      smoothing: 0.78,
-      silkSpeed: 0.55,
-      silkWarp: 0.55,
-      silkOpacity: 0.52,
-      silkSoftness: 0.96,
-      waveStyle: 'horizon',
-      waveScale: 0.85,
-      waveOpacity: 0.68
-    })
-  },
-  {
-    id: 'pop',
-    label: '动感流行',
-    hint: '中高频清亮、节拍弹跳明显，适合流行 / 舞曲',
-    config: normalizeTrackVisualConfig({
-      sensitivity: 1.25,
+      effect: 'threads',
+      sensitivity: 1.15,
       bassGain: 1.15,
-      midGain: 1.1,
-      trebleGain: 1.15,
-      beatBoost: 1.4,
-      smoothing: 0.42,
-      silkSpeed: 1.2,
-      silkWarp: 0.9,
-      silkOpacity: 0.7,
-      silkSoftness: 0.82,
-      waveStyle: 'bars',
-      waveScale: 1.15,
-      waveOpacity: 0.85
-    })
-  },
-  {
-    id: 'bass',
-    label: '重低音电音',
-    hint: '低频权重拉满、冲击强，适合 EDM / Hip-hop',
-    config: normalizeTrackVisualConfig({
-      sensitivity: 1.35,
-      bassGain: 1.75,
-      midGain: 0.85,
-      trebleGain: 0.8,
-      beatBoost: 1.8,
-      smoothing: 0.35,
-      silkSpeed: 1.45,
-      silkWarp: 1.15,
-      silkOpacity: 0.78,
-      silkSoftness: 0.74,
-      waveStyle: 'wings',
-      waveScale: 1.3,
-      waveOpacity: 0.88
+      midGain: 1.2,
+      trebleGain: 1.0,
+      beatBoost: 1.1,
+      smoothing: 0.48,
+      speed: 1.05,
+      intensity: 1.15,
+      scale: 1.0,
+      audioReactivity: 1.25,
+      opacity: 0.84
     })
   },
   {
     id: 'liquid-metal',
-    label: '液态金属',
-    hint: '高光褶皱与镜面脊线，呈现流动的液态金属质感',
+    label: '液态水银',
+    hint: 'Paper 物理折光液态水银，色散金属质感拉满',
     config: normalizeTrackVisualConfig({
+      effect: 'liquid-metal',
       sensitivity: 1.1,
-      bassGain: 1.2,
+      bassGain: 1.25,
       midGain: 1.0,
-      trebleGain: 1.0,
-      beatBoost: 1.15,
-      smoothing: 0.5,
-      silkSpeed: 1.05,
-      silkWarp: 1.35,
-      silkOpacity: 0.72,
-      silkSoftness: 0.08,
-      waveStyle: 'bars',
-      waveScale: 1.0,
-      waveOpacity: 0.8
+      trebleGain: 1.05,
+      beatBoost: 1.2,
+      smoothing: 0.48,
+      speed: 1.05,
+      intensity: 1.1,
+      scale: 1.05,
+      audioReactivity: 1.15,
+      opacity: 0.72
+    })
+  },
+  {
+    id: 'aurora-dream',
+    label: '北极光幕',
+    hint: '慢速柔和极光，适合钢琴 / 民谣 / 抒情曲目',
+    config: normalizeTrackVisualConfig({
+      effect: 'aurora',
+      sensitivity: 0.9,
+      bassGain: 0.95,
+      midGain: 1.15,
+      trebleGain: 0.9,
+      beatBoost: 0.65,
+      smoothing: 0.74,
+      speed: 0.75,
+      intensity: 1.0,
+      scale: 1.0,
+      audioReactivity: 0.85,
+      opacity: 0.76
+    })
+  },
+  {
+    id: 'iridescence-pop',
+    label: '虹彩律动',
+    hint: '珍珠母贝虹彩流体，适合流行 / 舞曲 / 合成器',
+    config: normalizeTrackVisualConfig({
+      effect: 'iridescence',
+      sensitivity: 1.25,
+      bassGain: 1.15,
+      midGain: 1.1,
+      trebleGain: 1.2,
+      beatBoost: 1.35,
+      smoothing: 0.42,
+      speed: 1.15,
+      intensity: 1.15,
+      scale: 1.0,
+      audioReactivity: 1.2,
+      opacity: 0.68
+    })
+  },
+  {
+    id: 'chrome-bass',
+    label: '液态铬电音',
+    hint: '重低音强驱动液态铬涡流，适合 EDM / 摇滚',
+    config: normalizeTrackVisualConfig({
+      effect: 'liquid-chrome',
+      sensitivity: 1.35,
+      bassGain: 1.7,
+      midGain: 0.9,
+      trebleGain: 0.85,
+      beatBoost: 1.65,
+      smoothing: 0.36,
+      speed: 1.25,
+      intensity: 1.25,
+      scale: 1.1,
+      audioReactivity: 1.45,
+      opacity: 0.74
     })
   }
 ])

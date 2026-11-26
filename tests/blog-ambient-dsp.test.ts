@@ -3,11 +3,14 @@ import {
   AUDIO_BAND_COUNT,
   AUDIO_WAVEFORM_POINTS,
   AudioFrameAnalyzer,
+  BLOG_AMBIENT_EFFECTS,
+  BLOG_AMBIENT_EFFECT_IDS,
   BLOG_AMBIENT_MODES,
   DEFAULT_TRACK_VISUAL_CONFIG,
   TRACK_VISUAL_PRESETS,
   computeLogBandEdges,
   findMatchingVisualPreset,
+  getAmbientEffectMeta,
   normalizeAmbientMode,
   normalizeTrackVisualConfig,
   type BlogTrackVisualConfig
@@ -33,16 +36,32 @@ function sineTimeDomain(amp: number): Uint8Array {
   return data
 }
 
-describe('ambient mode migration', () => {
-  it('keeps only waves / silk / minimal and migrates legacy modes to silk', () => {
-    expect(BLOG_AMBIENT_MODES).toEqual(['waves', 'silk', 'minimal'])
-    expect(normalizeAmbientMode('vinyl')).toBe('silk')
-    expect(normalizeAmbientMode('wallpaper')).toBe('silk')
-    expect(normalizeAmbientMode('glow')).toBe('silk')
-    expect(normalizeAmbientMode('silk')).toBe('silk')
+describe('ambient mode & 15-effect catalog', () => {
+  it('keeps active / minimal modes and migrates all legacy modes to active', () => {
+    expect(BLOG_AMBIENT_MODES).toEqual(['active', 'minimal'])
+    expect(normalizeAmbientMode('waves')).toBe('active')
+    expect(normalizeAmbientMode('silk')).toBe('active')
+    expect(normalizeAmbientMode('vinyl')).toBe('active')
+    expect(normalizeAmbientMode('wallpaper')).toBe('active')
+    expect(normalizeAmbientMode('glow')).toBe('active')
+    expect(normalizeAmbientMode('active')).toBe('active')
     expect(normalizeAmbientMode('minimal')).toBe('minimal')
-    expect(normalizeAmbientMode(null)).toBe('waves')
-    expect(normalizeAmbientMode('bogus')).toBe('waves')
+    expect(normalizeAmbientMode(null)).toBe('active')
+    expect(normalizeAmbientMode('bogus')).toBe('active')
+  })
+
+  it('registers all 15 open-source effects (7 React Bits + 8 Paper Shaders)', () => {
+    expect(BLOG_AMBIENT_EFFECTS).toHaveLength(15)
+    expect(BLOG_AMBIENT_EFFECT_IDS).toHaveLength(15)
+    expect(BLOG_AMBIENT_EFFECTS.filter((item) => item.group === 'react-bits')).toHaveLength(7)
+    expect(BLOG_AMBIENT_EFFECTS.filter((item) => item.group === 'paper')).toHaveLength(8)
+    for (const id of BLOG_AMBIENT_EFFECT_IDS) {
+      const meta = getAmbientEffectMeta(id)
+      expect(meta.id).toBe(id)
+      expect(meta.name.length).toBeGreaterThan(0)
+      expect(meta.intensityLabel.length).toBeGreaterThan(0)
+      expect(meta.scaleLabel.length).toBeGreaterThan(0)
+    }
   })
 })
 
@@ -121,61 +140,82 @@ describe('normalizeTrackVisualConfig', () => {
       DEFAULT_TRACK_VISUAL_CONFIG
     )
     expect(DEFAULT_TRACK_VISUAL_CONFIG).toMatchObject({
+      effect: 'mesh-gradient',
       sensitivity: 1,
       bassGain: 1.1,
       midGain: 1,
       trebleGain: 0.9,
       beatBoost: 1,
       smoothing: 0.55,
-      silkSpeed: 0.85,
-      silkWarp: 0.72,
-      silkOpacity: 0.62,
-      silkSoftness: 0.88,
-      waveStyle: 'bars',
-      waveScale: 1,
-      waveOpacity: 0.78
+      speed: 1,
+      intensity: 1,
+      scale: 1,
+      audioReactivity: 1,
+      opacity: 0.78
     })
   })
 
-  it('merges partial input, clamps every range and rejects invalid values', () => {
+  it('merges partial input, clamps every range, rejects invalid effects, and migrates legacy fields', () => {
     const cfg = normalizeTrackVisualConfig({
+      effect: 'non-existent' as unknown as BlogTrackVisualConfig['effect'],
       sensitivity: 9,
       bassGain: -3,
       trebleGain: 1.4,
       smoothing: 0,
-      silkSpeed: Number.NaN,
-      silkOpacity: 0.01,
-      silkSoftness: 4,
-      waveScale: '1.5' as unknown as number,
-      waveOpacity: Number.POSITIVE_INFINITY,
-      waveStyle: 'dots' as unknown as BlogTrackVisualConfig['waveStyle']
+      speed: Number.NaN,
+      intensity: 4,
+      scale: '1.5' as unknown as number,
+      audioReactivity: -1,
+      opacity: 0.01
     })
+    expect(cfg.effect).toBe('mesh-gradient')
     expect(cfg.sensitivity).toBe(2.5)
     expect(cfg.bassGain).toBe(0)
     expect(cfg.trebleGain).toBe(1.4)
     expect(cfg.midGain).toBe(DEFAULT_TRACK_VISUAL_CONFIG.midGain)
     expect(cfg.smoothing).toBe(0.1)
-    expect(cfg.silkSpeed).toBe(DEFAULT_TRACK_VISUAL_CONFIG.silkSpeed)
-    expect(cfg.silkOpacity).toBe(0.15)
-    expect(cfg.silkSoftness).toBe(1)
-    expect(cfg.waveScale).toBe(1.5)
-    expect(cfg.waveOpacity).toBe(DEFAULT_TRACK_VISUAL_CONFIG.waveOpacity)
-    expect(cfg.waveStyle).toBe('bars')
-    expect(normalizeTrackVisualConfig({ waveStyle: 'wings' }).waveStyle).toBe('wings')
-    expect(normalizeTrackVisualConfig({ waveStyle: 'horizon' }).waveStyle).toBe('horizon')
+    expect(cfg.speed).toBe(DEFAULT_TRACK_VISUAL_CONFIG.speed)
+    expect(cfg.intensity).toBe(2)
+    expect(cfg.scale).toBe(1.5)
+    expect(cfg.audioReactivity).toBe(0)
+    expect(cfg.opacity).toBe(0.15)
+
+    for (const id of BLOG_AMBIENT_EFFECT_IDS) {
+      expect(normalizeTrackVisualConfig({ effect: id }).effect).toBe(id)
+    }
+
+    // Legacy D1 record migration
+    const legacyMetal = normalizeTrackVisualConfig({
+      silkSpeed: 1.3,
+      silkWarp: 1.4,
+      silkOpacity: 0.66,
+      silkSoftness: 0.1
+    } as unknown as Partial<BlogTrackVisualConfig>)
+    expect(legacyMetal.effect).toBe('liquid-metal')
+    expect(legacyMetal.speed).toBe(1.3)
+    expect(legacyMetal.intensity).toBe(1.4)
+    expect(legacyMetal.opacity).toBe(0.66)
+
+    const legacyWave = normalizeTrackVisualConfig({
+      waveStyle: 'horizon',
+      waveScale: 1.25,
+      waveOpacity: 0.82
+    } as unknown as Partial<BlogTrackVisualConfig>)
+    expect(legacyWave.effect).toBe('threads')
+    expect(legacyWave.scale).toBe(1.25)
+    expect(legacyWave.opacity).toBe(0.82)
   })
 
-  it('ships curated presets including a glossy liquid-metal look', () => {
+  it('ships curated presets covering Paper Shaders and React Bits including liquid-metal', () => {
     const labels = TRACK_VISUAL_PRESETS.map((preset) => preset.label)
-    expect(labels).toEqual(['默认均衡', '柔和抒情', '动感流行', '重低音电音', '液态金属'])
+    expect(labels).toEqual(['流光丝绸', '共振丝线', '液态水银', '北极光幕', '虹彩律动', '液态铬电音'])
     const metal = TRACK_VISUAL_PRESETS.find((preset) => preset.id === 'liquid-metal')!
-    expect(metal.config.silkSoftness).toBeLessThan(0.15)
-    expect(metal.config.silkWarp).toBeGreaterThan(1.2)
+    expect(metal.config.effect).toBe('liquid-metal')
     for (const preset of TRACK_VISUAL_PRESETS) {
       expect(normalizeTrackVisualConfig(preset.config)).toEqual(preset.config)
     }
-    expect(findMatchingVisualPreset(normalizeTrackVisualConfig(null))?.id).toBe('balanced')
-    expect(findMatchingVisualPreset(normalizeTrackVisualConfig({ silkSpeed: 2.1 }))).toBeNull()
+    expect(findMatchingVisualPreset(normalizeTrackVisualConfig(null))?.id).toBe('mesh-silk')
+    expect(findMatchingVisualPreset(normalizeTrackVisualConfig({ speed: 2.3 }))).toBeNull()
   })
 })
 

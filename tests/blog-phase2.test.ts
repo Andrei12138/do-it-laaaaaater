@@ -303,105 +303,115 @@ describe('Phase 2 朋友圈博客纯函数单元测试', () => {
   })
 
   describe('sanitizeTrackVisualConfig (单曲视觉与声学响应配置净化)', () => {
-    it('对越界数值执行精确钳制，保留合法局部覆盖，并过滤非法 waveStyle、NaN 与未知字段', () => {
+    it('对越界数值执行精确钳制，保留合法局部覆盖，过滤非法 effect/NaN/未知字段，并兼容迁移旧字段', () => {
       // 1. 下界钳制
       expect(
         sanitizeTrackVisualConfig({
+          effect: 'threads',
           sensitivity: -1,
           bassGain: -0.5,
           midGain: -10,
           trebleGain: -0.01,
           beatBoost: -2,
           smoothing: 0,
-          silkSpeed: 0.01,
-          silkWarp: -3,
-          silkOpacity: 0.02,
-          silkSoftness: -0.4,
-          waveScale: 0.05,
-          waveOpacity: 0.01,
-          waveStyle: 'bars'
+          speed: 0.01,
+          intensity: -3,
+          scale: 0.05,
+          audioReactivity: -1,
+          opacity: 0.02
         })
       ).toEqual({
+        effect: 'threads',
         sensitivity: 0.2,
         bassGain: 0,
         midGain: 0,
         trebleGain: 0,
         beatBoost: 0,
         smoothing: 0.1,
-        silkSpeed: 0.2,
-        silkWarp: 0.2,
-        silkOpacity: 0.15,
-        silkSoftness: 0,
-        waveScale: 0.3,
-        waveOpacity: 0.2,
-        waveStyle: 'bars'
+        speed: 0.1,
+        intensity: 0.1,
+        scale: 0.3,
+        audioReactivity: 0,
+        opacity: 0.15
       })
 
       // 2. 上界钳制
       expect(
         sanitizeTrackVisualConfig({
+          effect: 'liquid-metal',
           sensitivity: 9.9,
           bassGain: 5,
           midGain: 3.2,
           trebleGain: 2.5,
           beatBoost: 100,
           smoothing: 0.99,
-          silkSpeed: 4.5,
-          silkWarp: 3.1,
-          silkOpacity: 1.5,
-          silkSoftness: 2,
-          waveScale: 8,
-          waveOpacity: 1.8,
-          waveStyle: 'wings'
+          speed: 4.5,
+          intensity: 3.1,
+          scale: 8,
+          audioReactivity: 5,
+          opacity: 1.8
         })
       ).toEqual({
+        effect: 'liquid-metal',
         sensitivity: 2.5,
         bassGain: 2.0,
         midGain: 2.0,
         trebleGain: 2.0,
         beatBoost: 2.0,
         smoothing: 0.9,
-        silkSpeed: 2.2,
-        silkWarp: 2.0,
-        silkOpacity: 0.95,
-        silkSoftness: 1.0,
-        waveScale: 2.0,
-        waveOpacity: 1.0,
-        waveStyle: 'wings'
+        speed: 2.5,
+        intensity: 2.0,
+        scale: 2.2,
+        audioReactivity: 2.0,
+        opacity: 1.0
       })
 
       // 3. 保留合法的局部覆盖且不注入未设置字段
       expect(
         sanitizeTrackVisualConfig({
+          effect: 'aurora',
           sensitivity: 1.35,
           bassGain: 1.6,
-          silkOpacity: 0.72,
-          waveStyle: 'horizon'
+          opacity: 0.72
         })
       ).toEqual({
+        effect: 'aurora',
         sensitivity: 1.35,
         bassGain: 1.6,
-        silkOpacity: 0.72,
-        waveStyle: 'horizon'
+        opacity: 0.72
       })
 
-      // 4. 拒绝非法 waveStyle、NaN、Infinity、布尔值及未知字段
+      // 4. 拒绝非法 effect、NaN、Infinity、布尔值及未知字段，同时支持旧版字段平滑迁移
       expect(
         sanitizeTrackVisualConfig({
+          effect: 'not-a-shader',
           sensitivity: Number.NaN,
           bassGain: Number.POSITIVE_INFINITY,
           midGain: Number.NEGATIVE_INFINITY,
           trebleGain: 'not-a-number',
           beatBoost: null,
           smoothing: undefined,
-          silkSpeed: true,
-          silkSoftness: '',
-          waveStyle: 'spiral',
-          waveScale: 1.25,
+          speed: true,
+          opacity: '',
+          scale: 1.25,
           unknownField: 42
         })
       ).toEqual({
-        waveScale: 1.25
+        scale: 1.25
+      })
+
+      expect(
+        sanitizeTrackVisualConfig({
+          silkSpeed: 1.2,
+          silkWarp: 1.4,
+          silkOpacity: 0.68,
+          silkSoftness: 0.1
+        })
+      ).toEqual({
+        effect: 'liquid-metal',
+        speed: 1.2,
+        intensity: 1.4,
+        opacity: 0.68
       })
 
       // 5. 非普通对象输入安全返回空对象
@@ -1222,9 +1232,9 @@ describe('Phase 2 Worker 接口集成测试', () => {
           lrcText: '[00:01.00] 一群嗜血的蚂蚁',
           sortOrder: 1,
           visualConfig: {
+            effect: 'mesh-gradient',
             sensitivity: 9.0,
             bassGain: 1.45,
-            waveStyle: 'horizon',
             extraBadKey: 'ignored'
           }
         })
@@ -1236,9 +1246,9 @@ describe('Phase 2 Worker 接口集成测试', () => {
     const track = (await trackCreateRes.json()) as BlogMusicTrack
     expect(track.audioUrl).toBe(`/api/blog/media/${audioId}`)
     expect(track.visualConfig).toEqual({
+      effect: 'mesh-gradient',
       sensitivity: 2.5,
-      bassGain: 1.45,
-      waveStyle: 'horizon'
+      bassGain: 1.45
     })
 
     // 未携带 visualConfig 的 PATCH 必须原样保留既有 visualConfig
@@ -1255,9 +1265,9 @@ describe('Phase 2 Worker 接口集成测试', () => {
     const patchedTrackMeta = (await trackPatchRes.json()) as BlogMusicTrack
     expect(patchedTrackMeta.album).toBe('十一月的萧邦')
     expect(patchedTrackMeta.visualConfig).toEqual({
+      effect: 'mesh-gradient',
       sensitivity: 2.5,
-      bassGain: 1.45,
-      waveStyle: 'horizon'
+      bassGain: 1.45
     })
 
     // 携带 visualConfig 的 PATCH 会重新净化并覆盖存储
@@ -1267,10 +1277,10 @@ describe('Phase 2 Worker 接口集成测试', () => {
         headers: { cookie, 'content-type': 'application/json' },
         body: JSON.stringify({
           visualConfig: {
-            silkSpeed: 1.3,
-            silkOpacity: 0.01,
-            waveStyle: 'wings',
-            waveScale: 1.4
+            effect: 'threads',
+            speed: 1.3,
+            opacity: 0.01,
+            scale: 1.4
           }
         })
       }),
@@ -1279,10 +1289,10 @@ describe('Phase 2 Worker 接口集成测试', () => {
     )
     expect(trackVisualPatchRes.status).toBe(200)
     expect(((await trackVisualPatchRes.json()) as BlogMusicTrack).visualConfig).toEqual({
-      silkSpeed: 1.3,
-      silkOpacity: 0.15,
-      waveStyle: 'wings',
-      waveScale: 1.4
+      effect: 'threads',
+      speed: 1.3,
+      opacity: 0.15,
+      scale: 1.4
     })
 
     const tracksListRes = await handleBlogApi(
@@ -1293,10 +1303,10 @@ describe('Phase 2 Worker 接口集成测试', () => {
     const listedTracks = ((await tracksListRes.json()) as { tracks: BlogMusicTrack[] }).tracks
     expect(listedTracks).toHaveLength(1)
     expect(listedTracks[0].visualConfig).toEqual({
-      silkSpeed: 1.3,
-      silkOpacity: 0.15,
-      waveStyle: 'wings',
-      waveScale: 1.4
+      effect: 'threads',
+      speed: 1.3,
+      opacity: 0.15,
+      scale: 1.4
     })
 
     const bootWithTrackRes = await handleBlogApi(
@@ -1307,10 +1317,10 @@ describe('Phase 2 Worker 接口集成测试', () => {
     const bootWithTrack = (await bootWithTrackRes.json()) as { tracks: BlogMusicTrack[] }
     expect(bootWithTrack.tracks).toHaveLength(1)
     expect(bootWithTrack.tracks[0].visualConfig).toEqual({
-      silkSpeed: 1.3,
-      silkOpacity: 0.15,
-      waveStyle: 'wings',
-      waveScale: 1.4
+      effect: 'threads',
+      speed: 1.3,
+      opacity: 0.15,
+      scale: 1.4
     })
 
     // 2. Standalone Page (/about) 默认值、PUT 更新与留言板

@@ -1,4 +1,5 @@
 import type {
+  BlogAmbientEffectId,
   BlogCatalogItem,
   BlogCatalogSection,
   BlogComment,
@@ -6,8 +7,7 @@ import type {
   BlogMediaKind,
   BlogMusicTrack,
   BlogPageData,
-  BlogTrackVisualConfig,
-  BlogWaveStyle
+  BlogTrackVisualConfig
 } from '../src/blog-types'
 import { ApiError, type Env } from './types'
 
@@ -231,7 +231,7 @@ function defaultPageMeta(slug: string): { title: string; subtitle: string } {
 }
 
 const VISUAL_CONFIG_NUMERIC_BOUNDS: ReadonlyArray<
-  readonly [Exclude<keyof BlogTrackVisualConfig, 'waveStyle'>, number, number]
+  readonly [Exclude<keyof BlogTrackVisualConfig, 'effect'>, number, number]
 > = [
   ['sensitivity', 0.2, 2.5],
   ['bassGain', 0, 2.0],
@@ -239,15 +239,30 @@ const VISUAL_CONFIG_NUMERIC_BOUNDS: ReadonlyArray<
   ['trebleGain', 0, 2.0],
   ['beatBoost', 0, 2.0],
   ['smoothing', 0.1, 0.9],
-  ['silkSpeed', 0.2, 2.2],
-  ['silkWarp', 0.2, 2.0],
-  ['silkOpacity', 0.15, 0.95],
-  ['silkSoftness', 0, 1.0],
-  ['waveScale', 0.3, 2.0],
-  ['waveOpacity', 0.2, 1.0]
+  ['speed', 0.1, 2.5],
+  ['intensity', 0.1, 2.0],
+  ['scale', 0.3, 2.2],
+  ['audioReactivity', 0, 2.0],
+  ['opacity', 0.15, 1.0]
 ]
 
-const VALID_WAVE_STYLES = new Set<BlogWaveStyle>(['bars', 'horizon', 'wings'])
+const VALID_AMBIENT_EFFECTS = new Set<BlogAmbientEffectId>([
+  'threads',
+  'iridescence',
+  'liquid-chrome',
+  'aurora',
+  'light-rays',
+  'prism',
+  'color-bends',
+  'mesh-gradient',
+  'warp',
+  'liquid-metal',
+  'god-rays',
+  'neuro-noise',
+  'metaballs',
+  'grain-gradient',
+  'smoke-ring'
+])
 
 function finiteVisualNumber(value: unknown): number | null {
   if (typeof value === 'number') {
@@ -258,6 +273,10 @@ function finiteVisualNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null
   }
   return null
+}
+
+function clampBound(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
 }
 
 export function sanitizeTrackVisualConfig(input: unknown): Partial<BlogTrackVisualConfig> {
@@ -271,13 +290,43 @@ export function sanitizeTrackVisualConfig(input: unknown): Partial<BlogTrackVisu
     if (!hasOwn(obj, key)) continue
     const num = finiteVisualNumber(obj[key])
     if (num === null) continue
-    result[key] = Math.min(max, Math.max(min, num))
+    result[key] = clampBound(num, min, max)
   }
 
-  if (hasOwn(obj, 'waveStyle')) {
-    const rawStyle = obj.waveStyle
-    if (typeof rawStyle === 'string' && VALID_WAVE_STYLES.has(rawStyle as BlogWaveStyle)) {
-      result.waveStyle = rawStyle as BlogWaveStyle
+  if (hasOwn(obj, 'effect')) {
+    const rawEffect = obj.effect
+    if (typeof rawEffect === 'string' && VALID_AMBIENT_EFFECTS.has(rawEffect as BlogAmbientEffectId)) {
+      result.effect = rawEffect as BlogAmbientEffectId
+    }
+  }
+
+  // Graceful migration for legacy pre-v10 D1 records (silkSpeed/silkWarp/silkSoftness/waveStyle...)
+  if (result.speed === undefined && hasOwn(obj, 'silkSpeed')) {
+    const legacy = finiteVisualNumber(obj.silkSpeed)
+    if (legacy !== null) result.speed = clampBound(legacy, 0.1, 2.5)
+  }
+  if (result.intensity === undefined && hasOwn(obj, 'silkWarp')) {
+    const legacy = finiteVisualNumber(obj.silkWarp)
+    if (legacy !== null) result.intensity = clampBound(legacy, 0.1, 2.0)
+  }
+  if (result.scale === undefined && hasOwn(obj, 'waveScale')) {
+    const legacy = finiteVisualNumber(obj.waveScale)
+    if (legacy !== null) result.scale = clampBound(legacy, 0.3, 2.2)
+  }
+  if (result.opacity === undefined) {
+    const legacyOpacity = hasOwn(obj, 'silkOpacity')
+      ? finiteVisualNumber(obj.silkOpacity)
+      : hasOwn(obj, 'waveOpacity')
+        ? finiteVisualNumber(obj.waveOpacity)
+        : null
+    if (legacyOpacity !== null) result.opacity = clampBound(legacyOpacity, 0.15, 1.0)
+  }
+  if (result.effect === undefined) {
+    const legacySoftness = hasOwn(obj, 'silkSoftness') ? finiteVisualNumber(obj.silkSoftness) : null
+    if (legacySoftness !== null && legacySoftness <= 0.35) {
+      result.effect = 'liquid-metal'
+    } else if (hasOwn(obj, 'waveStyle') && typeof obj.waveStyle === 'string') {
+      result.effect = 'threads'
     }
   }
 

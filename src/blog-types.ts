@@ -13,9 +13,28 @@ export interface BlogImageItem {
   liveVideoUrl?: string
 }
 
-export type BlogWaveStyle = 'bars' | 'horizon' | 'wings'
+export type BlogAmbientEffectGroup = 'react-bits' | 'paper'
+
+export type BlogAmbientEffectId =
+  | 'threads'
+  | 'iridescence'
+  | 'liquid-chrome'
+  | 'aurora'
+  | 'light-rays'
+  | 'prism'
+  | 'color-bends'
+  | 'mesh-gradient'
+  | 'warp'
+  | 'liquid-metal'
+  | 'god-rays'
+  | 'neuro-noise'
+  | 'metaballs'
+  | 'grain-gradient'
+  | 'smoke-ring'
 
 export interface BlogTrackVisualConfig {
+  /** Selected full-screen shader effect for this track (7 React Bits + 8 Paper Shaders) */
+  effect: BlogAmbientEffectId // default 'mesh-gradient'
   /** Audio DSP sensitivity & band weighting */
   sensitivity: number // 0.2 .. 2.5 (default 1.0)
   bassGain: number // 0 .. 2.0 (default 1.1)
@@ -23,15 +42,12 @@ export interface BlogTrackVisualConfig {
   trebleGain: number // 0 .. 2.0 (default 0.9)
   beatBoost: number // 0 .. 2.0 (default 1.0)
   smoothing: number // 0.1 .. 0.9 (default 0.55)
-  /** Silk WebGL aurora tuning */
-  silkSpeed: number // 0.2 .. 2.2 (default 0.85)
-  silkWarp: number // 0.2 .. 2.0 (default 0.72)
-  silkOpacity: number // 0.15 .. 0.95 (default 0.62)
-  silkSoftness: number // 0 .. 1.0 (default 0.88 — higher = softer matte whatamesh, 0 = glossy)
-  /** Waves visualizer tuning */
-  waveStyle: BlogWaveStyle // 'bars' | 'horizon' | 'wings'
-  waveScale: number // 0.3 .. 2.0 (default 1.0)
-  waveOpacity: number // 0.2 .. 1.0 (default 0.78)
+  /** Real physical shader parameters mapped to each effect's native uniforms */
+  speed: number // 0.1 .. 2.5 (default 1.0)
+  intensity: number // 0.1 .. 2.0 (default 1.0 — distortion / amplitude / glow / swirl)
+  scale: number // 0.3 .. 2.2 (default 1.0 — zoom / density / pattern scale)
+  audioReactivity: number // 0 .. 2.0 (default 1.0 — how strongly live music drives the shader)
+  opacity: number // 0.15 .. 1.0 (default 0.78 — backdrop strength over page canvas)
 }
 
 export interface BlogPostMusic {

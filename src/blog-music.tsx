@@ -19,17 +19,20 @@ import {
   AUDIO_ANALYSER_MIN_DB,
   AUDIO_ANALYSER_SMOOTHING,
   AudioFrameAnalyzer,
+  BLOG_AMBIENT_EFFECTS,
   DEFAULT_AMBIENT_PALETTE,
   DEFAULT_TRACK_VISUAL_CONFIG,
   TRACK_VISUAL_PRESETS,
   TRACK_VISUAL_RANGES,
   extractCoverPalette,
   findMatchingVisualPreset,
+  getAmbientEffectMeta,
   normalizeTrackVisualConfig,
   readAmbientMode,
   saveAmbientMode,
   trackVisualConfigEquals,
   type AudioAnalysisFrame,
+  type BlogAmbientEffectId,
   type BlogAmbientMode,
   type BlogAmbientPalette,
   type BlogTrackVisualNumericKey
@@ -47,18 +50,17 @@ import { extractAudioMetadata } from './blog-audio-meta'
 import type {
   BlogMusicTrack,
   BlogPostMusic,
-  BlogTrackVisualConfig,
-  BlogWaveStyle
+  BlogTrackVisualConfig
 } from './blog-types'
 import { AppIcon } from './components/AppIcon'
 import { showToast } from './components/Toast'
 
 export type {
   AudioAnalysisFrame,
+  BlogAmbientEffectId,
   BlogAmbientMode,
   BlogAmbientPalette,
-  BlogTrackVisualConfig,
-  BlogWaveStyle
+  BlogTrackVisualConfig
 } from './blog-ambient'
 
 /** Lightweight compatibility view of the current {@link AudioAnalysisFrame}. */
@@ -113,6 +115,25 @@ export interface BlogMusicActionsContextValue {
   /** Owner only: selects (and plays) `trackId` if given, then opens the floating live tuner. */
   openTuner: (trackId?: string) => void
   closeTuner: () => void
+  /** Owner upload draft live preview session (zero-wait local blob: or R2 audio + 60fps shader preview). */
+  draftPreviewActive: boolean
+  startDraftPreview: (draft: {
+    audioUrl: string
+    title: string
+    artist: string
+    coverUrl?: string | null
+    visualConfig: BlogTrackVisualConfig
+  }) => void
+  updateDraftPreview: (
+    patch: Partial<{
+      audioUrl: string
+      title: string
+      artist: string
+      coverUrl: string | null
+      visualConfig: BlogTrackVisualConfig
+    }>
+  ) => void
+  stopDraftPreview: (options?: { keepCurrentAudio?: boolean }) => void
 }
 
 export type BlogMusicStableValue = BlogMusicActionsContextValue
@@ -400,8 +421,7 @@ function isSameOriginAudioUrl(rawUrl: string): boolean {
 }
 
 const AMBIENT_MODE_OPTIONS: ReadonlyArray<{ mode: BlogAmbientMode; label: string }> = [
-  { mode: 'waves', label: '律动声波' },
-  { mode: 'silk', label: '丝绸极光' },
+  { mode: 'active', label: '动态特效' },
   { mode: 'minimal', label: '纯白极简' }
 ]
 
@@ -808,7 +828,7 @@ function BlogMusicImmersionModal({
    Per-track Visual Tuner (shared editor · preset chips · floating live panel)
    -------------------------------------------------------------------------- */
 
-type VisualTunerTab = 'audio' | 'silk' | 'waves'
+type VisualTunerTab = 'effects' | 'shader' | 'audio'
 
 interface TunerSliderSpec {
   key: BlogTrackVisualNumericKey
@@ -826,68 +846,33 @@ const TUNER_AUDIO_SLIDERS: readonly TunerSliderSpec[] = [
   { key: 'smoothing', label: '平滑阻尼', unit: 'pct', hint: '越高越柔和，越低越跟手' }
 ]
 
-const TUNER_SILK_SLIDERS: readonly TunerSliderSpec[] = [
-  { key: 'silkSpeed', label: '流动速度', unit: 'x' },
-  { key: 'silkWarp', label: '扭曲柔度', unit: 'x' },
-  { key: 'silkOpacity', label: '色彩浓郁度', unit: 'pct' },
-  { key: 'silkSoftness', label: '丝绒柔化', unit: 'pct', hint: '高 = 哑光丝绸 · 拖向 0 = 液态金属高光' }
-]
-
-const TUNER_WAVE_SLIDERS: readonly TunerSliderSpec[] = [
-  { key: 'waveScale', label: '波幅高度', unit: 'x' },
-  { key: 'waveOpacity', label: '视觉显眼度', unit: 'pct' }
-]
-
 const TUNER_TABS: ReadonlyArray<{ id: VisualTunerTab; label: string }> = [
-  { id: 'audio', label: '音频响应' },
-  { id: 'silk', label: '丝绸极光' },
-  { id: 'waves', label: '声波形态' }
+  { id: 'effects', label: '特效选择' },
+  { id: 'shader', label: '特效参数' },
+  { id: 'audio', label: '音频响应' }
 ]
 
-const WAVE_STYLE_OPTIONS: ReadonlyArray<{ style: BlogWaveStyle; label: string; hint: string }> = [
-  { style: 'bars', label: '胶囊频谱', hint: '底部与两翼律动胶囊' },
-  { style: 'horizon', label: '声波山峦', hint: '三层流体声波山丘' },
-  { style: 'wings', label: '翼展声场', hint: '两侧对称 Hi-Fi 声场' }
-]
+const REACT_BITS_EFFECTS = BLOG_AMBIENT_EFFECTS.filter((item) => item.group === 'react-bits')
+const PAPER_SHADER_EFFECTS = BLOG_AMBIENT_EFFECTS.filter((item) => item.group === 'paper')
+
+function buildShaderSliders(effect: BlogAmbientEffectId): TunerSliderSpec[] {
+  const meta = getAmbientEffectMeta(effect)
+  return [
+    { key: 'speed', label: '流动速度', unit: 'x' },
+    { key: 'intensity', label: meta.intensityLabel, unit: 'x' },
+    { key: 'scale', label: meta.scaleLabel, unit: 'x' },
+    {
+      key: 'audioReactivity',
+      label: '音乐驱动强度',
+      unit: 'x',
+      hint: '0× 为纯流体静谧游走，调高则强烈跟随鼓点与旋律'
+    },
+    { key: 'opacity', label: '背景显色度', unit: 'pct' }
+  ]
+}
 
 function formatTunerValue(spec: TunerSliderSpec, value: number): string {
   return spec.unit === 'pct' ? `${Math.round(value * 100)}%` : `${value.toFixed(2)}×`
-}
-
-function WaveStyleGlyph({ style }: { style: BlogWaveStyle }) {
-  if (style === 'bars') {
-    return (
-      <svg viewBox="0 0 40 24" width="40" height="24" aria-hidden="true">
-        {[3, 8, 13, 27, 32, 37].map((x, i) => {
-          const h = [16, 11, 7, 7, 11, 16][i]
-          return <rect key={x} x={x - 1.6} y={21 - h} width={3.2} height={h} rx={1.6} fill="currentColor" />
-        })}
-        <rect x={18.4} y={18} width={3.2} height={3} rx={1.5} fill="currentColor" opacity={0.45} />
-      </svg>
-    )
-  }
-  if (style === 'horizon') {
-    return (
-      <svg viewBox="0 0 40 24" width="40" height="24" aria-hidden="true">
-        <path d="M0 14 C8 6 14 12 20 10 C27 8 32 4 40 11 V24 H0Z" fill="currentColor" opacity={0.28} />
-        <path d="M0 17 C7 12 13 17 20 14 C27 11 33 13 40 16 V24 H0Z" fill="currentColor" opacity={0.48} />
-        <path d="M0 20 C8 17 14 20 20 18.5 C27 17 33 19 40 19.5" stroke="currentColor" strokeWidth={1.4} fill="none" />
-      </svg>
-    )
-  }
-  return (
-    <svg viewBox="0 0 40 24" width="40" height="24" aria-hidden="true">
-      {[4, 8, 12, 16, 20].map((y, i) => {
-        const w = [6, 10, 13, 10, 6][i]
-        return (
-          <g key={y}>
-            <rect x={1} y={y - 1.2} width={w} height={2.4} rx={1.2} fill="currentColor" />
-            <rect x={39 - w} y={y - 1.2} width={w} height={2.4} rx={1.2} fill="currentColor" />
-          </g>
-        )
-      })}
-    </svg>
-  )
 }
 
 function TunerSlider({
@@ -932,10 +917,11 @@ function TunerSlider({
   )
 }
 
-/** Tiny live 低 / 中 / 高 meter — writes straight to the DOM per RAF (zero React renders). */
+/** 60fps 3-bar VU meter (低频 / 中频 / 高频 + beat pulse dot) — writes straight to DOM per RAF. */
 function TunerVuMeter({ getAudioFrame }: { getAudioFrame: () => AudioAnalysisFrame }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const fillRefs = useRef<Array<HTMLSpanElement | null>>([])
+  const beatDotRef = useRef<HTMLSpanElement | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -947,6 +933,11 @@ function TunerVuMeter({ getAudioFrame }: { getAudioFrame: () => AudioAnalysisFra
         const el = fillRefs.current[i]
         if (el) el.style.transform = `scaleY(${Math.max(0.03, Math.min(1, values[i])).toFixed(3)})`
       }
+      if (beatDotRef.current) {
+        const pulse = Math.max(0, Math.min(1, frame.beatPulse))
+        beatDotRef.current.style.transform = `scale(${(0.76 + pulse * 0.52).toFixed(3)})`
+        beatDotRef.current.style.opacity = `${(0.24 + pulse * 0.76).toFixed(3)}`
+      }
       rootRef.current?.classList.toggle('is-idle', !frame.active)
       rafId = window.requestAnimationFrame(tick)
     }
@@ -956,7 +947,7 @@ function TunerVuMeter({ getAudioFrame }: { getAudioFrame: () => AudioAnalysisFra
 
   return (
     <div ref={rootRef} className="blog-tuner-vu is-idle" aria-hidden="true">
-      {['低', '中', '高'].map((label, i) => (
+      {['低频', '中频', '高频'].map((label, i) => (
         <div key={label} className="blog-tuner-vu-col">
           <div className="blog-tuner-vu-track">
             <span
@@ -969,7 +960,67 @@ function TunerVuMeter({ getAudioFrame }: { getAudioFrame: () => AudioAnalysisFra
           <span className="blog-tuner-vu-label">{label}</span>
         </div>
       ))}
-      <span className="blog-tuner-vu-idle-note">播放后显示实时频段能量</span>
+      <div className="blog-tuner-vu-col is-beat">
+        <div className="blog-tuner-vu-beat-box">
+          <span ref={beatDotRef} className="blog-tuner-vu-beat-dot" />
+        </div>
+        <span className="blog-tuner-vu-label">节拍</span>
+      </div>
+      <span className="blog-tuner-vu-idle-note">播放后显示实时三频能量与节拍脉冲</span>
+    </div>
+  )
+}
+
+/** Inline mini playback + seek scrubber subscribed ONLY to BlogMusicProgressContext. */
+function TunerMiniPlayer({
+  isPlaying,
+  fallbackDuration = 0,
+  onTogglePlay,
+  onSeek,
+  effectBadge
+}: {
+  isPlaying: boolean
+  fallbackDuration?: number
+  onTogglePlay: () => void
+  onSeek: (seconds: number) => void
+  effectBadge?: string
+}) {
+  const { currentTime, duration } = useBlogMusicProgress()
+  const effectiveDuration = duration > 0 ? duration : fallbackDuration
+  const clampedTime = effectiveDuration > 0 ? Math.min(currentTime, effectiveDuration) : 0
+  const seekPct =
+    effectiveDuration > 0
+      ? Math.min(100, Math.max(0, (clampedTime / effectiveDuration) * 100))
+      : 0
+
+  return (
+    <div className="blog-tuner-mini-player" role="group" aria-label="试听与进度跳转">
+      <button
+        type="button"
+        className="blog-tuner-mini-play"
+        onClick={onTogglePlay}
+        title={isPlaying ? '暂停' : '播放'}
+        aria-label={isPlaying ? '暂停' : '播放'}
+      >
+        <AppIcon name={isPlaying ? 'pause' : 'play'} size={12} />
+      </button>
+      <input
+        type="range"
+        className="blog-tuner-mini-seek"
+        min={0}
+        max={effectiveDuration > 0 ? effectiveDuration : 100}
+        step={0.1}
+        value={clampedTime}
+        disabled={effectiveDuration <= 0}
+        style={{ '--seek-pct': `${seekPct.toFixed(2)}%` } as CSSProperties}
+        onChange={(e) => onSeek(Number(e.target.value))}
+        title="拖动进度条可直达副歌 / Drop 段落调参"
+        aria-label="播放进度跳转"
+      />
+      <span className="blog-tuner-mini-time">
+        {formatAudioTime(clampedTime)} / {formatAudioTime(effectiveDuration)}
+      </span>
+      {effectBadge && <span className="blog-tuner-mini-badge">{effectBadge}</span>}
     </div>
   )
 }
@@ -1019,7 +1070,7 @@ function BlogVisualConfigEditor({
   onTabChange?: (tab: VisualTunerTab) => void
   compact?: boolean
 }) {
-  const [innerTab, setInnerTab] = useState<VisualTunerTab>('audio')
+  const [innerTab, setInnerTab] = useState<VisualTunerTab>('effects')
   const activeTab = tab ?? innerTab
   const selectTab = (next: VisualTunerTab) => {
     setInnerTab(next)
@@ -1028,8 +1079,9 @@ function BlogVisualConfigEditor({
   const setKey = (key: BlogTrackVisualNumericKey, raw: number) => {
     onChange(normalizeTrackVisualConfig({ ...value, [key]: raw }))
   }
-  const sliders =
-    activeTab === 'audio' ? TUNER_AUDIO_SLIDERS : activeTab === 'silk' ? TUNER_SILK_SLIDERS : TUNER_WAVE_SLIDERS
+  const effectMeta = useMemo(() => getAmbientEffectMeta(value.effect), [value.effect])
+  const shaderSliders = useMemo(() => buildShaderSliders(value.effect), [value.effect])
+  const sliders = activeTab === 'audio' ? TUNER_AUDIO_SLIDERS : shaderSliders
 
   return (
     <div className={`blog-tuner-editor${compact ? ' is-compact' : ''}`}>
@@ -1049,33 +1101,96 @@ function BlogVisualConfigEditor({
       </div>
 
       <div className="blog-tuner-tabpanel" role="tabpanel">
-        {activeTab === 'audio' && getAudioFrame && <TunerVuMeter getAudioFrame={getAudioFrame} />}
+        {activeTab === 'effects' && (
+          <>
+            <div className="blog-tuner-effect-tagline">
+              <div className="blog-tuner-effect-tagline-head">
+                <span className="blog-tuner-effect-tagline-badge">
+                  {effectMeta.group === 'paper' ? 'Paper Shaders' : 'React Bits'}
+                </span>
+                <strong className="blog-tuner-effect-tagline-name">
+                  {effectMeta.name} · {effectMeta.enName}
+                </strong>
+              </div>
+              <span className="blog-tuner-effect-tagline-desc">{effectMeta.tagline}</span>
+            </div>
 
-        {activeTab === 'waves' && (
-          <div className="blog-tuner-wave-styles" role="radiogroup" aria-label="声波形态">
-            {WAVE_STYLE_OPTIONS.map((opt) => (
-              <button
-                key={opt.style}
-                type="button"
-                role="radio"
-                aria-checked={value.waveStyle === opt.style}
-                className={`blog-tuner-wave-card${value.waveStyle === opt.style ? ' is-active' : ''}`}
-                onClick={() => onChange(normalizeTrackVisualConfig({ ...value, waveStyle: opt.style }))}
-                title={opt.hint}
-              >
-                <WaveStyleGlyph style={opt.style} />
-                <span className="blog-tuner-wave-card-label">{opt.label}</span>
-                {!compact && <span className="blog-tuner-wave-card-hint">{opt.hint}</span>}
-              </button>
-            ))}
-          </div>
+            <div className="blog-tuner-effect-group" role="radiogroup" aria-label="React Bits（7 款）">
+              <div className="blog-tuner-effect-group-head">
+                <span>React Bits（7 款）</span>
+                <span className="blog-tuner-effect-group-sub">MIT WebGL</span>
+              </div>
+              <div className="blog-tuner-effect-grid">
+                {REACT_BITS_EFFECTS.map((item) => {
+                  const isActive = value.effect === item.id
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={isActive}
+                      className={`blog-tuner-effect-card${isActive ? ' is-active' : ''}`}
+                      onClick={() =>
+                        onChange(normalizeTrackVisualConfig({ ...value, effect: item.id }))
+                      }
+                      title={item.tagline}
+                    >
+                      <span className="blog-tuner-effect-card-name">{item.name}</span>
+                      <span className="blog-tuner-effect-card-en">{item.enName}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="blog-tuner-effect-group" role="radiogroup" aria-label="Paper Shaders（8 款）">
+              <div className="blog-tuner-effect-group-head">
+                <span>Paper Shaders（8 款）</span>
+                <span className="blog-tuner-effect-group-sub">Apache 2.0</span>
+              </div>
+              <div className="blog-tuner-effect-grid">
+                {PAPER_SHADER_EFFECTS.map((item) => {
+                  const isActive = value.effect === item.id
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={isActive}
+                      className={`blog-tuner-effect-card${isActive ? ' is-active' : ''}`}
+                      onClick={() =>
+                        onChange(normalizeTrackVisualConfig({ ...value, effect: item.id }))
+                      }
+                      title={item.tagline}
+                    >
+                      <span className="blog-tuner-effect-card-name">{item.name}</span>
+                      <span className="blog-tuner-effect-card-en">{item.enName}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </>
         )}
 
-        <div className={`blog-tuner-sliders${compact ? ' is-two-col' : ''}`}>
-          {sliders.map((spec) => (
-            <TunerSlider key={spec.key} spec={spec} value={value[spec.key]} onChange={setKey} />
-          ))}
-        </div>
+        {activeTab !== 'effects' && (
+          <>
+            {activeTab === 'shader' && (
+              <div className="blog-tuner-shader-meta">
+                <span>
+                  当前特效：<strong>{effectMeta.name}</strong>（{effectMeta.enName}）
+                </span>
+                <span>双击滑块恢复默认</span>
+              </div>
+            )}
+            {activeTab === 'audio' && getAudioFrame && <TunerVuMeter getAudioFrame={getAudioFrame} />}
+            <div className={`blog-tuner-sliders${compact ? ' is-two-col' : ''}`}>
+              {sliders.map((spec) => (
+                <TunerSlider key={spec.key} spec={spec} value={value[spec.key]} onChange={setKey} />
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
@@ -1085,6 +1200,7 @@ interface BlogVisualTunerPanelProps {
   blogTheme: 'light' | 'dark'
   portalStyle?: CSSProperties
   track: BlogPostMusic
+  fallbackDuration?: number
   savable: boolean
   saving: boolean
   config: BlogTrackVisualConfig
@@ -1095,6 +1211,7 @@ interface BlogVisualTunerPanelProps {
   onChange: (next: BlogTrackVisualConfig) => void
   onSetAmbientMode: (mode: BlogAmbientMode) => void
   onTogglePlay: () => void
+  onSeek: (seconds: number) => void
   onSave: () => void
   onClose: () => void
 }
@@ -1103,6 +1220,7 @@ function BlogVisualTunerPanel({
   blogTheme,
   portalStyle,
   track,
+  fallbackDuration = 0,
   savable,
   saving,
   config,
@@ -1113,19 +1231,16 @@ function BlogVisualTunerPanel({
   onChange,
   onSetAmbientMode,
   onTogglePlay,
+  onSeek,
   onSave,
   onClose
 }: BlogVisualTunerPanelProps) {
-  const [tab, setTab] = useState<VisualTunerTab>(() => (ambientMode === 'silk' ? 'silk' : 'audio'))
+  const [tab, setTab] = useState<VisualTunerTab>('effects')
   const dirty = !trackVisualConfigEquals(config, savedConfig)
 
   if (typeof document === 'undefined') return null
 
-  const switchMode = (mode: BlogAmbientMode) => {
-    onSetAmbientMode(mode)
-    if (mode === 'silk' && tab === 'waves') setTab('silk')
-    if (mode === 'waves' && tab === 'silk') setTab('waves')
-  }
+  const effectMeta = getAmbientEffectMeta(config.effect)
 
   return createPortal(
     <div
@@ -1146,22 +1261,22 @@ function BlogVisualTunerPanel({
               </strong>
             </span>
           </div>
-          <div className="blog-tuner-segment" role="group" aria-label="背景模式">
+          <div className="blog-tuner-segment" role="group" aria-label="背景特效开关">
             <button
               type="button"
-              className={ambientMode === 'waves' ? 'is-active' : ''}
-              aria-pressed={ambientMode === 'waves'}
-              onClick={() => switchMode('waves')}
+              className={ambientMode === 'active' ? 'is-active' : ''}
+              aria-pressed={ambientMode === 'active'}
+              onClick={() => onSetAmbientMode('active')}
             >
-              声波
+              特效开
             </button>
             <button
               type="button"
-              className={ambientMode === 'silk' ? 'is-active' : ''}
-              aria-pressed={ambientMode === 'silk'}
-              onClick={() => switchMode('silk')}
+              className={ambientMode === 'minimal' ? 'is-active' : ''}
+              aria-pressed={ambientMode === 'minimal'}
+              onClick={() => onSetAmbientMode('minimal')}
             >
-              极光
+              极简
             </button>
           </div>
           <button type="button" className="blog-tuner-close" onClick={onClose} aria-label="关闭调参面板">
@@ -1169,10 +1284,28 @@ function BlogVisualTunerPanel({
           </button>
         </header>
 
+        <div className="blog-tuner-mini-wrap">
+          <TunerMiniPlayer
+            isPlaying={isPlaying}
+            fallbackDuration={fallbackDuration}
+            onTogglePlay={onTogglePlay}
+            onSeek={onSeek}
+            effectBadge={effectMeta.name}
+          />
+        </div>
+
         {(!isPlaying || ambientMode === 'minimal') && (
-          <button type="button" className="blog-tuner-play-hint" onClick={isPlaying ? () => switchMode('waves') : onTogglePlay}>
+          <button
+            type="button"
+            className="blog-tuner-play-hint"
+            onClick={isPlaying ? () => onSetAmbientMode('active') : onTogglePlay}
+          >
             <AppIcon name={isPlaying ? 'sparkles' : 'play'} size={12} />
-            <span>{isPlaying ? '当前为极简模式，点此切换到声波预览' : '背景仅在播放时出现 · 点此播放实时预览'}</span>
+            <span>
+              {isPlaying
+                ? '当前为极简模式，点此开启背景特效预览'
+                : '背景仅在播放时出现 · 点此播放实时预览'}
+            </span>
           </button>
         )}
 
@@ -1221,12 +1354,19 @@ function BlogVisualTunerPanel({
 interface BlogMusicManagerModalProps {
   open: boolean
   blogTheme: 'light' | 'dark'
+  portalStyle?: CSSProperties
   tracks: BlogMusicTrack[]
   currentTrack: BlogPostMusic | null
   isPlaying: boolean
+  draftPreviewActive: boolean
+  getAudioFrame: () => AudioAnalysisFrame
   onClose: () => void
   onPlayPreview: (track: BlogMusicTrack) => void
   onTogglePlay: () => void
+  onSeek: (seconds: number) => void
+  onStartDraftPreview: BlogMusicActionsContextValue['startDraftPreview']
+  onUpdateDraftPreview: BlogMusicActionsContextValue['updateDraftPreview']
+  onStopDraftPreview: BlogMusicActionsContextValue['stopDraftPreview']
   onTracksChanged: () => Promise<void>
   onOpenTuner: (track: BlogMusicTrack) => void
 }
@@ -1234,17 +1374,27 @@ interface BlogMusicManagerModalProps {
 function BlogMusicManagerModal({
   open,
   blogTheme,
+  portalStyle,
   tracks,
   currentTrack,
   isPlaying,
+  draftPreviewActive,
+  getAudioFrame,
   onClose,
   onPlayPreview,
   onTogglePlay,
+  onSeek,
+  onStartDraftPreview,
+  onUpdateDraftPreview,
+  onStopDraftPreview,
   onTracksChanged,
   onOpenTuner
 }: BlogMusicManagerModalProps) {
   // Add Track form states
   const [audioMediaId, setAudioMediaId] = useState('')
+  const [draftAudioUrl, setDraftAudioUrl] = useState('')
+  const [uploadedAudioUrl, setUploadedAudioUrl] = useState('')
+  const [previewDocked, setPreviewDocked] = useState(false)
   const [newVisualConfig, setNewVisualConfig] = useState<BlogTrackVisualConfig>(() =>
     normalizeTrackVisualConfig(DEFAULT_TRACK_VISUAL_CONFIG)
   )
@@ -1283,8 +1433,12 @@ function BlogMusicManagerModal({
   const editCoverInputRef = useRef<HTMLInputElement | null>(null)
   const editLrcFileInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Track object URLs created by embedded cover extraction so we revoke them cleanly
+  // Track object URLs created by embedded cover extraction & local audio preview so we revoke them cleanly
   const blobUrlRef = useRef<string | null>(null)
+  const draftAudioBlobUrlRef = useRef<string | null>(null)
+  const onStopDraftPreviewRef = useRef(onStopDraftPreview)
+  onStopDraftPreviewRef.current = onStopDraftPreview
+
   // Remember values auto-populated from previous audio selection so selecting a new file refreshes them cleanly
   const autoPopulatedRef = useRef<{
     title: string
@@ -1304,11 +1458,39 @@ function BlogMusicManagerModal({
     }
   }, [])
 
+  const revokeDraftAudioBlobUrl = useCallback(() => {
+    if (draftAudioBlobUrlRef.current && typeof URL !== 'undefined') {
+      try {
+        URL.revokeObjectURL(draftAudioBlobUrlRef.current)
+      } catch {
+        // Ignore revoke errors.
+      }
+      draftAudioBlobUrlRef.current = null
+    }
+  }, [])
+
   useEffect(() => {
     return () => {
+      onStopDraftPreviewRef.current()
+      revokeDraftAudioBlobUrl()
       revokeActiveBlobUrl()
     }
-  }, [revokeActiveBlobUrl])
+  }, [revokeActiveBlobUrl, revokeDraftAudioBlobUrl])
+
+  const previewableAudioUrl = draftAudioUrl || uploadedAudioUrl
+
+  const stopDockPreview = useCallback(() => {
+    setPreviewDocked(false)
+    onStopDraftPreview()
+  }, [onStopDraftPreview])
+
+  const handleRequestClose = useCallback(() => {
+    if (previewDocked || draftPreviewActive) {
+      setPreviewDocked(false)
+      onStopDraftPreview()
+    }
+    onClose()
+  }, [draftPreviewActive, onClose, onStopDraftPreview, previewDocked])
 
   const busy =
     uploadingAudio ||
@@ -1319,27 +1501,94 @@ function BlogMusicManagerModal({
     uploadingEditCover
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      if (previewDocked) {
+        setPreviewDocked(false)
+        onStopDraftPreview()
+      }
+      return
+    }
     setFormError('')
     setEditingId(null)
-  }, [open])
+  }, [open, previewDocked, onStopDraftPreview])
+
+  // Sync live draft preview whenever docked and visual config / cover / metadata / audio URL changes
+  useEffect(() => {
+    if (!open || !previewDocked || !previewableAudioUrl) return
+    onUpdateDraftPreview({
+      audioUrl: previewableAudioUrl,
+      title: title.trim() || audioFilename || '试听预览',
+      artist: artist.trim() || '正在导入',
+      coverUrl: coverPreviewUrl,
+      visualConfig: newVisualConfig
+    })
+  }, [
+    open,
+    previewDocked,
+    previewableAudioUrl,
+    title,
+    audioFilename,
+    artist,
+    coverPreviewUrl,
+    newVisualConfig,
+    onUpdateDraftPreview
+  ])
+
+  const handleNewVisualChange = useCallback(
+    (next: BlogTrackVisualConfig) => {
+      setNewVisualConfig(next)
+      if (previewDocked) {
+        onUpdateDraftPreview({ visualConfig: next })
+      }
+    },
+    [onUpdateDraftPreview, previewDocked]
+  )
+
+  const handleToggleDockPreview = () => {
+    if (previewDocked) {
+      stopDockPreview()
+      return
+    }
+    if (!previewableAudioUrl) return
+    setPreviewDocked(true)
+    setNewVisualExpanded(true)
+    onStartDraftPreview({
+      audioUrl: previewableAudioUrl,
+      title: title.trim() || audioFilename || '试听预览',
+      artist: artist.trim() || '正在导入',
+      coverUrl: coverPreviewUrl,
+      visualConfig: newVisualConfig
+    })
+  }
 
   useEffect(() => {
     if (!open || typeof document === 'undefined') return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !busy) {
-        event.preventDefault()
-        onClose()
+      if (event.key === 'Escape') {
+        if (previewDocked) {
+          event.preventDefault()
+          stopDockPreview()
+          return
+        }
+        if (!busy) {
+          event.preventDefault()
+          handleRequestClose()
+        }
       }
     }
     document.addEventListener('keydown', onKeyDown)
+    // Unlock page scroll when docked on the right so the owner can scroll the live blog while tuning!
     const prevOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    if (!previewDocked) {
+      document.body.style.overflow = 'hidden'
+    }
     return () => {
       document.removeEventListener('keydown', onKeyDown)
-      document.body.style.overflow = prevOverflow
+      if (!previewDocked) {
+        document.body.style.overflow = prevOverflow
+      }
     }
-  }, [open, busy, onClose])
+  }, [open, busy, previewDocked, stopDockPreview, handleRequestClose])
 
   const uploadCoverImageFile = useCallback(
     async (rawFile: File, target: 'create' | 'edit', fromPaste = false) => {
@@ -1422,7 +1671,14 @@ function BlogMusicManagerModal({
   }, [open, busy, editingId, uploadCoverImageFile])
 
   const resetAddForm = () => {
+    if (previewDocked || draftPreviewActive) {
+      setPreviewDocked(false)
+      onStopDraftPreview()
+    }
+    revokeDraftAudioBlobUrl()
     revokeActiveBlobUrl()
+    setDraftAudioUrl('')
+    setUploadedAudioUrl('')
     setAudioMediaId('')
     setAudioFilename('')
     setDurationSec(null)
@@ -1444,11 +1700,36 @@ function BlogMusicManagerModal({
     event.target.value = ''
     if (!file) return
 
+    const inferred = parseFilenameMeta(file.name)
+
+    // Create local blob: URL IMMEDIATELY before awaiting R2 upload so live preview starts with zero wait!
+    const prevDraftBlob = draftAudioBlobUrlRef.current
+    const localUrl =
+      typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
+        ? URL.createObjectURL(file)
+        : ''
+    draftAudioBlobUrlRef.current = localUrl || null
+    setDraftAudioUrl(localUrl)
+    setUploadedAudioUrl('')
+    setAudioMediaId('')
+    setAudioFilename(file.name)
+    if (previewDocked && localUrl) {
+      onUpdateDraftPreview({
+        audioUrl: localUrl,
+        title: inferred.title || file.name
+      })
+    }
+    if (prevDraftBlob && typeof URL !== 'undefined') {
+      try {
+        URL.revokeObjectURL(prevDraftBlob)
+      } catch {
+        // Ignore revoke errors.
+      }
+    }
+
     setUploadingAudio(true)
     setParsingMeta(true)
     setFormError('')
-
-    const inferred = parseFilenameMeta(file.name)
 
     // Start browser-side ID3 / Vorbis / MP4 tag & embedded cover extraction immediately
     const metaPromise = extractAudioMetadata(file)
@@ -1539,6 +1820,7 @@ function BlogMusicManagerModal({
         metaPromise
       ])
       setAudioMediaId(uploaded.id)
+      setUploadedAudioUrl(uploaded.url)
       setAudioFilename(file.name)
       setDurationSec(extracted.durationSec ?? detectedDuration)
       showToast(
@@ -1619,8 +1901,12 @@ function BlogMusicManagerModal({
         sortOrder: nextSortOrder,
         visualConfig: normalizeTrackVisualConfig(newVisualConfig)
       })
-      await onTracksChanged()
+      if (previewDocked || draftPreviewActive) {
+        setPreviewDocked(false)
+        onStopDraftPreview()
+      }
       resetAddForm()
+      await onTracksChanged()
       showToast('success', '已添加到博客歌单')
     } catch (err) {
       const msg = getErrorMessage(err, '创建歌曲失败')
@@ -1714,57 +2000,102 @@ function BlogMusicManagerModal({
 
   if (!open || typeof document === 'undefined') return null
 
+  const draftEffectMeta = getAmbientEffectMeta(newVisualConfig.effect)
+
   return createPortal(
     <div
-      className="blog-root blog-modal-backdrop"
+      className={`blog-root blog-modal-backdrop blog-p2-modal-backdrop${
+        previewDocked ? ' is-preview-docked' : ''
+      }`}
       data-blog-theme={blogTheme}
-      style={{ minHeight: 0, zIndex: 1030 }}
+      style={{ minHeight: 0, zIndex: 1030, ...portalStyle }}
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !busy) {
-          onClose()
+        if (!previewDocked && event.target === event.currentTarget && !busy) {
+          handleRequestClose()
         }
       }}
     >
       <section
         role="dialog"
-        aria-modal="true"
-        aria-label="管理博客歌单"
-        className="blog-p2-manager-modal"
+        aria-modal={!previewDocked}
+        aria-label={previewDocked ? '导入单曲实时预览与调参' : '管理博客歌单'}
+        className={`blog-p2-manager-modal blog-p2-modal${previewDocked ? ' is-preview-docked' : ''}`}
       >
         <header className="blog-modal-header">
           <h2
             className="blog-modal-title"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}
           >
-            <AppIcon name="music" size={17} />
-            <span>管理博客歌单</span>
-            <span className="blog-floor-count">{tracks.length}</span>
+            <AppIcon name={previewDocked ? 'sparkles' : 'music'} size={17} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {previewDocked ? '实时背景调参预览' : '管理博客歌单'}
+            </span>
+            {!previewDocked && <span className="blog-floor-count">{tracks.length}</span>}
           </h2>
-          <button
-            type="button"
-            className="blog-btn blog-btn-icon"
-            aria-label="关闭"
-            disabled={busy}
-            onClick={onClose}
-          >
-            <AppIcon name="close" size={16} />
-          </button>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            {previewDocked && (
+              <button
+                type="button"
+                className="blog-btn blog-btn-subtle blog-btn-sm"
+                onClick={stopDockPreview}
+                title="退出侧边预览并返回完整管理窗口"
+              >
+                <span>退出实时预览</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="blog-btn blog-btn-icon"
+              aria-label="关闭"
+              disabled={busy && !previewDocked}
+              onClick={handleRequestClose}
+            >
+              <AppIcon name="close" size={16} />
+            </button>
+          </div>
         </header>
 
         <div className="blog-modal-body">
           {/* Add New Track Form */}
           <form className="blog-p2-manager-form" onSubmit={(e) => void handleCreateTrack(e)}>
-            <div
-              className="blog-p2-manager-section-title"
-              style={{ justifyContent: 'space-between', width: '100%', flexWrap: 'wrap' }}
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <AppIcon name="plus" size={14} />
-                <span>上传新单曲（R2 原生音频流 + 自动提取内嵌封面/标签）</span>
-              </span>
-              <span className="blog-paste-hint">支持 Ctrl+V 粘贴图片/GIF</span>
-            </div>
+            {previewDocked && (
+              <div className="blog-tuner-dock-banner">
+                <div className="blog-tuner-dock-banner-top">
+                  <span className="blog-tuner-dock-live">
+                    <span className="blog-tuner-dock-dot" aria-hidden="true" />
+                    <span>全屏实时预览中</span>
+                  </span>
+                  <span className="blog-tuner-dock-r2">
+                    {uploadingAudio
+                      ? 'R2 后台上传中…'
+                      : audioMediaId
+                        ? 'R2 音频已就绪'
+                        : '本地音频流'}
+                  </span>
+                </div>
+                <TunerMiniPlayer
+                  isPlaying={isPlaying}
+                  fallbackDuration={durationSec ?? 0}
+                  onTogglePlay={onTogglePlay}
+                  onSeek={onSeek}
+                  effectBadge={draftEffectMeta.name}
+                />
+              </div>
+            )}
+
+            {!previewDocked && (
+              <div
+                className="blog-p2-manager-section-title"
+                style={{ justifyContent: 'space-between', width: '100%', flexWrap: 'wrap' }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <AppIcon name="plus" size={14} />
+                  <span>上传新单曲（R2 原生音频流 + 自动提取内嵌封面/标签）</span>
+                </span>
+                <span className="blog-paste-hint">支持 Ctrl+V 粘贴图片/GIF</span>
+              </div>
+            )}
 
             <div className="blog-p2-manager-upload-row">
               <div className="blog-p2-manager-cover-slot">
@@ -1928,20 +2259,55 @@ function BlogMusicManagerModal({
 
             <div className="blog-field blog-tuner-upload">
               <div className="blog-tuner-upload-head">
-                <span className="blog-field-label">视觉氛围（访客播放本曲时生效 · 之后可随时「调参」）</span>
-                <button
-                  type="button"
-                  className="blog-btn blog-btn-ghost blog-btn-sm"
-                  aria-expanded={newVisualExpanded}
-                  onClick={() => setNewVisualExpanded((prev) => !prev)}
-                >
-                  <AppIcon name={newVisualExpanded ? 'chevronDown' : 'chevronRight'} size={13} />
-                  <span>{newVisualExpanded ? '收起精细调参' : '精细调参'}</span>
-                </button>
+                <span className="blog-field-label">
+                  {previewDocked
+                    ? '实时调参（切换 15 款特效或拖动滑块立即生效）'
+                    : '视觉氛围（支持导入时实时试听全屏特效并调参）'}
+                </span>
+                <div className="blog-tuner-upload-actions">
+                  <button
+                    type="button"
+                    className={`blog-btn blog-btn-sm ${
+                      previewDocked ? 'blog-btn-subtle' : 'blog-btn-primary'
+                    } blog-tuner-preview-btn`}
+                    disabled={(!previewableAudioUrl && !previewDocked) || creating}
+                    onClick={handleToggleDockPreview}
+                    title={
+                      previewableAudioUrl
+                        ? previewDocked
+                          ? '退出全屏实时预览并恢复原播放状态'
+                          : '立即播放当前选择音频，收起窗口到右侧边栏实时观看全屏特效'
+                        : '请先选择音频文件即可开启实时试听与全屏特效调参'
+                    }
+                  >
+                    <AppIcon name={previewDocked ? 'close' : 'play'} size={12} />
+                    <span>{previewDocked ? '退出实时预览' : '▶ 试听并实时调参'}</span>
+                  </button>
+                  {!previewDocked && (
+                    <button
+                      type="button"
+                      className="blog-btn blog-btn-ghost blog-btn-sm"
+                      aria-expanded={newVisualExpanded}
+                      onClick={() => setNewVisualExpanded((prev) => !prev)}
+                    >
+                      <AppIcon name={newVisualExpanded ? 'chevronDown' : 'chevronRight'} size={13} />
+                      <span>{newVisualExpanded ? '收起精细调参' : '精细调参'}</span>
+                    </button>
+                  )}
+                </div>
               </div>
-              <VisualPresetChips value={newVisualConfig} onSelect={setNewVisualConfig} disabled={creating} />
-              {newVisualExpanded && (
-                <BlogVisualConfigEditor value={newVisualConfig} onChange={setNewVisualConfig} compact />
+              <VisualPresetChips
+                value={newVisualConfig}
+                onSelect={handleNewVisualChange}
+                disabled={creating}
+              />
+              {(newVisualExpanded || previewDocked) && (
+                <BlogVisualConfigEditor
+                  value={newVisualConfig}
+                  onChange={handleNewVisualChange}
+                  getAudioFrame={getAudioFrame}
+                  compact={!previewDocked}
+                />
               )}
             </div>
 
@@ -1951,8 +2317,8 @@ function BlogMusicManagerModal({
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              {(audioMediaId || title || artist || album || lrcText || coverPreviewUrl) && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+              {(previewableAudioUrl || audioMediaId || title || artist || album || lrcText || coverPreviewUrl) && (
                 <button
                   type="button"
                   className="blog-btn blog-btn-ghost blog-btn-sm"
@@ -1966,16 +2332,24 @@ function BlogMusicManagerModal({
                 type="submit"
                 className="blog-btn blog-btn-primary blog-btn-sm"
                 disabled={busy || !audioMediaId}
+                title={
+                  uploadingAudio
+                    ? '正在等待 R2 音频上传完成，您可先继续调参预览'
+                    : undefined
+                }
               >
                 <AppIcon name="plus" size={14} />
-                <span>{creating ? '保存中…' : '加入歌单'}</span>
+                <span>
+                  {creating ? '保存中…' : uploadingAudio ? '上传音频中…' : '加入歌单'}
+                </span>
               </button>
             </div>
           </form>
 
-          {/* Existing Playlist Tracks */}
-          <div className="blog-field">
-            <span className="blog-field-label">当前歌单曲目（{tracks.length} 首）</span>
+          {/* Existing Playlist Tracks (hidden while docked so the drawer stays clean & focused) */}
+          {!previewDocked && (
+            <div className="blog-field">
+              <span className="blog-field-label">当前歌单曲目（{tracks.length} 首）</span>
 
             {tracks.length === 0 ? (
               <div className="blog-p2-empty-hint">
@@ -2026,7 +2400,10 @@ function BlogMusicManagerModal({
                             {track.visualConfig && Object.keys(track.visualConfig).length > 0 && (
                               <span className="blog-p2-lrc-tag blog-tuner-track-tag">
                                 {findMatchingVisualPreset(normalizeTrackVisualConfig(track.visualConfig))
-                                  ?.label ?? '自定义视觉'}
+                                  ?.label ??
+                                  getAmbientEffectMeta(
+                                    normalizeTrackVisualConfig(track.visualConfig).effect
+                                  ).name}
                               </span>
                             )}
                           </div>
@@ -2223,18 +2600,21 @@ function BlogMusicManagerModal({
                 })}
               </div>
             )}
-          </div>
+            </div>
+          )}
         </div>
 
         <footer className="blog-modal-footer">
-          <span className="blog-field-hint">页面切换时播放器持续不断流</span>
+          <span className="blog-field-hint">
+            {previewDocked ? '可自由滚动左侧页面，观察毛玻璃卡片与背景融合度' : '页面切换时播放器持续不断流'}
+          </span>
           <button
             type="button"
             className="blog-btn blog-btn-subtle"
-            disabled={busy}
-            onClick={onClose}
+            disabled={busy && !previewDocked}
+            onClick={previewDocked ? stopDockPreview : handleRequestClose}
           >
-            完成
+            {previewDocked ? '返回列表' : '完成'}
           </button>
         </footer>
       </section>
@@ -2246,6 +2626,22 @@ function BlogMusicManagerModal({
 /* --------------------------------------------------------------------------
    Global Music Provider
    -------------------------------------------------------------------------- */
+
+interface DraftPreviewState {
+  audioUrl: string
+  title: string
+  artist: string
+  coverUrl: string | null
+  visualConfig: BlogTrackVisualConfig
+}
+
+interface DraftPreviewSnapshot {
+  prevTrack: BlogPostMusic | null
+  prevTime: number
+  prevWasPlaying: boolean
+  prevAmbientMode: BlogAmbientMode
+  prevTunerOpen: boolean
+}
 
 export function BlogMusicProvider({
   isOwner,
@@ -2284,6 +2680,12 @@ export function BlogMusicProvider({
   const [tunerOpen, setTunerOpen] = useState(false)
   const [liveVisualConfig, setLiveVisualConfigState] = useState<BlogTrackVisualConfig | null>(null)
   const [savingVisualConfig, setSavingVisualConfig] = useState(false)
+  const [draftPreview, setDraftPreview] = useState<DraftPreviewState | null>(null)
+
+  const draftPreviewRef = useRef<DraftPreviewState | null>(null)
+  draftPreviewRef.current = draftPreview
+  const draftSnapshotRef = useRef<DraftPreviewSnapshot | null>(null)
+  const pendingRestoreTimeRef = useRef<number | null>(null)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
@@ -2321,7 +2723,10 @@ export function BlogMusicProvider({
     () => normalizeTrackVisualConfig(currentLibraryTrack?.visualConfig ?? currentTrack?.visualConfig ?? null),
     [currentLibraryTrack?.visualConfig, currentTrack?.visualConfig]
   )
-  const activeVisualConfig = liveVisualConfig ?? savedVisualConfig
+  const draftPreviewActive = Boolean(draftPreview)
+  const activeVisualConfig = draftPreview
+    ? draftPreview.visualConfig
+    : liveVisualConfig ?? savedVisualConfig
   // Read by getAudioFrame() every analysis frame → DSP gains apply on the very next RAF
   const visualConfigRef = useRef<BlogTrackVisualConfig>(activeVisualConfig)
   visualConfigRef.current = activeVisualConfig
@@ -2488,26 +2893,31 @@ export function BlogMusicProvider({
   }, [getAudioFrame])
 
   const showFloatingUi =
-    tracks.length > 0 || currentTrack !== null || drawerOpen || immersionOpen || managerOpen
+    tracks.length > 0 ||
+    currentTrack !== null ||
+    draftPreviewActive ||
+    drawerOpen ||
+    immersionOpen ||
+    managerOpen
   const blogTheme = useSyncedBlogTheme(showFloatingUi)
 
-  // Extract WCAG-safe cover palette whenever currentTrack?.coverUrl changes
-  const activeCoverUrl = currentTrack?.coverUrl || null
+  // Extract WCAG-safe cover palette whenever active cover changes (draft preview overrides currentTrack)
+  const activeCoverUrl = draftPreview ? draftPreview.coverUrl : currentTrack?.coverUrl || null
   useEffect(() => {
     if (!activeCoverUrl) {
-      setPalette(null)
+      setPalette(draftPreviewActive ? DEFAULT_AMBIENT_PALETTE : null)
       return
     }
     let cancelled = false
     void extractCoverPalette(activeCoverUrl).then((extracted) => {
       if (!cancelled) {
-        setPalette(extracted)
+        setPalette(extracted ?? (draftPreviewActive ? DEFAULT_AMBIENT_PALETTE : null))
       }
     })
     return () => {
       cancelled = true
     }
-  }, [activeCoverUrl])
+  }, [activeCoverUrl, draftPreviewActive])
 
   // Sync audio.volume on mount and whenever volume changes
   useEffect(() => {
@@ -2628,16 +3038,224 @@ export function BlogMusicProvider({
     [tracks]
   )
 
+  const applyAudioElementSrc = useCallback(
+    (targetUrl: string) => {
+      const audio = audioRef.current
+      if (!audio) return
+      if (targetUrl.startsWith('blob:') || targetUrl.startsWith('data:')) {
+        audio.removeAttribute('crossorigin')
+      } else if (corsBlockedUrlsRef.current.has(targetUrl) && !sourceNodeRef.current) {
+        audio.removeAttribute('crossorigin')
+      } else {
+        audio.crossOrigin = 'anonymous'
+      }
+      audio.src = targetUrl
+      audio.muted = muted
+      audio.volume = volume
+      audio.load()
+    },
+    [muted, volume]
+  )
+
+  const startDraftPreview = useCallback(
+    (draft: {
+      audioUrl: string
+      title: string
+      artist: string
+      coverUrl?: string | null
+      visualConfig: BlogTrackVisualConfig
+    }) => {
+      if (!draft.audioUrl) return
+      userInitiatedRef.current = true
+      resumeAudioContext()
+      const audio = audioRef.current
+
+      if (!draftPreviewRef.current) {
+        draftSnapshotRef.current = {
+          prevTrack: currentTrack,
+          prevTime: audio ? audio.currentTime : currentTime,
+          prevWasPlaying: isPlaying,
+          prevAmbientMode: ambientMode,
+          prevTunerOpen: tunerOpen
+        }
+      }
+
+      if (tunerOpen) {
+        setTunerOpen(false)
+      }
+      if (ambientMode === 'minimal') {
+        setAmbientMode('active')
+      }
+
+      const normalizedConfig = normalizeTrackVisualConfig(draft.visualConfig)
+      const nextState: DraftPreviewState = {
+        audioUrl: draft.audioUrl,
+        title: draft.title,
+        artist: draft.artist,
+        coverUrl: draft.coverUrl ?? null,
+        visualConfig: normalizedConfig
+      }
+      visualConfigRef.current = normalizedConfig
+      draftPreviewRef.current = nextState
+      setDraftPreview(nextState)
+
+      if (audio) {
+        const currentAttrSrc = audio.getAttribute('src') || ''
+        if (currentAttrSrc !== draft.audioUrl) {
+          pendingRestoreTimeRef.current = null
+          applyAudioElementSrc(draft.audioUrl)
+          setCurrentTime(0)
+          setDuration(0)
+        }
+        ensureAudioAnalyser()
+        void audio.play().catch(() => {
+          setIsPlaying(false)
+        })
+      }
+    },
+    [
+      ambientMode,
+      applyAudioElementSrc,
+      currentTime,
+      currentTrack,
+      ensureAudioAnalyser,
+      isPlaying,
+      resumeAudioContext,
+      setAmbientMode,
+      tunerOpen
+    ]
+  )
+
+  const updateDraftPreview = useCallback(
+    (
+      patch: Partial<{
+        audioUrl: string
+        title: string
+        artist: string
+        coverUrl: string | null
+        visualConfig: BlogTrackVisualConfig
+      }>
+    ) => {
+      const prev = draftPreviewRef.current
+      if (!prev) return
+
+      const nextVisual = patch.visualConfig
+        ? normalizeTrackVisualConfig(patch.visualConfig)
+        : prev.visualConfig
+      const nextAudioUrl = patch.audioUrl !== undefined ? patch.audioUrl : prev.audioUrl
+      const nextTitle = patch.title !== undefined ? patch.title : prev.title
+      const nextArtist = patch.artist !== undefined ? patch.artist : prev.artist
+      const nextCoverUrl = patch.coverUrl !== undefined ? patch.coverUrl : prev.coverUrl
+
+      if (
+        nextAudioUrl === prev.audioUrl &&
+        nextTitle === prev.title &&
+        nextArtist === prev.artist &&
+        nextCoverUrl === prev.coverUrl &&
+        trackVisualConfigEquals(nextVisual, prev.visualConfig)
+      ) {
+        return
+      }
+
+      const nextState: DraftPreviewState = {
+        audioUrl: nextAudioUrl,
+        title: nextTitle,
+        artist: nextArtist,
+        coverUrl: nextCoverUrl,
+        visualConfig: nextVisual
+      }
+      visualConfigRef.current = nextVisual
+      draftPreviewRef.current = nextState
+      setDraftPreview(nextState)
+
+      // Only reload <audio> when audioUrl actually changed — slider drags & effect switches run 100% hiccup-free!
+      if (nextAudioUrl && nextAudioUrl !== prev.audioUrl && audioRef.current) {
+        pendingRestoreTimeRef.current = null
+        applyAudioElementSrc(nextAudioUrl)
+        setCurrentTime(0)
+        setDuration(0)
+        ensureAudioAnalyser()
+        void audioRef.current.play().catch(() => {
+          setIsPlaying(false)
+        })
+      }
+    },
+    [applyAudioElementSrc, ensureAudioAnalyser]
+  )
+
+  const stopDraftPreview = useCallback(
+    (options?: { keepCurrentAudio?: boolean }) => {
+      if (!draftPreviewRef.current) return
+      const snap = draftSnapshotRef.current
+      draftSnapshotRef.current = null
+      draftPreviewRef.current = null
+      setDraftPreview(null)
+
+      if (snap) {
+        setAmbientMode(snap.prevAmbientMode)
+      }
+
+      if (options?.keepCurrentAudio) return
+
+      const audio = audioRef.current
+      if (snap?.prevTrack?.audioUrl) {
+        setCurrentTrack(snap.prevTrack)
+        if (audio) {
+          const currentAttrSrc = audio.getAttribute('src') || ''
+          if (currentAttrSrc !== snap.prevTrack.audioUrl) {
+            pendingRestoreTimeRef.current = snap.prevTime > 0 ? snap.prevTime : null
+            applyAudioElementSrc(snap.prevTrack.audioUrl)
+          } else if (snap.prevTime > 0) {
+            try {
+              audio.currentTime = snap.prevTime
+            } catch {
+              // Ignore seek before metadata errors.
+            }
+          }
+          setCurrentTime(snap.prevTime > 0 ? snap.prevTime : 0)
+          if (snap.prevWasPlaying) {
+            resumeAudioContext()
+            void audio.play().catch(() => {
+              setIsPlaying(false)
+            })
+          } else {
+            audio.pause()
+            setIsPlaying(false)
+          }
+        }
+      } else {
+        pendingRestoreTimeRef.current = null
+        setCurrentTrack(null)
+        if (audio) {
+          audio.pause()
+          audio.removeAttribute('src')
+          audio.load()
+        }
+        setIsPlaying(false)
+        setCurrentTime(0)
+        setDuration(0)
+      }
+    },
+    [applyAudioElementSrc, resumeAudioContext, setAmbientMode]
+  )
+
   const playTrack = useCallback(
     (incoming: BlogPostMusic) => {
       if (!incoming.audioUrl) return
+      if (draftPreviewRef.current) {
+        draftSnapshotRef.current = null
+        draftPreviewRef.current = null
+        setDraftPreview(null)
+      }
+      pendingRestoreTimeRef.current = null
       userInitiatedRef.current = true
       resumeAudioContext()
       const enriched = resolveTrackWithLibrary(incoming)
       const audio = audioRef.current
 
       const isSameSource =
-        currentTrack?.audioUrl === enriched.audioUrl && Boolean(audio?.getAttribute('src'))
+        currentTrack?.audioUrl === enriched.audioUrl &&
+        (audio?.getAttribute('src') || '') === enriched.audioUrl
 
       setCurrentTrack(enriched)
 
@@ -2657,8 +3275,9 @@ export function BlogMusicProvider({
     [currentTrack?.audioUrl, muted, resolveTrackWithLibrary, resumeAudioContext, volume]
   )
 
-  // Sync <audio src> when currentTrack.audioUrl changes
+  // Sync <audio src> when currentTrack.audioUrl changes (paused during draftPreview session)
   useEffect(() => {
+    if (draftPreviewRef.current) return
     const audio = audioRef.current
     if (!audio) return
     if (!currentTrack?.audioUrl) {
@@ -2672,19 +3291,7 @@ export function BlogMusicProvider({
 
     const currentAttrSrc = audio.getAttribute('src') || ''
     if (currentAttrSrc !== currentTrack.audioUrl) {
-      // crossorigin MUST be set before src: once a MediaElementSource owns this element, any
-      // non-CORS response would be tainted and the analyser (and speakers) would get silence.
-      // Same-origin /api/blog/media is unaffected; CORS-enabled CDNs now visualise too. Hosts
-      // that reject CORS fall back once (see onError) while no audio graph exists yet.
-      if (corsBlockedUrlsRef.current.has(currentTrack.audioUrl) && !sourceNodeRef.current) {
-        audio.removeAttribute('crossorigin')
-      } else {
-        audio.crossOrigin = 'anonymous'
-      }
-      audio.src = currentTrack.audioUrl
-      audio.muted = muted
-      audio.volume = volume
-      audio.load()
+      applyAudioElementSrc(currentTrack.audioUrl)
     }
 
     if (pendingAutoPlayRef.current) {
@@ -2693,11 +3300,25 @@ export function BlogMusicProvider({
         setIsPlaying(false)
       })
     }
-  }, [currentTrack?.audioUrl, muted, volume])
+  }, [applyAudioElementSrc, currentTrack?.audioUrl])
 
   const togglePlay = useCallback(() => {
     userInitiatedRef.current = true
     const audio = audioRef.current
+    if (draftPreviewRef.current) {
+      if (!audio) return
+      if (audio.paused) {
+        resumeAudioContext()
+        ensureAudioAnalyser()
+        void audio.play().catch(() => {
+          setIsPlaying(false)
+          showToast('error', '无法播放试听音频')
+        })
+      } else {
+        audio.pause()
+      }
+      return
+    }
     if (!currentTrack) {
       if (tracks.length > 0) {
         playTrack(trackToPostMusic(tracks[0]))
@@ -2714,7 +3335,7 @@ export function BlogMusicProvider({
     } else {
       audio.pause()
     }
-  }, [currentTrack, playTrack, resumeAudioContext, tracks])
+  }, [currentTrack, ensureAudioAnalyser, playTrack, resumeAudioContext, tracks])
 
   const toggleMute = useCallback(() => {
     if (volume === 0) {
@@ -2793,6 +3414,9 @@ export function BlogMusicProvider({
   const openTuner = useCallback(
     (trackId?: string) => {
       if (!isOwner) return
+      if (draftPreviewRef.current) {
+        stopDraftPreview()
+      }
       if (trackId) {
         const target = tracks.find((item) => item.id === trackId)
         const isCurrent =
@@ -2804,10 +3428,10 @@ export function BlogMusicProvider({
       }
       setManagerOpen(false)
       setDrawerOpen(false)
-      if (ambientMode === 'minimal') setAmbientMode('waves')
+      if (ambientMode === 'minimal') setAmbientMode('active')
       setTunerOpen(true)
     },
-    [ambientMode, currentTrack, isOwner, playTrack, setAmbientMode, tracks]
+    [ambientMode, currentTrack, isOwner, playTrack, setAmbientMode, stopDraftPreview, tracks]
   )
 
   const closeTuner = useCallback(() => setTunerOpen(false), [])
@@ -2925,7 +3549,11 @@ export function BlogMusicProvider({
       setLiveVisualConfig,
       tunerOpen,
       openTuner,
-      closeTuner
+      closeTuner,
+      draftPreviewActive,
+      startDraftPreview,
+      updateDraftPreview,
+      stopDraftPreview
     }),
     [
       tracks,
@@ -2956,7 +3584,11 @@ export function BlogMusicProvider({
       setLiveVisualConfig,
       tunerOpen,
       openTuner,
-      closeTuner
+      closeTuner,
+      draftPreviewActive,
+      startDraftPreview,
+      updateDraftPreview,
+      stopDraftPreview
     ]
   )
 
@@ -2971,15 +3603,16 @@ export function BlogMusicProvider({
 
   const displayTrack =
     currentTrack || (tracks.length > 0 ? trackToPostMusic(tracks[0]) : null)
-  const showPill = Boolean(displayTrack)
+  const showPill = Boolean(displayTrack) && !draftPreviewActive
   const effectiveDuration =
     duration > 0
       ? duration
       : tracks.find((t) => t.id === displayTrack?.trackId)?.durationSec || 0
+  const activeEffectMeta = getAmbientEffectMeta(activeVisualConfig.effect)
 
   // Sync dynamic cover accent variables onto floating portals when ambient is active
   const portalAmbientVars = useMemo<CSSProperties | undefined>(() => {
-    if (!isPlaying || ambientMode === 'minimal' || !palette) return undefined
+    if ((!isPlaying && !draftPreviewActive) || ambientMode === 'minimal' || !palette) return undefined
     const isDark = blogTheme === 'dark'
     return {
       '--blog-link': isDark ? palette.accentDark : palette.accentLight,
@@ -2987,7 +3620,7 @@ export function BlogMusicProvider({
       '--blog-link-soft': isDark ? palette.accentDarkSoft : palette.accentLightSoft,
       '--blog-link-rgb': isDark ? palette.accentDarkRgb : palette.accentLightRgb
     } as CSSProperties
-  }, [isPlaying, ambientMode, palette, blogTheme])
+  }, [isPlaying, draftPreviewActive, ambientMode, palette, blogTheme])
 
   const displayVol = muted ? 0 : volume
   const volPercent = Math.round(displayVol * 100)
@@ -3003,8 +3636,19 @@ export function BlogMusicProvider({
           preload="metadata"
           onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
           onLoadedMetadata={(e) => {
-            const d = e.currentTarget.duration
+            const el = e.currentTarget
+            const d = el.duration
             if (Number.isFinite(d) && d > 0) setDuration(d)
+            if (pendingRestoreTimeRef.current !== null) {
+              const targetSeek = pendingRestoreTimeRef.current
+              pendingRestoreTimeRef.current = null
+              try {
+                el.currentTime = Number.isFinite(d) && d > 0 ? Math.min(targetSeek, d) : targetSeek
+                setCurrentTime(el.currentTime)
+              } catch {
+                // Ignore seek bounds errors.
+              }
+            }
           }}
           onDurationChange={(e) => {
             const d = e.currentTarget.duration
@@ -3016,6 +3660,14 @@ export function BlogMusicProvider({
           }}
           onPause={() => setIsPlaying(false)}
           onEnded={() => {
+            if (draftPreviewRef.current) {
+              const el = audioRef.current
+              if (el) {
+                el.currentTime = 0
+                void el.play().catch(() => setIsPlaying(false))
+              }
+              return
+            }
             if (tracks.length > 0) {
               nextTrack()
             } else {
@@ -3093,7 +3745,10 @@ export function BlogMusicProvider({
                     {displayTrack.artist ? ` · ${displayTrack.artist}` : ''}
                   </span>
                   <span className="blog-p2-music-pill-lyric">
-                    {currentLyricLine || (isPlaying ? '正在播放…' : '点击展开歌词与歌单')}
+                    {currentLyricLine ||
+                      (isPlaying
+                        ? `正在播放 · ${ambientMode === 'minimal' ? '极简' : activeEffectMeta.name}`
+                        : '点击展开歌词与歌单')}
                   </span>
                 </button>
 
@@ -3216,13 +3871,20 @@ export function BlogMusicProvider({
                   </div>
 
                   <div className="blog-p2-transport-row">
-                    <span className="blog-p2-time-mono" style={{ minWidth: 42 }}>
-                      {ambientMode === 'waves'
-                        ? '声波'
-                        : ambientMode === 'silk'
-                          ? '极光'
-                          : '极简'}
-                    </span>
+                    <button
+                      type="button"
+                      className="blog-btn blog-btn-ghost blog-btn-sm"
+                      style={{
+                        height: 26,
+                        padding: '0 8px',
+                        fontSize: 11.5,
+                        color: ambientMode === 'minimal' ? 'var(--blog-text-muted)' : 'var(--blog-link)'
+                      }}
+                      onClick={() => setAmbientMode(ambientMode === 'minimal' ? 'active' : 'minimal')}
+                      title="点击切换背景特效开关（特效开 / 极简）"
+                    >
+                      {ambientMode === 'minimal' ? '极简' : `特效 · ${activeEffectMeta.name}`}
+                    </button>
 
                     <div className="blog-p2-transport-main">
                       <button
@@ -3395,12 +4057,19 @@ export function BlogMusicProvider({
           <BlogMusicManagerModal
             open={managerOpen}
             blogTheme={blogTheme}
+            portalStyle={portalAmbientVars}
             tracks={tracks}
             currentTrack={currentTrack}
             isPlaying={isPlaying}
+            draftPreviewActive={draftPreviewActive}
+            getAudioFrame={getAudioFrame}
             onClose={() => setManagerOpen(false)}
             onPlayPreview={(track) => playTrack(trackToPostMusic(track))}
             onTogglePlay={togglePlay}
+            onSeek={seekTo}
+            onStartDraftPreview={startDraftPreview}
+            onUpdateDraftPreview={updateDraftPreview}
+            onStopDraftPreview={stopDraftPreview}
             onTracksChanged={refreshTracks}
             onOpenTuner={(track) => openTuner(track.id)}
           />
@@ -3413,6 +4082,7 @@ export function BlogMusicProvider({
             blogTheme={blogTheme}
             portalStyle={portalAmbientVars}
             track={currentTrack}
+            fallbackDuration={effectiveDuration}
             savable={Boolean(currentLibraryTrack)}
             saving={savingVisualConfig}
             config={activeVisualConfig}
@@ -3423,6 +4093,7 @@ export function BlogMusicProvider({
             onChange={setLiveVisualConfig}
             onSetAmbientMode={setAmbientMode}
             onTogglePlay={togglePlay}
+            onSeek={seekTo}
             onSave={() => void saveVisualConfig()}
             onClose={closeTuner}
           />

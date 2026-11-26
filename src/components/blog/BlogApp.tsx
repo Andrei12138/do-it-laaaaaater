@@ -367,6 +367,7 @@ function BlogAppInner({
     tracks,
     currentTrack,
     isPlaying,
+    draftPreviewActive,
     ambientMode,
     palette,
     getAudioFrame,
@@ -978,7 +979,7 @@ function BlogAppInner({
   const isDetailRoute = route.kind === 'article' || route.kind === 'moment'
 
   const ambientActive =
-    isPlaying && ambientMode !== 'minimal' && Boolean(palette || currentTrack)
+    (isPlaying || draftPreviewActive) && ambientMode !== 'minimal' && Boolean(palette || currentTrack)
 
   const ambientThemeStyle = useMemo<CSSProperties | undefined>(() => {
     if (!ambientActive || !palette) return undefined
@@ -1003,8 +1004,7 @@ function BlogAppInner({
   const blogRootClassName = [
     'blog-root',
     embedded ? 'is-embedded' : '',
-    ambientActive && ambientMode === 'waves' ? 'has-ambient-waves' : '',
-    ambientActive && ambientMode === 'silk' ? 'has-ambient-silk' : ''
+    ambientActive ? 'has-ambient-active' : ''
   ]
     .filter(Boolean)
     .join(' ')

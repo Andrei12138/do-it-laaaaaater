@@ -64,20 +64,15 @@ const SETTINGS_AMBIENT_OPTIONS: ReadonlyArray<{
   recommended?: boolean
 }> = [
   {
-    mode: 'waves',
-    label: '声波点阵',
-    desc: '推荐：32 频段实时声波 + 鼓点涟漪点阵',
+    mode: 'active',
+    label: '开启动态背景',
+    desc: '推荐：15 款开源 WebGL 特效 + 专辑取色，按每首歌的调参配置实时呈现',
     recommended: true
-  },
-  {
-    mode: 'silk',
-    label: '丝绸极光',
-    desc: 'WebGL 3D 噪声流体丝绸，随音乐起伏'
   },
   {
     mode: 'minimal',
     label: '纯白极简',
-    desc: '关闭动态背景与取色'
+    desc: '关闭动态背景与取色，保持纯粹画廊纸白'
   }
 ]
 
