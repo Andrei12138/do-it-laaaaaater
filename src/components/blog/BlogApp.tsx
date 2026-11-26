@@ -369,7 +369,7 @@ function BlogAppInner({
     isPlaying,
     ambientMode,
     palette,
-    getAudioEnergy,
+    getAudioFrame,
     openDrawer,
     openManager
   } = useBlogMusicActions()
@@ -1003,8 +1003,7 @@ function BlogAppInner({
     'blog-root',
     embedded ? 'is-embedded' : '',
     ambientActive && ambientMode === 'waves' ? 'has-ambient-waves' : '',
-    ambientActive && ambientMode === 'silk' ? 'has-ambient-silk' : '',
-    ambientActive && ambientMode === 'vinyl' ? 'has-ambient-vinyl' : ''
+    ambientActive && ambientMode === 'silk' ? 'has-ambient-silk' : ''
   ]
     .filter(Boolean)
     .join(' ')
@@ -1094,9 +1093,7 @@ function BlogAppInner({
           darkMode={darkMode}
           palette={palette}
           coverUrl={currentTrack?.coverUrl ?? null}
-          trackTitle={currentTrack?.title}
-          trackArtist={currentTrack?.artist}
-          getAudioEnergy={getAudioEnergy}
+          getAudioFrame={getAudioFrame}
         />
 
         <div className="blog-bento-stage">

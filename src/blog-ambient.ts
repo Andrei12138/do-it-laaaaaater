@@ -1,4 +1,4 @@
-export type BlogAmbientMode = 'waves' | 'silk' | 'vinyl' | 'minimal'
+export type BlogAmbientMode = 'waves' | 'silk' | 'minimal'
 
 export interface BlogAmbientPalette {
   accentLight: string       // hex clamped to WCAG-legible lightness 36%-46% on white
@@ -38,19 +38,31 @@ export const DEFAULT_AMBIENT_PALETTE: BlogAmbientPalette = {
   glowC: '56, 189, 248'
 }
 
+export const BLOG_AMBIENT_MODES: readonly BlogAmbientMode[] = ['waves', 'silk', 'minimal']
+
+/** Legacy persisted modes (removed vinyl wall / wallpaper / glow) all migrate to the silk shader. */
+const LEGACY_AMBIENT_MODES = new Set(['vinyl', 'wallpaper', 'glow'])
+
+export function isBlogAmbientMode(value: unknown): value is BlogAmbientMode {
+  return value === 'waves' || value === 'silk' || value === 'minimal'
+}
+
+export function normalizeAmbientMode(raw: unknown): BlogAmbientMode {
+  if (isBlogAmbientMode(raw)) return raw
+  if (typeof raw === 'string' && LEGACY_AMBIENT_MODES.has(raw)) return 'silk'
+  return 'waves'
+}
+
 export function readAmbientMode(): BlogAmbientMode {
   try {
-    const raw = globalThis.localStorage?.getItem(BLOG_AMBIENT_MODE_KEY)
-    if (raw === 'waves' || raw === 'silk' || raw === 'vinyl' || raw === 'minimal') {
-      return raw
+    const storage = globalThis.localStorage
+    const raw = storage?.getItem(BLOG_AMBIENT_MODE_KEY)
+    const mode = normalizeAmbientMode(raw)
+    // Rewrite legacy values once so storage stays clean for every later read.
+    if (raw && raw !== mode && LEGACY_AMBIENT_MODES.has(raw)) {
+      storage?.setItem(BLOG_AMBIENT_MODE_KEY, mode)
     }
-    // Seamlessly migrate legacy stored modes for existing users
-    if (raw === 'glow') {
-      return 'silk'
-    }
-    if (raw === 'wallpaper') {
-      return 'vinyl'
-    }
+    return mode
   } catch {
     // Ignore storage access errors in restricted browsing modes.
   }
@@ -58,7 +70,7 @@ export function readAmbientMode(): BlogAmbientMode {
 }
 
 export function saveAmbientMode(mode: BlogAmbientMode): void {
-  if (mode !== 'waves' && mode !== 'silk' && mode !== 'vinyl' && mode !== 'minimal') return
+  if (!isBlogAmbientMode(mode)) return
   try {
     globalThis.localStorage?.setItem(BLOG_AMBIENT_MODE_KEY, mode)
   } catch {
@@ -488,4 +500,302 @@ export function extractCoverPalette(imageUrl: string): Promise<BlogAmbientPalett
 
   inflightExtractions.set(key, task)
   return task
+}
+
+/* ==========================================================================
+   Real-time music analysis (zero-allocation DSP frame)
+   ========================================================================== */
+
+export const AUDIO_BAND_COUNT = 32
+export const AUDIO_WAVEFORM_POINTS = 64
+export const AUDIO_BAND_MIN_HZ = 40
+export const AUDIO_BAND_MAX_HZ = 14000
+export const AUDIO_ANALYSER_FFT_SIZE = 2048
+export const AUDIO_ANALYSER_SMOOTHING = 0.65
+export const AUDIO_ANALYSER_MIN_DB = -85
+export const AUDIO_ANALYSER_MAX_DB = -18
+
+const BAND_ATTACK = 0.55
+const BAND_RELEASE = 0.14
+const PEAK_DECAY = 0.992
+const PEAK_FLOOR = 0.18
+const BAND_PEAK_DECAY = 0.995
+const BAND_PEAK_FLOOR = 0.3
+const BEAT_DECAY = 0.86
+const FLUX_HISTORY = 35
+const BEAT_COOLDOWN_S = 0.16
+const BASS_BANDS_END = 10 // bands 0..9   ≈ 40 Hz – 250 Hz
+const MID_BANDS_END = 22 // bands 10..21  ≈ 250 Hz – 2.2 kHz (vocals / melody)
+const ONSET_BANDS_END = 12 // bass + low-mid energy used for spectral-flux onsets
+const SILENT_FRAMES_BEFORE_INACTIVE = 6
+
+/**
+ * One analysed audio frame. The engine mutates and returns the SAME object every frame
+ * (zero allocations in the render loop) — consumers must read it synchronously.
+ */
+export interface AudioAnalysisFrame {
+  /** 32 logarithmically spaced bands (40 Hz → 14 kHz), 0..1, fast-attack / organic-release. */
+  bands: Float32Array
+  /** 64-point live oscilloscope waveform, -1..1 (zero-crossing triggered, auto-gained). */
+  waveform: Float32Array
+  bass: number
+  mid: number
+  treble: number
+  /** Adaptive loudness 0..1: calm (~0.15) on quiet passages, surging to 1 on drops / choruses. */
+  level: number
+  /** Spring impulse: jumps to 1.0 on a spectral-flux onset, decays ×0.86 per 60 Hz frame. */
+  beatPulse: number
+  /** Monotonic onset counter — increments once per detected beat. */
+  beatId: number
+  /** True ONLY while real, non-zero analyser data is flowing. */
+  active: boolean
+}
+
+export function createAudioAnalysisFrame(): AudioAnalysisFrame {
+  return {
+    bands: new Float32Array(AUDIO_BAND_COUNT),
+    waveform: new Float32Array(AUDIO_WAVEFORM_POINTS),
+    bass: 0,
+    mid: 0,
+    treble: 0,
+    level: 0,
+    beatPulse: 0,
+    beatId: 0,
+    active: false
+  }
+}
+
+/**
+ * Logarithmic band → FFT-bin map. Returns [lo0, hi0, lo1, hi1, ...] with `hi` exclusive;
+ * every band owns at least one bin, so the deep-bass bands never read empty.
+ */
+export function computeLogBandEdges(
+  sampleRate: number,
+  binCount: number,
+  bandCount = AUDIO_BAND_COUNT,
+  minHz = AUDIO_BAND_MIN_HZ,
+  maxHz = AUDIO_BAND_MAX_HZ
+): Int32Array {
+  const edges = new Int32Array(bandCount * 2)
+  const bins = Math.max(1, Math.floor(binCount))
+  const nyquist = Math.max(1, sampleRate) / 2
+  const binHz = nyquist / bins
+  const top = Math.max(minHz * 2, Math.min(maxHz, nyquist * 0.98))
+  const ratio = top / minHz
+  for (let b = 0; b < bandCount; b += 1) {
+    const f0 = minHz * Math.pow(ratio, b / bandCount)
+    const f1 = minHz * Math.pow(ratio, (b + 1) / bandCount)
+    const lo = clamp(Math.floor(f0 / binHz), 0, bins - 1)
+    const hi = clamp(Math.ceil(f1 / binHz), lo + 1, bins)
+    edges[b * 2] = lo
+    edges[b * 2 + 1] = hi
+  }
+  return edges
+}
+
+type ByteSpectrum = ArrayLike<number>
+
+/**
+ * Turns raw AnalyserNode byte data into an expressive, musically-shaped frame:
+ * log bands, adaptive auto-gain (rolling peak tracker), spectral-flux beat onsets
+ * and a triggered oscilloscope waveform. Frame-rate independent (dt-normalised).
+ */
+export class AudioFrameAnalyzer {
+  readonly frame: AudioAnalysisFrame = createAudioAnalysisFrame()
+
+  private readonly raw = new Float32Array(AUDIO_BAND_COUNT)
+  private readonly fluxHistory = new Float32Array(FLUX_HISTORY)
+  private fluxIndex = 0
+  private fluxFilled = 0
+  private edges: Int32Array | null = null
+  private edgesSampleRate = 0
+  private edgesBinCount = 0
+  private peak = PEAK_FLOOR
+  private bandPeak = BAND_PEAK_FLOOR
+  private wavePeak = 0.25
+  private silentFrames = SILENT_FRAMES_BEFORE_INACTIVE
+  private clock = 0
+  private lastBeatAt = -1
+
+  reset(): void {
+    const f = this.frame
+    f.bands.fill(0)
+    f.waveform.fill(0)
+    f.bass = 0
+    f.mid = 0
+    f.treble = 0
+    f.level = 0
+    f.beatPulse = 0
+    f.active = false
+    this.raw.fill(0)
+    this.fluxHistory.fill(0)
+    this.fluxIndex = 0
+    this.fluxFilled = 0
+    this.peak = PEAK_FLOOR
+    this.bandPeak = BAND_PEAK_FLOOR
+    this.wavePeak = 0.25
+    this.silentFrames = SILENT_FRAMES_BEFORE_INACTIVE
+  }
+
+  /**
+   * @param freq      getByteFrequencyData() output, or null when no audio is capturable
+   * @param timeDomain getByteTimeDomainData() output, or null
+   * @param sampleRate AudioContext.sampleRate
+   * @param dtSeconds  time since the previous processed frame
+   * @param volume     element volume (0..1); its pre-analyser attenuation is compensated in dB
+   */
+  process(
+    freq: ByteSpectrum | null,
+    timeDomain: ByteSpectrum | null,
+    sampleRate: number,
+    dtSeconds: number,
+    volume = 1
+  ): AudioAnalysisFrame {
+    const f = this.frame
+    const raw = this.raw
+    const n = AUDIO_BAND_COUNT
+    const dt = clamp(Number.isFinite(dtSeconds) ? dtSeconds : 1 / 60, 1 / 240, 0.1)
+    const k = dt * 60
+    const attack = 1 - Math.pow(1 - BAND_ATTACK, k)
+    const release = 1 - Math.pow(1 - BAND_RELEASE, k)
+    this.clock += dt
+
+    // 1) Log-band magnitudes (avg/max blend keeps transients crisp inside wide treble bands)
+    let anyNonZero = false
+    if (freq && freq.length > 0) {
+      if (!this.edges || this.edgesSampleRate !== sampleRate || this.edgesBinCount !== freq.length) {
+        this.edges = computeLogBandEdges(sampleRate, freq.length)
+        this.edgesSampleRate = sampleRate
+        this.edgesBinCount = freq.length
+      }
+      const edges = this.edges
+      const safeVol = clamp(Number.isFinite(volume) ? volume : 1, 0.05, 1)
+      // Byte data spans (maxDb - minDb) dB → compensate the element volume's attenuation.
+      const volShift = Math.min(
+        0.35,
+        (-20 * Math.log10(safeVol)) / (AUDIO_ANALYSER_MAX_DB - AUDIO_ANALYSER_MIN_DB)
+      )
+      for (let b = 0; b < n; b += 1) {
+        const lo = edges[b * 2]
+        const hi = edges[b * 2 + 1]
+        let sum = 0
+        let max = 0
+        for (let i = lo; i < hi; i += 1) {
+          const v = freq[i]
+          sum += v
+          if (v > max) max = v
+        }
+        if (max > 0) anyNonZero = true
+        const v = ((sum / Math.max(1, hi - lo)) * 0.6 + max * 0.4) / 255
+        // Gentle +tilt: music energy falls with frequency; keep treble readable.
+        const tilt = 1 + 0.32 * (b / (n - 1))
+        raw[b] = v > 0 ? Math.min(1, (v + volShift) * tilt) : 0
+      }
+    } else {
+      raw.fill(0)
+    }
+
+    this.silentFrames = anyNonZero ? 0 : this.silentFrames + 1
+    const active = Boolean(freq) && this.silentFrames < SILENT_FRAMES_BEFORE_INACTIVE
+    f.active = active
+
+    // 2) Adaptive auto-gain: rolling peak tracker
+    let instant = 0
+    let maxRaw = 0
+    for (let b = 0; b < n; b += 1) {
+      instant += raw[b]
+      if (raw[b] > maxRaw) maxRaw = raw[b]
+    }
+    instant /= n
+    this.peak = Math.max(instant, this.peak * Math.pow(PEAK_DECAY, k), PEAK_FLOOR)
+    this.bandPeak = Math.max(maxRaw, this.bandPeak * Math.pow(BAND_PEAK_DECAY, k), BAND_PEAK_FLOOR)
+    const relative = Math.pow(clamp(instant / this.peak, 0, 1), 1.5)
+    const absolute = clamp(instant / 0.55, 0, 1)
+    const targetLevel = active ? clamp(relative * 0.62 + absolute * 0.38, 0, 1) : 0
+    f.level += (targetLevel - f.level) * (targetLevel > f.level ? attack : release)
+
+    // 3) Bands: contour relative to the loudest band, scaled by the loudness envelope
+    const gain = 0.35 + 0.65 * targetLevel
+    const bands = f.bands
+    let bassSum = 0
+    let midSum = 0
+    let trebleSum = 0
+    for (let b = 0; b < n; b += 1) {
+      const shaped = Math.pow(clamp(raw[b] / this.bandPeak, 0, 1), 1.6) * gain
+      const target = active ? clamp((shaped - 0.02) / 0.98, 0, 1) : 0
+      const cur = bands[b]
+      const next = cur + (target - cur) * (target > cur ? attack : release)
+      bands[b] = next
+      if (b < BASS_BANDS_END) bassSum += next
+      else if (b < MID_BANDS_END) midSum += next
+      else trebleSum += next
+    }
+    f.bass = bassSum / BASS_BANDS_END
+    f.mid = midSum / (MID_BANDS_END - BASS_BANDS_END)
+    f.treble = trebleSum / (n - MID_BANDS_END)
+
+    // 4) Spectral-flux beat onset on bass + low-mid energy vs ~35-frame rolling baseline
+    let lowEnergy = 0
+    for (let b = 0; b < ONSET_BANDS_END; b += 1) lowEnergy += raw[b]
+    lowEnergy /= ONSET_BANDS_END
+    let baseline = lowEnergy
+    if (this.fluxFilled > 0) {
+      let histSum = 0
+      for (let i = 0; i < this.fluxFilled; i += 1) histSum += this.fluxHistory[i]
+      baseline = histSum / this.fluxFilled
+    }
+    const flux = lowEnergy - baseline
+    const threshold = 0.025 + baseline * 0.14
+    if (
+      active &&
+      this.fluxFilled >= 8 &&
+      flux > threshold &&
+      lowEnergy > 0.1 &&
+      this.clock - this.lastBeatAt > BEAT_COOLDOWN_S
+    ) {
+      f.beatPulse = 1
+      f.beatId += 1
+      this.lastBeatAt = this.clock
+    } else {
+      f.beatPulse *= Math.pow(BEAT_DECAY, k)
+      if (f.beatPulse < 0.0005) f.beatPulse = 0
+    }
+    this.fluxHistory[this.fluxIndex] = lowEnergy
+    this.fluxIndex = (this.fluxIndex + 1) % FLUX_HISTORY
+    if (this.fluxFilled < FLUX_HISTORY) this.fluxFilled += 1
+
+    // 5) Triggered oscilloscope waveform (rising zero-crossing → stable, readable shape)
+    const wave = f.waveform
+    const points = AUDIO_WAVEFORM_POINTS
+    if (active && timeDomain && timeDomain.length >= points * 2) {
+      const len = timeDomain.length
+      const half = len >> 1
+      let start = 0
+      for (let i = 1; i < half; i += 1) {
+        if (timeDomain[i - 1] < 128 && timeDomain[i] >= 128) {
+          start = i
+          break
+        }
+      }
+      const span = Math.min(len - start, half)
+      const stride = span / points
+      let maxAbs = 0
+      for (let j = 0; j < points; j += 1) {
+        const s = Math.abs((timeDomain[start + Math.floor(j * stride)] - 128) / 128)
+        if (s > maxAbs) maxAbs = s
+      }
+      this.wavePeak = Math.max(maxAbs, this.wavePeak * Math.pow(0.985, k), 0.12)
+      const waveGain = Math.min(4, 0.92 / this.wavePeak) * (0.4 + 0.6 * f.level)
+      const waveSmooth = 1 - Math.pow(0.5, k)
+      for (let j = 0; j < points; j += 1) {
+        const s = clamp(((timeDomain[start + Math.floor(j * stride)] - 128) / 128) * waveGain, -1, 1)
+        wave[j] += (s - wave[j]) * waveSmooth
+      }
+    } else {
+      const fade = Math.pow(0.85, k)
+      for (let j = 0; j < points; j += 1) wave[j] *= fade
+    }
+
+    return f
+  }
 }

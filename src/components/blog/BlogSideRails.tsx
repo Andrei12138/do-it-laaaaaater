@@ -607,15 +607,13 @@ function AlbumRailWidget({
 
 const AMBIENT_MODE_NEXT: Record<BlogAmbientMode, BlogAmbientMode> = {
   waves: 'silk',
-  silk: 'vinyl',
-  vinyl: 'minimal',
+  silk: 'minimal',
   minimal: 'waves'
 }
 
 const AMBIENT_MODE_SHORT_LABELS: Record<BlogAmbientMode, string> = {
   waves: '声波',
-  silk: '丝绸',
-  vinyl: '黑胶',
+  silk: '极光',
   minimal: '极简'
 }
 
@@ -940,7 +938,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
               : footerPillBaseStyle
           }
           onClick={() => setAmbientMode(AMBIENT_MODE_NEXT[ambientMode] ?? 'waves')}
-          title="循环切换音乐播放背景氛围（声波 / 丝绸 / 黑胶 / 极简）"
+          title="循环切换音乐播放背景氛围（声波 / 极光 / 极简）"
           aria-label={`背景氛围：${ambientLabel}，点击切换`}
         >
           <span>氛围 · {ambientLabel}</span>

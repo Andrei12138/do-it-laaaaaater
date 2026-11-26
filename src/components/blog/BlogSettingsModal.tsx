@@ -66,18 +66,13 @@ const SETTINGS_AMBIENT_OPTIONS: ReadonlyArray<{
   {
     mode: 'waves',
     label: '声波点阵',
-    desc: '推荐：Figma 点阵 + 实时音频律动声波',
+    desc: '推荐：32 频段实时声波 + 鼓点涟漪点阵',
     recommended: true
   },
   {
     mode: 'silk',
     label: '丝绸极光',
-    desc: '60fps 动态多色丝绸流动光晕'
-  },
-  {
-    mode: 'vinyl',
-    label: '黑胶展墙',
-    desc: '两侧清晰黑胶唱片旋转 + 锐利封面'
+    desc: 'WebGL 3D 噪声流体丝绸，随音乐起伏'
   },
   {
     mode: 'minimal',
@@ -657,7 +652,7 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
               />
             </label>
 
-            {/* Music Ambient Mode 4-Way Control */}
+            {/* Music Ambient Mode 3-Way Control */}
             <div className="blog-field">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                 <span className="blog-field-label" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -667,7 +662,7 @@ export function BlogSettingsModal({ open, profile, onClose, onSaved }: BlogSetti
                 <span className="blog-field-hint">播放时自动提取专辑封面主色同步全站强调色</span>
               </div>
               <div
-                className="blog-ambient-mode-grid"
+                className="blog-ambient-mode-grid is-three"
                 role="radiogroup"
                 aria-label="音乐播放背景氛围"
               >

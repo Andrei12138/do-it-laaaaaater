@@ -14,10 +14,16 @@ import {
 import { createPortal } from 'react-dom'
 import { errorMessage } from './api-error'
 import {
+  AUDIO_ANALYSER_FFT_SIZE,
+  AUDIO_ANALYSER_MAX_DB,
+  AUDIO_ANALYSER_MIN_DB,
+  AUDIO_ANALYSER_SMOOTHING,
+  AudioFrameAnalyzer,
   DEFAULT_AMBIENT_PALETTE,
   extractCoverPalette,
   readAmbientMode,
   saveAmbientMode,
+  type AudioAnalysisFrame,
   type BlogAmbientMode,
   type BlogAmbientPalette
 } from './blog-ambient'
@@ -35,8 +41,9 @@ import type { BlogMusicTrack, BlogPostMusic } from './blog-types'
 import { AppIcon } from './components/AppIcon'
 import { showToast } from './components/Toast'
 
-export type { BlogAmbientMode, BlogAmbientPalette } from './blog-ambient'
+export type { AudioAnalysisFrame, BlogAmbientMode, BlogAmbientPalette } from './blog-ambient'
 
+/** Lightweight compatibility view of the current {@link AudioAnalysisFrame}. */
 export interface AudioEnergy {
   bass: number
   mid: number
@@ -66,6 +73,8 @@ export interface BlogMusicActionsContextValue {
   setAmbientMode: (mode: BlogAmbientMode) => void
   palette: BlogAmbientPalette | null
   getAudioEnergy: () => AudioEnergy
+  /** Zero-allocation DSP frame (same object every call — read synchronously per RAF). */
+  getAudioFrame: () => AudioAnalysisFrame
   immersionOpen: boolean
   openImmersion: () => void
   closeImmersion: () => void
@@ -348,6 +357,8 @@ interface BlogMusicImmersionModalProps {
   onOpenManager: () => void
 }
 
+type AnalyserByteArray = Parameters<AnalyserNode['getByteFrequencyData']>[0]
+
 function isSameOriginAudioUrl(rawUrl: string): boolean {
   const cleaned = rawUrl.trim()
   if (!cleaned || typeof window === 'undefined') return false
@@ -364,7 +375,6 @@ function isSameOriginAudioUrl(rawUrl: string): boolean {
 const AMBIENT_MODE_OPTIONS: ReadonlyArray<{ mode: BlogAmbientMode; label: string }> = [
   { mode: 'waves', label: '声波点阵' },
   { mode: 'silk', label: '丝绸极光' },
-  { mode: 'vinyl', label: '黑胶展墙' },
   { mode: 'minimal', label: '纯白极简' }
 ]
 
@@ -1792,7 +1802,11 @@ export function BlogMusicProvider({
   const audioCtxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null)
-  const freqDataRef = useRef<Parameters<AnalyserNode['getByteFrequencyData']>[0] | null>(null)
+  const freqDataRef = useRef<AnalyserByteArray | null>(null)
+  const timeDataRef = useRef<AnalyserByteArray | null>(null)
+  const frameAnalyzerRef = useRef<AudioFrameAnalyzer | null>(null)
+  const lastFrameAtRef = useRef(0)
+  const corsBlockedUrlsRef = useRef<Set<string>>(new Set())
   const audioGraphFailedRef = useRef(false)
   const lrcBoxRef = useRef<HTMLDivElement | null>(null)
   const activeLrcLineRef = useRef<HTMLButtonElement | null>(null)
@@ -1811,6 +1825,7 @@ export function BlogMusicProvider({
       analyserRef.current = null
       sourceNodeRef.current = null
       freqDataRef.current = null
+      timeDataRef.current = null
       if (ctx && ctx.state !== 'closed') {
         void ctx.close().catch(() => {
           // Ignore AudioContext close errors on unmount.
@@ -1819,28 +1834,56 @@ export function BlogMusicProvider({
     }
   }, [])
 
+  /** Must be invoked synchronously inside user gestures (play / track click) for autoplay policies. */
+  const resumeAudioContext = useCallback(() => {
+    const ctx = audioCtxRef.current
+    if (ctx && ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {
+        // Audio playback itself must never fail if WebAudio resume is blocked.
+      })
+    }
+  }, [])
+
+  // Browsers may (re)suspend the context (autoplay policy, iOS interruptions, device switches):
+  // resume on the next genuine user gesture while music is playing so analysis never silently dies.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const onGesture = () => {
+      const ctx = audioCtxRef.current
+      const audio = audioRef.current
+      if (ctx && ctx.state === 'suspended' && audio && !audio.paused) {
+        void ctx.resume().catch(() => {
+          // Ignore resume rejections; the next gesture retries.
+        })
+      }
+    }
+    document.addEventListener('pointerdown', onGesture, { capture: true, passive: true })
+    document.addEventListener('keydown', onGesture, { capture: true })
+    return () => {
+      document.removeEventListener('pointerdown', onGesture, { capture: true })
+      document.removeEventListener('keydown', onGesture, { capture: true })
+    }
+  }, [])
+
   const ensureAudioAnalyser = useCallback(() => {
     const audio = audioRef.current
     if (!audio || audioGraphFailedRef.current || typeof window === 'undefined') return
 
+    if (audioCtxRef.current) {
+      resumeAudioContext()
+      return
+    }
+    if (sourceNodeRef.current) return
+
     const activeSrc = audio.currentSrc || audio.getAttribute('src') || audio.src || ''
     if (!activeSrc) return
 
+    // A MediaElementSource fed by a non-CORS cross-origin response outputs pure silence
+    // (tainted media) — only build the graph once the element is provably capturable.
     const canCapture = isSameOriginAudioUrl(activeSrc) || audio.crossOrigin === 'anonymous'
     if (!canCapture) return
 
     try {
-      if (audioCtxRef.current) {
-        if (audioCtxRef.current.state === 'suspended') {
-          void audioCtxRef.current.resume().catch(() => {
-            // Audio playback itself must never fail if WebAudio resume is blocked.
-          })
-        }
-        return
-      }
-
-      if (sourceNodeRef.current) return
-
       const AudioCtxCtor =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
@@ -1848,8 +1891,12 @@ export function BlogMusicProvider({
 
       const ctx = new AudioCtxCtor()
       const analyser = ctx.createAnalyser()
-      analyser.fftSize = 128
-      analyser.smoothingTimeConstant = 0.82
+      // 2048-point FFT (~21.5 Hz bins @ 44.1 kHz) — enough resolution for real kick / bass /
+      // vocal / cymbal separation (the old 128-point FFT lumped 0–1.7 kHz into "bass").
+      analyser.fftSize = AUDIO_ANALYSER_FFT_SIZE
+      analyser.smoothingTimeConstant = AUDIO_ANALYSER_SMOOTHING
+      analyser.maxDecibels = AUDIO_ANALYSER_MAX_DB
+      analyser.minDecibels = AUDIO_ANALYSER_MIN_DB
 
       const source = ctx.createMediaElementSource(audio)
       source.connect(analyser)
@@ -1857,26 +1904,36 @@ export function BlogMusicProvider({
 
       if (ctx.state === 'suspended') {
         void ctx.resume().catch(() => {
-          // Ignore suspended state errors.
+          // Ignore suspended state errors; gesture listener retries.
         })
       }
 
       audioCtxRef.current = ctx
       analyserRef.current = analyser
       sourceNodeRef.current = source
-      freqDataRef.current = new Uint8Array(
-        analyser.frequencyBinCount
-      ) as Parameters<AnalyserNode['getByteFrequencyData']>[0]
+      freqDataRef.current = new Uint8Array(analyser.frequencyBinCount) as AnalyserByteArray
+      timeDataRef.current = new Uint8Array(analyser.fftSize) as AnalyserByteArray
+      frameAnalyzerRef.current?.reset()
     } catch {
       audioGraphFailedRef.current = true
     }
-  }, [])
+  }, [resumeAudioContext])
 
-  const getAudioEnergy = useCallback((): AudioEnergy => {
+  const getAudioFrame = useCallback((): AudioAnalysisFrame => {
+    const engine = frameAnalyzerRef.current ?? (frameAnalyzerRef.current = new AudioFrameAnalyzer())
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+    const last = lastFrameAtRef.current
+    // Several consumers inside one RAF tick share one analysed frame (envelopes advance once).
+    if (last > 0 && now - last < 4) return engine.frame
+    const dt = last > 0 ? (now - last) / 1000 : 1 / 60
+    lastFrameAtRef.current = now
+
     const audio = audioRef.current
     const ctx = audioCtxRef.current
     const analyser = analyserRef.current
     const freqData = freqDataRef.current
+    const timeData = timeDataRef.current
+    const sampleRate = ctx?.sampleRate ?? 48000
 
     if (
       !audio ||
@@ -1887,60 +1944,30 @@ export function BlogMusicProvider({
       !ctx ||
       ctx.state !== 'running' ||
       !analyser ||
-      !freqData
+      !freqData ||
+      !timeData
     ) {
-      return { bass: 0, mid: 0, level: 0 }
+      return engine.process(null, null, sampleRate, dt)
     }
 
     const activeSrc = audio.currentSrc || audio.getAttribute('src') || audio.src || ''
     if (!activeSrc || (!isSameOriginAudioUrl(activeSrc) && audio.crossOrigin !== 'anonymous')) {
-      return { bass: 0, mid: 0, level: 0 }
+      return engine.process(null, null, sampleRate, dt)
     }
 
     try {
       analyser.getByteFrequencyData(freqData)
-      const binCount = freqData.length
-      if (binCount === 0) return { bass: 0, mid: 0, level: 0 }
-
-      const bassEnd = Math.min(5, binCount)
-      let bassWeightedSum = 0
-      let bassWeightTotal = 0
-      for (let i = 0; i < bassEnd; i += 1) {
-        const w = i <= 2 ? 1.5 : 1.0
-        bassWeightedSum += freqData[i] * w
-        bassWeightTotal += w * 255
-      }
-      const rawBass = bassWeightTotal > 0 ? bassWeightedSum / bassWeightTotal : 0
-
-      const midStart = Math.min(5, binCount)
-      const midEnd = Math.min(23, binCount)
-      let midSum = 0
-      for (let i = midStart; i < midEnd; i += 1) {
-        midSum += freqData[i]
-      }
-      const midBins = Math.max(1, midEnd - midStart)
-      const rawMid = midSum / (midBins * 255)
-
-      const highStart = Math.min(23, binCount)
-      const highEnd = Math.min(43, binCount)
-      let highSum = 0
-      for (let i = highStart; i < highEnd; i += 1) {
-        highSum += freqData[i]
-      }
-      const highBins = Math.max(1, highEnd - highStart)
-      const rawHigh = highSum / (highBins * 255)
-
-      const bass = Math.min(1, Math.max(0, Math.pow(rawBass, 0.92) * 1.08))
-      const mid = Math.min(1, Math.max(0, Math.pow(rawMid, 0.9) * 1.12))
-      const level = Math.min(
-        1,
-        Math.max(0, bass * 0.46 + mid * 0.4 + Math.min(1, rawHigh * 1.2) * 0.14)
-      )
-      return { bass, mid, level }
+      analyser.getByteTimeDomainData(timeData)
+      return engine.process(freqData, timeData, sampleRate, dt, audio.volume)
     } catch {
-      return { bass: 0, mid: 0, level: 0 }
+      return engine.process(null, null, sampleRate, dt)
     }
   }, [])
+
+  const getAudioEnergy = useCallback((): AudioEnergy => {
+    const frame = getAudioFrame()
+    return { bass: frame.bass, mid: frame.mid, level: frame.level }
+  }, [getAudioFrame])
 
   const showFloatingUi =
     tracks.length > 0 || currentTrack !== null || drawerOpen || immersionOpen || managerOpen
@@ -2086,6 +2113,7 @@ export function BlogMusicProvider({
     (incoming: BlogPostMusic) => {
       if (!incoming.audioUrl) return
       userInitiatedRef.current = true
+      resumeAudioContext()
       const enriched = resolveTrackWithLibrary(incoming)
       const audio = audioRef.current
 
@@ -2107,7 +2135,7 @@ export function BlogMusicProvider({
       setCurrentTime(0)
       setDuration(0)
     },
-    [currentTrack?.audioUrl, muted, resolveTrackWithLibrary, volume]
+    [currentTrack?.audioUrl, muted, resolveTrackWithLibrary, resumeAudioContext, volume]
   )
 
   // Sync <audio src> when currentTrack.audioUrl changes
@@ -2125,10 +2153,14 @@ export function BlogMusicProvider({
 
     const currentAttrSrc = audio.getAttribute('src') || ''
     if (currentAttrSrc !== currentTrack.audioUrl) {
-      if (isSameOriginAudioUrl(currentTrack.audioUrl)) {
-        audio.crossOrigin = 'anonymous'
-      } else {
+      // crossorigin MUST be set before src: once a MediaElementSource owns this element, any
+      // non-CORS response would be tainted and the analyser (and speakers) would get silence.
+      // Same-origin /api/blog/media is unaffected; CORS-enabled CDNs now visualise too. Hosts
+      // that reject CORS fall back once (see onError) while no audio graph exists yet.
+      if (corsBlockedUrlsRef.current.has(currentTrack.audioUrl) && !sourceNodeRef.current) {
         audio.removeAttribute('crossorigin')
+      } else {
+        audio.crossOrigin = 'anonymous'
       }
       audio.src = currentTrack.audioUrl
       audio.muted = muted
@@ -2155,6 +2187,7 @@ export function BlogMusicProvider({
     }
     if (!audio) return
     if (audio.paused) {
+      resumeAudioContext()
       void audio.play().catch(() => {
         setIsPlaying(false)
         showToast('error', '无法播放当前音频')
@@ -2162,7 +2195,7 @@ export function BlogMusicProvider({
     } else {
       audio.pause()
     }
-  }, [currentTrack, playTrack, tracks])
+  }, [currentTrack, playTrack, resumeAudioContext, tracks])
 
   const toggleMute = useCallback(() => {
     if (volume === 0) {
@@ -2304,6 +2337,7 @@ export function BlogMusicProvider({
       setAmbientMode,
       palette,
       getAudioEnergy,
+      getAudioFrame,
       immersionOpen,
       openImmersion,
       closeImmersion,
@@ -2329,6 +2363,7 @@ export function BlogMusicProvider({
       setAmbientMode,
       palette,
       getAudioEnergy,
+      getAudioFrame,
       immersionOpen,
       openImmersion,
       closeImmersion,
@@ -2406,7 +2441,28 @@ export function BlogMusicProvider({
               setIsPlaying(false)
             }
           }}
-          onError={() => {
+          onError={(e) => {
+            const el = e.currentTarget
+            const failedSrc = el.getAttribute('src') || ''
+            // One-shot CORS fallback: a cross-origin host without Access-Control-Allow-Origin
+            // rejects crossorigin="anonymous". Retry plain (no visualiser) only while no audio
+            // graph exists — after that a tainted element would play pure silence.
+            if (
+              failedSrc &&
+              el.crossOrigin === 'anonymous' &&
+              !isSameOriginAudioUrl(failedSrc) &&
+              !sourceNodeRef.current &&
+              !corsBlockedUrlsRef.current.has(failedSrc)
+            ) {
+              corsBlockedUrlsRef.current.add(failedSrc)
+              el.removeAttribute('crossorigin')
+              el.src = failedSrc
+              el.load()
+              if (userInitiatedRef.current) {
+                void el.play().catch(() => setIsPlaying(false))
+              }
+              return
+            }
             setIsPlaying(false)
             if (userInitiatedRef.current) {
               showToast('error', '音频播放失败，请稍后重试')
@@ -2583,10 +2639,8 @@ export function BlogMusicProvider({
                       {ambientMode === 'waves'
                         ? '声波'
                         : ambientMode === 'silk'
-                          ? '丝绸'
-                          : ambientMode === 'vinyl'
-                            ? '黑胶'
-                            : '极简'}
+                          ? '极光'
+                          : '极简'}
                     </span>
 
                     <div className="blog-p2-transport-main">
