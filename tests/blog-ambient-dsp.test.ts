@@ -17,7 +17,40 @@ import {
   normalizeTrackVisualConfig,
   type BlogTrackVisualConfig
 } from '../src/blog-ambient'
-import { createStageMotion } from '../src/components/blog/ambient/stageMotion'
+import { createStageMotion, getStageColors, mixRgb, stageColors } from '../src/components/blog/ambient/stageMotion'
+
+describe('ambient shader palette', () => {
+  const initial = {
+    effect: DEFAULT_TRACK_VISUAL_CONFIG.effect, config: DEFAULT_TRACK_VISUAL_CONFIG,
+    palette: DEFAULT_AMBIENT_PALETTE, darkMode: false, reducedMotion: false
+  }
+  const next = {
+    ...initial, darkMode: true,
+    palette: { ...DEFAULT_AMBIENT_PALETTE, glowA: '255, 0, 0', glowB: '0, 255, 0', glowC: '0, 0, 255' }
+  }
+
+  it('smoothly transitions all cover tones and the theme accent across shader stages', () => {
+    const layer = {} as HTMLElement
+    const paper = { parentElement: layer } as HTMLElement
+    const reactBits = { parentElement: layer } as HTMLElement
+    const before = stageColors(initial)
+    const after = stageColors(next)
+    getStageColors(paper, initial)(initial, 100)
+    const colors = getStageColors(reactBits, next)
+    expect(colors(next, 200)).toEqual({ ...before, base: after.base })
+    expect(colors(next, 450)).toEqual({
+      glowA: mixRgb(before.glowA, after.glowA, 0.5), glowB: mixRgb(before.glowB, after.glowB, 0.5),
+      glowC: mixRgb(before.glowC, after.glowC, 0.5), accent: mixRgb(before.accent, after.accent, 0.5), base: after.base
+    })
+    expect(colors(next, 700)).toEqual(after)
+  })
+
+  it('applies palette changes immediately with reduced motion', () => {
+    const node = { parentElement: null } as unknown as HTMLElement
+    const colors = getStageColors(node, initial)
+    expect(colors({ ...next, reducedMotion: true }, 200)).toEqual(stageColors(next))
+  })
+})
 
 const SAMPLE_RATE = 44100
 const BINS = 1024 // fftSize 2048

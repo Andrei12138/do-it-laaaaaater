@@ -2,15 +2,60 @@ import type { AmbientStageProps } from '../BlogAmbientBackdrop'
 
 export type Rgb = [number, number, number]
 
-export function stageColors({ palette, darkMode }: AmbientStageProps): [Rgb, Rgb, Rgb] {
-  const primary = (darkMode ? palette.accentDarkRgb : palette.accentLightRgb)
-    .split(',').map((channel) => Number(channel) / 255) as Rgb
-  const base: Rgb = darkMode ? [14 / 255, 14 / 255, 20 / 255] : [246 / 255, 246 / 255, 248 / 255]
-  const secondary: Rgb = [0, 0, 0]
-  for (let channel = 0; channel < 3; channel += 1) {
-    secondary[channel] = primary[channel] * 0.56 + base[channel] * 0.44
+const rgb = (value: string) => value.split(',').map((channel) => Number(channel) / 255) as Rgb
+
+export const mixRgb = (from: Rgb, to: Rgb, amount: number): Rgb => [
+  from[0] + (to[0] - from[0]) * amount,
+  from[1] + (to[1] - from[1]) * amount,
+  from[2] + (to[2] - from[2]) * amount
+]
+
+export function stageColors({ palette, darkMode }: AmbientStageProps) {
+  return {
+    glowA: rgb(palette.glowA), glowB: rgb(palette.glowB), glowC: rgb(palette.glowC),
+    accent: rgb(darkMode ? palette.accentDarkRgb : palette.accentLightRgb),
+    base: rgb(darkMode ? '14, 14, 20' : '246, 246, 248')
   }
-  return [primary, secondary, base]
+}
+
+export function createStageColors(initial: AmbientStageProps) {
+  let { palette, darkMode } = initial
+  let current = stageColors(initial)
+  let from = current
+  let target = current
+  let start: number | undefined
+  return (props: AmbientStageProps, now: number) => {
+    if (palette !== props.palette || darkMode !== props.darkMode) {
+      ({ palette, darkMode } = props)
+      from = current
+      target = stageColors(props)
+      start = now
+    }
+    if (props.reducedMotion || (start !== undefined && now - start >= 500)) {
+      start = undefined
+      return current = target
+    }
+    if (start === undefined) return current
+    const progress = (now - start) / 500
+    const blend = progress * progress * (3 - 2 * progress)
+    return current = {
+      glowA: mixRgb(from.glowA, target.glowA, blend), glowB: mixRgb(from.glowB, target.glowB, blend),
+      glowC: mixRgb(from.glowC, target.glowC, blend), accent: mixRgb(from.accent, target.accent, blend),
+      base: target.base
+    }
+  }
+}
+
+const layerColors = new WeakMap<HTMLElement, ReturnType<typeof createStageColors>>()
+
+export function getStageColors(node: HTMLElement, initial: AmbientStageProps) {
+  const layer = node.parentElement ?? node
+  let colors = layerColors.get(layer)
+  if (!colors) {
+    colors = createStageColors(initial)
+    layerColors.set(layer, colors)
+  }
+  return colors
 }
 
 export function createStageMotion() {
