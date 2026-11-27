@@ -1093,7 +1093,6 @@ function BlogAppInner({
           active={ambientActive}
           darkMode={darkMode}
           palette={palette}
-          coverUrl={currentTrack?.coverUrl ?? null}
           getAudioFrame={getAudioFrame}
           visualConfig={activeVisualConfig}
         />

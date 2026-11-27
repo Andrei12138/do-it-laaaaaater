@@ -734,11 +734,11 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
 
   const footerPillBaseStyle: CSSProperties = {
     height: 28,
-    padding: '0 8px',
+    padding: '0 6px',
     borderRadius: 'var(--blog-radius-pill, 50px)',
     fontSize: 11.5,
     gap: 4,
-    minWidth: 0
+    whiteSpace: 'nowrap'
   }
 
   return (
@@ -902,8 +902,8 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
         style={{
           display: 'grid',
           gridTemplateColumns: showTuner
-            ? 'minmax(0, 1.05fr) minmax(0, 1.05fr) auto'
-            : 'repeat(2, minmax(0, 1fr))',
+            ? 'minmax(max-content, 1fr) minmax(max-content, 1fr) auto'
+            : 'repeat(2, minmax(max-content, 1fr))',
           gap: 6,
           paddingTop: 2
         }}
@@ -916,9 +916,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
           title="打开全屏沉浸封面与歌词舞台"
         >
           <AppIcon name="sparkles" size={12} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            沉浸舞台
-          </span>
+          <span>沉浸舞台</span>
         </button>
 
         <button
@@ -943,9 +941,7 @@ function MusicRailWidget({ isOwner }: BlogSideRailDataProps) {
           aria-label={`${ambientLabel}，点击切换`}
           aria-pressed={ambientMode !== 'minimal'}
         >
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {ambientLabel}
-          </span>
+          <span>{ambientLabel}</span>
         </button>
 
         {showTuner && (

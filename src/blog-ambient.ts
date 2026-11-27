@@ -469,7 +469,7 @@ export function extractCoverPalette(imageUrl: string): Promise<BlogAmbientPalett
       globalThis.clearTimeout(timer)
       img.onload = null
       img.onerror = null
-      paletteCache.set(key, result)
+      if (!key.startsWith('blob:')) paletteCache.set(key, result)
       inflightExtractions.delete(key)
       resolve(result)
     }
@@ -680,23 +680,23 @@ export function isBlogAmbientEffectId(value: unknown): value is BlogAmbientEffec
 export function getAmbientEffectMeta(effect: BlogAmbientEffectId): BlogAmbientEffectMeta {
   return (
     BLOG_AMBIENT_EFFECTS.find((item) => item.id === effect) ??
-    BLOG_AMBIENT_EFFECTS.find((item) => item.id === 'mesh-gradient')!
+    BLOG_AMBIENT_EFFECTS[0]
   )
 }
 
 export const DEFAULT_TRACK_VISUAL_CONFIG: Readonly<BlogTrackVisualConfig> = Object.freeze({
-  effect: 'mesh-gradient',
+  effect: 'threads',
   sensitivity: 1.0,
-  bassGain: 1.1,
+  bassGain: 1.15,
   midGain: 1.0,
   trebleGain: 0.9,
-  beatBoost: 1.0,
-  smoothing: 0.55,
+  beatBoost: 1.2,
+  smoothing: 0.45,
   speed: 1.0,
   intensity: 1.0,
   scale: 1.0,
-  audioReactivity: 1.0,
-  opacity: 0.78
+  audioReactivity: 1.15,
+  opacity: 0.82
 })
 
 export type BlogTrackVisualNumericKey = Exclude<keyof BlogTrackVisualConfig, 'effect'>
@@ -733,7 +733,7 @@ function parseFiniteNum(raw: unknown): number {
  * Gracefully migrates legacy pre-v10 configs (silkSpeed / silkWarp / silkSoftness / waveStyle).
  */
 export function normalizeTrackVisualConfig(
-  partial?: Partial<BlogTrackVisualConfig> | null
+  partial?: unknown
 ): BlogTrackVisualConfig {
   const src = (partial && typeof partial === 'object' ? partial : {}) as Record<string, unknown>
   const out = { ...DEFAULT_TRACK_VISUAL_CONFIG } as BlogTrackVisualConfig
@@ -795,13 +795,13 @@ export function normalizeTrackVisualConfig(
 export function trackVisualConfigEquals(a: BlogTrackVisualConfig, b: BlogTrackVisualConfig): boolean {
   if (a.effect !== b.effect) return false
   for (const key of TRACK_VISUAL_NUMERIC_KEYS) {
-    if (Math.abs(a[key] - b[key]) > 0.0051) return false
+    if (a[key] !== b[key]) return false
   }
   return true
 }
 
 export interface TrackVisualPreset {
-  id: 'mesh-silk' | 'threads-pulse' | 'liquid-metal' | 'aurora-dream' | 'iridescence-pop' | 'chrome-bass'
+  id: 'mesh-silk' | 'threads-pulse' | 'liquid-metal' | 'aurora-dream' | 'metaballs' | 'chrome-bass'
   label: string
   hint: string
   config: BlogTrackVisualConfig
@@ -810,28 +810,15 @@ export interface TrackVisualPreset {
 export const TRACK_VISUAL_PRESETS: readonly TrackVisualPreset[] = Object.freeze([
   {
     id: 'mesh-silk',
-    label: '流光丝绸',
-    hint: 'Paper 流光网格 · 灵动多色旋涡，适合大多数曲目',
-    config: normalizeTrackVisualConfig(DEFAULT_TRACK_VISUAL_CONFIG)
+    label: '流光网格',
+    hint: '层叠丝缎褶皱，适合舒展的旋律',
+    config: normalizeTrackVisualConfig({ effect: 'mesh-gradient', speed: 0.78 })
   },
   {
     id: 'threads-pulse',
     label: '共振丝线',
     hint: 'React Bits 纤细丝线随旋律交织起伏，克制雅致',
-    config: normalizeTrackVisualConfig({
-      effect: 'threads',
-      sensitivity: 1.15,
-      bassGain: 1.15,
-      midGain: 1.2,
-      trebleGain: 1.0,
-      beatBoost: 1.1,
-      smoothing: 0.48,
-      speed: 1.05,
-      intensity: 1.15,
-      scale: 1.0,
-      audioReactivity: 1.25,
-      opacity: 0.84
-    })
+    config: normalizeTrackVisualConfig()
   },
   {
     id: 'liquid-metal',
@@ -872,11 +859,11 @@ export const TRACK_VISUAL_PRESETS: readonly TrackVisualPreset[] = Object.freeze(
     })
   },
   {
-    id: 'iridescence-pop',
-    label: '虹彩律动',
-    hint: '珍珠母贝虹彩流体，适合流行 / 舞曲 / 合成器',
+    id: 'metaballs',
+    label: '融球流体',
+    hint: '光洁球体随鼓点膨胀并合拢',
     config: normalizeTrackVisualConfig({
-      effect: 'iridescence',
+      effect: 'metaballs',
       sensitivity: 1.25,
       bassGain: 1.15,
       midGain: 1.1,
@@ -924,22 +911,23 @@ export const AUDIO_WAVEFORM_POINTS = 64
 export const AUDIO_BAND_MIN_HZ = 40
 export const AUDIO_BAND_MAX_HZ = 14000
 export const AUDIO_ANALYSER_FFT_SIZE = 2048
-export const AUDIO_ANALYSER_SMOOTHING = 0.65
+export const AUDIO_ANALYSER_SMOOTHING = 0.16
 export const AUDIO_ANALYSER_MIN_DB = -85
 export const AUDIO_ANALYSER_MAX_DB = -18
 
-const BAND_ATTACK = 0.55
-const BAND_RELEASE = 0.14
+const BAND_ATTACK = 0.92
+const BAND_RELEASE = 0.18
 const PEAK_DECAY = 0.992
 const PEAK_FLOOR = 0.18
 const BAND_PEAK_DECAY = 0.995
 const BAND_PEAK_FLOOR = 0.3
 const BEAT_DECAY = 0.86
-const FLUX_HISTORY = 35
-const BEAT_COOLDOWN_S = 0.16
+const FLUX_HISTORY = 16
+const BEAT_COOLDOWN_S = 0.11
 const BASS_BANDS_END = 10 // bands 0..9   ≈ 40 Hz – 250 Hz
 const MID_BANDS_END = 22 // bands 10..21  ≈ 250 Hz – 2.2 kHz (vocals / melody)
-const ONSET_BANDS_END = 12 // bass + low-mid energy used for spectral-flux onsets
+const KICK_BANDS_END = 8 // Log-band centers below 180 Hz.
+const PUNCH_BANDS_END = 23 // Log-band centers below 2.5 kHz.
 const SILENT_FRAMES_BEFORE_INACTIVE = 6
 
 /**
@@ -956,6 +944,7 @@ export interface AudioAnalysisFrame {
   treble: number
   /** Adaptive loudness 0..1: calm (~0.15) on quiet passages, surging to 1 on drops / choruses. */
   level: number
+  transient: number
   /** Spring impulse: jumps to 1.0 on a spectral-flux onset, decays ×0.86 per 60 Hz frame. */
   beatPulse: number
   /** Monotonic onset counter — increments once per detected beat. */
@@ -972,6 +961,7 @@ export function createAudioAnalysisFrame(): AudioAnalysisFrame {
     mid: 0,
     treble: 0,
     level: 0,
+    transient: 0,
     beatPulse: 0,
     beatId: 0,
     active: false
@@ -1017,7 +1007,7 @@ function finiteOr(value: unknown, fallback: number): number {
  * region boundary so dragging one gain never opens a hard step in the spectrum.
  */
 function writeBandGains(out: Float32Array, cfg: BlogTrackVisualConfig): void {
-  const bass = clamp(finiteOr(cfg.bassGain, 1.1), 0, 2)
+  const bass = clamp(finiteOr(cfg.bassGain, DEFAULT_TRACK_VISUAL_CONFIG.bassGain), 0, 2)
   const mid = clamp(finiteOr(cfg.midGain, 1), 0, 2)
   const treble = clamp(finiteOr(cfg.trebleGain, 0.9), 0, 2)
   const blend = 2
@@ -1039,6 +1029,7 @@ export class AudioFrameAnalyzer {
   readonly frame: AudioAnalysisFrame = createAudioAnalysisFrame()
 
   private readonly raw = new Float32Array(AUDIO_BAND_COUNT)
+  private readonly prevRaw = new Float32Array(AUDIO_BAND_COUNT)
   private readonly bandGains = new Float32Array(AUDIO_BAND_COUNT).fill(1)
   private readonly fluxHistory = new Float32Array(FLUX_HISTORY)
   private fluxIndex = 0
@@ -1061,12 +1052,15 @@ export class AudioFrameAnalyzer {
     f.mid = 0
     f.treble = 0
     f.level = 0
+    f.transient = 0
     f.beatPulse = 0
     f.active = false
     this.raw.fill(0)
+    this.prevRaw.fill(0)
     this.fluxHistory.fill(0)
     this.fluxIndex = 0
     this.fluxFilled = 0
+    this.lastBeatAt = -Infinity
     this.peak = PEAK_FLOOR
     this.bandPeak = BAND_PEAK_FLOOR
     this.wavePeak = 0.25
@@ -1096,12 +1090,10 @@ export class AudioFrameAnalyzer {
     const k = dt * 60
     const cfg = config ?? DEFAULT_TRACK_VISUAL_CONFIG
     const sensitivity = clamp(finiteOr(cfg.sensitivity, 1), 0.2, 2.5)
-    const beatBoost = clamp(finiteOr(cfg.beatBoost, 1), 0, 2)
-    // smoothing 0.55 ≙ the hand-tuned 0.55 attack / 0.14 release; higher = calmer, lower = snappier
-    const smoothing = clamp(finiteOr(cfg.smoothing, 0.55), 0.1, 0.9)
-    const attackBase = clamp(BAND_ATTACK * (1 - (smoothing - 0.55) * 1.2), 0.12, 0.92)
-    const releaseBase = clamp(BAND_RELEASE * (1 - (smoothing - 0.55) * 1.6), 0.03, 0.4)
-    const attack = 1 - Math.pow(1 - attackBase, k)
+    const beatBoost = clamp(finiteOr(cfg.beatBoost, DEFAULT_TRACK_VISUAL_CONFIG.beatBoost), 0, 2)
+    const smoothing = clamp(finiteOr(cfg.smoothing, DEFAULT_TRACK_VISUAL_CONFIG.smoothing), 0.1, 0.9)
+    const attack = clamp(BAND_ATTACK - (smoothing - 0.55) * 0.095, 0.88, 0.96)
+    const releaseBase = BAND_RELEASE - (smoothing - 0.55) * 0.1
     const release = 1 - Math.pow(1 - releaseBase, k)
     this.clock += dt
     writeBandGains(this.bandGains, cfg)
@@ -1184,36 +1176,41 @@ export class AudioFrameAnalyzer {
     f.mid = midSum / (MID_BANDS_END - BASS_BANDS_END)
     f.treble = trebleSum / (n - MID_BANDS_END)
 
-    // 4) Spectral-flux beat onset on bass + low-mid energy vs ~35-frame rolling baseline
-    let lowEnergy = 0
-    for (let b = 0; b < ONSET_BANDS_END; b += 1) lowEnergy += raw[b]
-    lowEnergy /= ONSET_BANDS_END
-    let baseline = lowEnergy
+    let kickFlux = 0
+    let punchFlux = 0
+    let peakFlux = 0
+    for (let band = 0; band < PUNCH_BANDS_END; band += 1) {
+      const rise = Math.max(0, raw[band] - this.prevRaw[band])
+      this.prevRaw[band] = raw[band]
+      if (band < KICK_BANDS_END) kickFlux += rise
+      else punchFlux += rise
+      peakFlux = Math.max(peakFlux, rise)
+    }
+    const flux = Math.max(kickFlux / KICK_BANDS_END, punchFlux / (PUNCH_BANDS_END - KICK_BANDS_END))
+      + 0.12 * peakFlux
+    f.transient = active ? clamp(flux * 2.2 * sensitivity, 0, 1) : 0
+    let baseline = 0
     if (this.fluxFilled > 0) {
       let histSum = 0
       for (let i = 0; i < this.fluxFilled; i += 1) histSum += this.fluxHistory[i]
       baseline = histSum / this.fluxFilled
     }
-    const flux = lowEnergy - baseline
-    // beatBoost > 1 → more onsets register and each punch rings longer; < 1 → weaker, stricter
-    const threshold = (0.025 + baseline * 0.14) / Math.max(0.4, beatBoost)
+    const threshold = (0.075 + baseline * 1.9) / Math.max(0.45, Math.sqrt(beatBoost * sensitivity))
     if (
       active &&
       beatBoost > 0 &&
-      this.fluxFilled >= 8 &&
       flux > threshold &&
-      lowEnergy > 0.1 &&
-      this.clock - this.lastBeatAt > BEAT_COOLDOWN_S
+      this.clock - this.lastBeatAt >= BEAT_COOLDOWN_S
     ) {
-      f.beatPulse = Math.min(1, beatBoost)
+      f.beatPulse = 1
       f.beatId += 1
       this.lastBeatAt = this.clock
     } else {
       const decay = Math.pow(BEAT_DECAY, 1 / Math.max(0.5, beatBoost))
-      f.beatPulse *= Math.pow(decay, k)
+      f.beatPulse = active && beatBoost > 0 ? f.beatPulse * Math.pow(decay, k) : 0
       if (f.beatPulse < 0.0005) f.beatPulse = 0
     }
-    this.fluxHistory[this.fluxIndex] = lowEnergy
+    this.fluxHistory[this.fluxIndex] = flux
     this.fluxIndex = (this.fluxIndex + 1) % FLUX_HISTORY
     if (this.fluxFilled < FLUX_HISTORY) this.fluxFilled += 1
 

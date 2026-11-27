@@ -414,6 +414,9 @@ describe('Phase 2 朋友圈博客纯函数单元测试', () => {
         opacity: 0.68
       })
 
+      expect(sanitizeTrackVisualConfig({ waveStyle: 'wings', waveScale: 1.25, silkOpacity: 'bad', waveOpacity: 0.7 }))
+        .toEqual({ effect: 'threads', scale: 1.25, opacity: 0.7 })
+
       // 5. 非普通对象输入安全返回空对象
       expect(sanitizeTrackVisualConfig(null)).toEqual({})
       expect(sanitizeTrackVisualConfig(undefined)).toEqual({})

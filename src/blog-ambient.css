@@ -203,55 +203,16 @@
 /* Clean CSS ambient gradient fallback when WebGL is unavailable */
 .blog-ambient-css-fallback {
   position: absolute;
-  inset: -12%;
-  background:
-    radial-gradient(circle at 22% 26%, rgba(var(--ambient-glow-a), 0.36), transparent 55%),
-    radial-gradient(circle at 78% 68%, rgba(var(--ambient-glow-b), 0.32), transparent 58%),
-    radial-gradient(circle at 48% 82%, rgba(var(--ambient-glow-c), 0.28), transparent 54%);
-  filter: blur(42px) saturate(1.22);
-  animation: blogWpSpinA 64s linear infinite;
+  inset: 0;
+  background: radial-gradient(ellipse at 72% 32%, rgba(var(--ambient-ink), 0.15), transparent 56%);
 }
 
 .blog-ambient-layer.is-dark .blog-ambient-css-fallback {
-  background:
-    radial-gradient(circle at 22% 26%, rgba(var(--ambient-glow-a), 0.44), transparent 56%),
-    radial-gradient(circle at 78% 68%, rgba(var(--ambient-glow-b), 0.38), transparent 58%),
-    radial-gradient(circle at 48% 82%, rgba(var(--ambient-glow-c), 0.34), transparent 56%);
-}
-
-/* Settings modal: three ambient option cards in one clean row */
-.blog-ambient-mode-grid.is-three {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-@media (max-width: 520px) {
-  .blog-ambient-mode-grid.is-three {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Ultra-Subtle Editorial Paper Grain */
-.blog-ambient-grain {
-  position: absolute;
-  inset: 0;
-  opacity: 0.03;
-  mix-blend-mode: overlay;
-  background-image: radial-gradient(rgba(0, 0, 0, 0.65) 0.65px, transparent 0.65px);
-  background-size: 3px 3px;
-}
-
-.blog-ambient-layer.is-dark .blog-ambient-grain {
-  opacity: 0.042;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.65) 0.65px, transparent 0.65px);
+  background: radial-gradient(ellipse at 72% 32%, rgba(var(--ambient-ink), 0.23), transparent 56%);
 }
 
 @keyframes blogWpSpinA {
-  from {
-    transform: rotate(0deg) scale(1.18);
-  }
-  to {
-    transform: rotate(360deg) scale(1.18);
-  }
+  to { transform: rotate(360deg) scale(1.18); }
 }
 
 @keyframes blogWpSpinB {

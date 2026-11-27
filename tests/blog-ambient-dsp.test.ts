@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   AUDIO_BAND_COUNT,
+  AUDIO_ANALYSER_SMOOTHING,
   AUDIO_WAVEFORM_POINTS,
   AudioFrameAnalyzer,
+  DEFAULT_AMBIENT_PALETTE,
   BLOG_AMBIENT_EFFECTS,
   BLOG_AMBIENT_EFFECT_IDS,
   BLOG_AMBIENT_MODES,
@@ -15,6 +17,7 @@ import {
   normalizeTrackVisualConfig,
   type BlogTrackVisualConfig
 } from '../src/blog-ambient'
+import { createStageMotion } from '../src/components/blog/ambient/stageMotion'
 
 const SAMPLE_RATE = 44100
 const BINS = 1024 // fftSize 2048
@@ -127,8 +130,40 @@ describe('AudioFrameAnalyzer', () => {
     expect(frame.beatId).toBe(beatsBefore + 1)
     expect(frame.beatPulse).toBe(1)
     frame = engine.process(spectrum(0.3), sineTimeDomain(0.4), SAMPLE_RATE, 1 / 60)
-    expect(frame.beatPulse).toBeCloseTo(0.86, 2)
+    expect(frame.beatPulse).toBeCloseTo(0.86 ** (1 / DEFAULT_TRACK_VISUAL_CONFIG.beatBoost))
     expect(frame.bass).toBeGreaterThan(frame.treble)
+  })
+
+  it.each([
+    ['kick', 2, 8, 'bass'],
+    ['snare', 10, 105, 'mid']
+  ] as const)('locks to a %s on the first FFT frame and punches the renderer immediately', (_, start, end, band) => {
+    expect(AUDIO_ANALYSER_SMOOTHING).toBe(0.16)
+    const engine = new AudioFrameAnalyzer()
+    const fft = new Uint8Array(BINS).fill(230, start, end)
+    const first = engine.process(fft, null, SAMPLE_RATE, 1 / 120)
+    expect(first.beatId).toBe(1)
+    expect(first.beatPulse).toBe(1)
+    expect(first.transient).toBeGreaterThan(0.4)
+    const firstBand = first[band]
+    const motion = createStageMotion()
+    const config = DEFAULT_TRACK_VISUAL_CONFIG
+    const props = { config, effect: config.effect, darkMode: false, palette: DEFAULT_AMBIENT_PALETTE,
+      reducedMotion: false, getAudioFrame: () => engine.frame }
+    const firstDraw = motion(props, 1000 / 120)
+    expect(firstDraw[band]).toBeCloseTo(firstBand * config.audioReactivity)
+    expect(firstDraw.impulse).toBe(config.audioReactivity)
+    expect(firstDraw.frameMs).toBeCloseTo(1000 / 120 + 34 * config.audioReactivity)
+
+    const next = engine.process(fft, null, SAMPLE_RATE, 1 / 120)
+    expect(next.beatId).toBe(1)
+    expect(next.transient).toBe(0)
+    expect(firstBand / next[band]).toBeGreaterThan(0.90)
+    const previousTime = firstDraw.frameMs
+    expect(motion(props, 1000 / 120).frameMs - previousTime).toBeCloseTo(1000 / 120)
+    const release = engine.process(new Uint8Array(BINS), null, SAMPLE_RATE, 1 / 60)
+    expect(release[band] / firstBand).toBeGreaterThan(0.75)
+    expect(release.transient).toBe(0)
   })
 })
 
@@ -140,18 +175,18 @@ describe('normalizeTrackVisualConfig', () => {
       DEFAULT_TRACK_VISUAL_CONFIG
     )
     expect(DEFAULT_TRACK_VISUAL_CONFIG).toMatchObject({
-      effect: 'mesh-gradient',
+      effect: 'threads',
       sensitivity: 1,
-      bassGain: 1.1,
+      bassGain: 1.15,
       midGain: 1,
       trebleGain: 0.9,
-      beatBoost: 1,
-      smoothing: 0.55,
+      beatBoost: 1.2,
+      smoothing: 0.45,
       speed: 1,
       intensity: 1,
       scale: 1,
-      audioReactivity: 1,
-      opacity: 0.78
+      audioReactivity: 1.15,
+      opacity: 0.82
     })
   })
 
@@ -168,7 +203,7 @@ describe('normalizeTrackVisualConfig', () => {
       audioReactivity: -1,
       opacity: 0.01
     })
-    expect(cfg.effect).toBe('mesh-gradient')
+    expect(cfg.effect).toBe('threads')
     expect(cfg.sensitivity).toBe(2.5)
     expect(cfg.bassGain).toBe(0)
     expect(cfg.trebleGain).toBe(1.4)
@@ -208,13 +243,13 @@ describe('normalizeTrackVisualConfig', () => {
 
   it('ships curated presets covering Paper Shaders and React Bits including liquid-metal', () => {
     const labels = TRACK_VISUAL_PRESETS.map((preset) => preset.label)
-    expect(labels).toEqual(['流光丝绸', '共振丝线', '液态水银', '北极光幕', '虹彩律动', '液态铬电音'])
+    expect(labels).toEqual(['流光网格', '共振丝线', '液态水银', '北极光幕', '融球流体', '液态铬电音'])
     const metal = TRACK_VISUAL_PRESETS.find((preset) => preset.id === 'liquid-metal')!
     expect(metal.config.effect).toBe('liquid-metal')
     for (const preset of TRACK_VISUAL_PRESETS) {
       expect(normalizeTrackVisualConfig(preset.config)).toEqual(preset.config)
     }
-    expect(findMatchingVisualPreset(normalizeTrackVisualConfig(null))?.id).toBe('mesh-silk')
+    expect(findMatchingVisualPreset(normalizeTrackVisualConfig(null))?.id).toBe('threads-pulse')
     expect(findMatchingVisualPreset(normalizeTrackVisualConfig({ speed: 2.3 }))).toBeNull()
   })
 })

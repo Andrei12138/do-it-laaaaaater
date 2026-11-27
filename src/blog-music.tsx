@@ -94,7 +94,7 @@ export interface BlogMusicActionsContextValue {
   palette: BlogAmbientPalette | null
   getAudioEnergy: () => AudioEnergy
   /** Zero-allocation DSP frame (same object every call — read synchronously per RAF). */
-  getAudioFrame: () => AudioAnalysisFrame
+  getAudioFrame: (frameTime?: number) => AudioAnalysisFrame
   immersionOpen: boolean
   openImmersion: () => void
   closeImmersion: () => void
@@ -133,7 +133,7 @@ export interface BlogMusicActionsContextValue {
       visualConfig: BlogTrackVisualConfig
     }>
   ) => void
-  stopDraftPreview: (options?: { keepCurrentAudio?: boolean }) => void
+  stopDraftPreview: () => void
 }
 
 export type BlogMusicStableValue = BlogMusicActionsContextValue
@@ -918,7 +918,7 @@ function TunerSlider({
 }
 
 /** 60fps 3-bar VU meter (低频 / 中频 / 高频 + beat pulse dot) — writes straight to DOM per RAF. */
-function TunerVuMeter({ getAudioFrame }: { getAudioFrame: () => AudioAnalysisFrame }) {
+function TunerVuMeter({ getAudioFrame }: { getAudioFrame: (frameTime?: number) => AudioAnalysisFrame }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const fillRefs = useRef<Array<HTMLSpanElement | null>>([])
   const beatDotRef = useRef<HTMLSpanElement | null>(null)
@@ -926,8 +926,8 @@ function TunerVuMeter({ getAudioFrame }: { getAudioFrame: () => AudioAnalysisFra
   useEffect(() => {
     if (typeof window === 'undefined') return
     let rafId = 0
-    const tick = () => {
-      const frame = getAudioFrame()
+    const tick = (now: number) => {
+      const frame = getAudioFrame(now)
       const values = [frame.bass, frame.mid, frame.treble]
       for (let i = 0; i < 3; i += 1) {
         const el = fillRefs.current[i]
@@ -1065,7 +1065,7 @@ function BlogVisualConfigEditor({
 }: {
   value: BlogTrackVisualConfig
   onChange: (next: BlogTrackVisualConfig) => void
-  getAudioFrame?: () => AudioAnalysisFrame
+  getAudioFrame?: (frameTime?: number) => AudioAnalysisFrame
   tab?: VisualTunerTab
   onTabChange?: (tab: VisualTunerTab) => void
   compact?: boolean
@@ -1207,7 +1207,7 @@ interface BlogVisualTunerPanelProps {
   savedConfig: BlogTrackVisualConfig
   ambientMode: BlogAmbientMode
   isPlaying: boolean
-  getAudioFrame: () => AudioAnalysisFrame
+  getAudioFrame: (frameTime?: number) => AudioAnalysisFrame
   onChange: (next: BlogTrackVisualConfig) => void
   onSetAmbientMode: (mode: BlogAmbientMode) => void
   onTogglePlay: () => void
@@ -1359,7 +1359,7 @@ interface BlogMusicManagerModalProps {
   currentTrack: BlogPostMusic | null
   isPlaying: boolean
   draftPreviewActive: boolean
-  getAudioFrame: () => AudioAnalysisFrame
+  getAudioFrame: (frameTime?: number) => AudioAnalysisFrame
   onClose: () => void
   onPlayPreview: (track: BlogMusicTrack) => void
   onTogglePlay: () => void
@@ -1435,6 +1435,7 @@ function BlogMusicManagerModal({
 
   // Track object URLs created by embedded cover extraction & local audio preview so we revoke them cleanly
   const blobUrlRef = useRef<string | null>(null)
+  const hasCustomCoverRef = useRef(false)
   const draftAudioBlobUrlRef = useRef<string | null>(null)
   const onStopDraftPreviewRef = useRef(onStopDraftPreview)
   onStopDraftPreviewRef.current = onStopDraftPreview
@@ -1534,15 +1535,7 @@ function BlogMusicManagerModal({
     onUpdateDraftPreview
   ])
 
-  const handleNewVisualChange = useCallback(
-    (next: BlogTrackVisualConfig) => {
-      setNewVisualConfig(next)
-      if (previewDocked) {
-        onUpdateDraftPreview({ visualConfig: next })
-      }
-    },
-    [onUpdateDraftPreview, previewDocked]
-  )
+  const handleNewVisualChange = setNewVisualConfig
 
   const handleToggleDockPreview = () => {
     if (previewDocked) {
@@ -1612,13 +1605,18 @@ function BlogMusicManagerModal({
 
       setUploadingCover(true)
       setFormError('')
+      hasCustomCoverRef.current = true
+      revokeActiveBlobUrl()
+      const localCoverUrl = URL.createObjectURL(normalizedFile)
+      blobUrlRef.current = localCoverUrl
+      setCoverPreviewUrl(localCoverUrl)
+      setEmbeddedCoverFile(normalizedFile)
+      setCoverMediaId(null)
       try {
         const [uploaded] = await uploadBlogMedia([normalizedFile])
-        if (uploaded) {
-          revokeActiveBlobUrl()
+        if (uploaded && blobUrlRef.current === localCoverUrl) {
           setEmbeddedCoverFile(null)
           setCoverMediaId(uploaded.id)
-          setCoverPreviewUrl(uploaded.thumbUrl || uploaded.url)
           showToast('success', fromPaste ? '已粘贴并上传专辑封面' : '封面已上传')
         }
       } catch (err) {
@@ -1677,6 +1675,7 @@ function BlogMusicManagerModal({
     }
     revokeDraftAudioBlobUrl()
     revokeActiveBlobUrl()
+    hasCustomCoverRef.current = false
     setDraftAudioUrl('')
     setUploadedAudioUrl('')
     setAudioMediaId('')
@@ -1780,25 +1779,11 @@ function BlogMusicManagerModal({
           setDurationSec(extracted.durationSec)
         }
 
-        // Apply embedded album cover preview if user hasn't uploaded a custom cover
-        if (extracted.coverFile && extracted.coverPreviewUrl) {
-          setCoverMediaId((currentCustomId) => {
-            if (currentCustomId) {
-              if (typeof URL !== 'undefined') {
-                try {
-                  URL.revokeObjectURL(extracted.coverPreviewUrl!)
-                } catch {
-                  // Ignore revoke errors.
-                }
-              }
-              return currentCustomId
-            }
-            revokeActiveBlobUrl()
-            blobUrlRef.current = extracted.coverPreviewUrl
-            setEmbeddedCoverFile(extracted.coverFile)
-            setCoverPreviewUrl(extracted.coverPreviewUrl)
-            return null
-          })
+        if (extracted.coverFile && extracted.coverPreviewUrl && !hasCustomCoverRef.current) {
+          revokeActiveBlobUrl()
+          blobUrlRef.current = extracted.coverPreviewUrl
+          setEmbeddedCoverFile(extracted.coverFile)
+          setCoverPreviewUrl(extracted.coverPreviewUrl)
         } else if (extracted.coverPreviewUrl && typeof URL !== 'undefined') {
           try {
             URL.revokeObjectURL(extracted.coverPreviewUrl)
@@ -2141,6 +2126,7 @@ function BlogMusicManagerModal({
                       disabled={creating}
                       onClick={() => {
                         revokeActiveBlobUrl()
+                        hasCustomCoverRef.current = false
                         setEmbeddedCoverFile(null)
                         setCoverMediaId(null)
                         setCoverPreviewUrl(null)
@@ -2281,7 +2267,7 @@ function BlogMusicManagerModal({
                     }
                   >
                     <AppIcon name={previewDocked ? 'close' : 'play'} size={12} />
-                    <span>{previewDocked ? '退出实时预览' : '▶ 试听并实时调参'}</span>
+                    <span>{previewDocked ? '退出实时预览' : '试听并实时调参'}</span>
                   </button>
                   {!previewDocked && (
                     <button
@@ -2640,7 +2626,6 @@ interface DraftPreviewSnapshot {
   prevTime: number
   prevWasPlaying: boolean
   prevAmbientMode: BlogAmbientMode
-  prevTunerOpen: boolean
 }
 
 export function BlogMusicProvider({
@@ -2695,6 +2680,7 @@ export function BlogMusicProvider({
   const timeDataRef = useRef<AnalyserByteArray | null>(null)
   const frameAnalyzerRef = useRef<AudioFrameAnalyzer | null>(null)
   const lastFrameAtRef = useRef(0)
+  const lastRafTimeRef = useRef<number | undefined>(undefined)
   const corsBlockedUrlsRef = useRef<Set<string>>(new Set())
   const audioGraphFailedRef = useRef(false)
   const lrcBoxRef = useRef<HTMLDivElement | null>(null)
@@ -2841,14 +2827,15 @@ export function BlogMusicProvider({
     }
   }, [resumeAudioContext])
 
-  const getAudioFrame = useCallback((): AudioAnalysisFrame => {
+  const getAudioFrame = useCallback((frameTime?: number): AudioAnalysisFrame => {
     const engine = frameAnalyzerRef.current ?? (frameAnalyzerRef.current = new AudioFrameAnalyzer())
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
     const last = lastFrameAtRef.current
-    // Several consumers inside one RAF tick share one analysed frame (envelopes advance once).
-    if (last > 0 && now - last < 4) return engine.frame
+    if (frameTime !== undefined && lastRafTimeRef.current === frameTime) return engine.frame
+    if (frameTime === undefined && last > 0 && now - last < 4) return engine.frame
     const dt = last > 0 ? (now - last) / 1000 : 1 / 60
     lastFrameAtRef.current = now
+    lastRafTimeRef.current = frameTime
 
     const audio = audioRef.current
     const ctx = audioCtxRef.current
@@ -2904,14 +2891,15 @@ export function BlogMusicProvider({
   // Extract WCAG-safe cover palette whenever active cover changes (draft preview overrides currentTrack)
   const activeCoverUrl = draftPreview ? draftPreview.coverUrl : currentTrack?.coverUrl || null
   useEffect(() => {
+    const initialPalette = draftPreviewActive ? DEFAULT_AMBIENT_PALETTE : null
+    setPalette(initialPalette)
     if (!activeCoverUrl) {
-      setPalette(draftPreviewActive ? DEFAULT_AMBIENT_PALETTE : null)
       return
     }
     let cancelled = false
     void extractCoverPalette(activeCoverUrl).then((extracted) => {
       if (!cancelled) {
-        setPalette(extracted ?? (draftPreviewActive ? DEFAULT_AMBIENT_PALETTE : null))
+        setPalette(extracted ?? initialPalette)
       }
     })
     return () => {
@@ -3050,6 +3038,9 @@ export function BlogMusicProvider({
         audio.crossOrigin = 'anonymous'
       }
       audio.src = targetUrl
+      frameAnalyzerRef.current?.reset()
+      lastFrameAtRef.current = 0
+      lastRafTimeRef.current = undefined
       audio.muted = muted
       audio.volume = volume
       audio.load()
@@ -3074,9 +3065,8 @@ export function BlogMusicProvider({
         draftSnapshotRef.current = {
           prevTrack: currentTrack,
           prevTime: audio ? audio.currentTime : currentTime,
-          prevWasPlaying: isPlaying,
-          prevAmbientMode: ambientMode,
-          prevTunerOpen: tunerOpen
+          prevWasPlaying: audio ? !audio.paused && !audio.ended : isPlaying,
+          prevAmbientMode: ambientMode
         }
       }
 
@@ -3184,7 +3174,7 @@ export function BlogMusicProvider({
   )
 
   const stopDraftPreview = useCallback(
-    (options?: { keepCurrentAudio?: boolean }) => {
+    () => {
       if (!draftPreviewRef.current) return
       const snap = draftSnapshotRef.current
       draftSnapshotRef.current = null
@@ -3195,17 +3185,15 @@ export function BlogMusicProvider({
         setAmbientMode(snap.prevAmbientMode)
       }
 
-      if (options?.keepCurrentAudio) return
-
       const audio = audioRef.current
       if (snap?.prevTrack?.audioUrl) {
         setCurrentTrack(snap.prevTrack)
         if (audio) {
           const currentAttrSrc = audio.getAttribute('src') || ''
           if (currentAttrSrc !== snap.prevTrack.audioUrl) {
-            pendingRestoreTimeRef.current = snap.prevTime > 0 ? snap.prevTime : null
+            pendingRestoreTimeRef.current = snap.prevTime
             applyAudioElementSrc(snap.prevTrack.audioUrl)
-          } else if (snap.prevTime > 0) {
+          } else {
             try {
               audio.currentTime = snap.prevTime
             } catch {

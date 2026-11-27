@@ -314,11 +314,7 @@ export function sanitizeTrackVisualConfig(input: unknown): Partial<BlogTrackVisu
     if (legacy !== null) result.scale = clampBound(legacy, 0.3, 2.2)
   }
   if (result.opacity === undefined) {
-    const legacyOpacity = hasOwn(obj, 'silkOpacity')
-      ? finiteVisualNumber(obj.silkOpacity)
-      : hasOwn(obj, 'waveOpacity')
-        ? finiteVisualNumber(obj.waveOpacity)
-        : null
+    const legacyOpacity = finiteVisualNumber(obj.silkOpacity) ?? finiteVisualNumber(obj.waveOpacity)
     if (legacyOpacity !== null) result.opacity = clampBound(legacyOpacity, 0.15, 1.0)
   }
   if (result.effect === undefined) {

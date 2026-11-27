@@ -24,8 +24,9 @@ export interface AmbientStageProps {
   palette: BlogAmbientPalette
   config: BlogTrackVisualConfig
   reducedMotion: boolean
-  getAudioFrame?: () => AudioAnalysisFrame
+  getAudioFrame?: (frameTime?: number) => AudioAnalysisFrame
   onFallback?: () => void
+  onRecovered?: () => void
 }
 
 export interface BlogAmbientBackdropProps {
@@ -33,9 +34,8 @@ export interface BlogAmbientBackdropProps {
   active: boolean
   darkMode: boolean
   palette: BlogAmbientPalette | null
-  coverUrl: string | null
   /** Zero-allocation DSP frame provider (BlogMusicProvider#getAudioFrame). */
-  getAudioFrame?: () => AudioAnalysisFrame
+  getAudioFrame?: (frameTime?: number) => AudioAnalysisFrame
   /** Live per-track tuning (effect, 6 DSP sliders, 5 physical shader sliders). */
   visualConfig?: BlogTrackVisualConfig | null
 }
@@ -55,17 +55,15 @@ export function BlogAmbientBackdrop({
   active,
   darkMode,
   palette,
-  coverUrl,
   getAudioFrame,
   visualConfig
 }: BlogAmbientBackdropProps) {
-  const hasVisualSource = Boolean(palette || coverUrl)
-  const isVisible = active && mode !== 'minimal' && hasVisualSource
+  const isVisible = active && mode !== 'minimal'
 
   // Keep stage mounted through the 700ms CSS fade-out, and load zero shader JS until active is true
   const [motionRunning, setMotionRunning] = useState<boolean>(isVisible)
   const [reducedMotion, setReducedMotion] = useState<boolean>(readReducedMotion)
-  const [stageFallback, setStageFallback] = useState<boolean>(false)
+  const [failedEffect, setFailedEffect] = useState<BlogAmbientEffectId | null>(null)
 
   const cfg = useMemo(() => normalizeTrackVisualConfig(visualConfig), [visualConfig])
   const effectMeta = useMemo(() => getAmbientEffectMeta(cfg.effect), [cfg.effect])
@@ -91,22 +89,18 @@ export function BlogAmbientBackdrop({
     return () => mq.removeEventListener('change', onChange)
   }, [])
 
-  // Reset WebGL fallback flag when switching effects so another stage/shader can recover cleanly
-  useEffect(() => {
-    setStageFallback(false)
-  }, [cfg.effect])
-
   const handleFallback = useCallback(() => {
-    setStageFallback(true)
-  }, [])
+    setFailedEffect(cfg.effect)
+  }, [cfg.effect])
+  const handleRecovered = useCallback(() => {
+    setFailedEffect((effect) => effect === cfg.effect ? null : effect)
+  }, [cfg.effect])
 
   const stageMounted = isVisible || motionRunning
   const StageComponent = effectMeta.group === 'paper' ? PaperShaderStage : ReactBitsStage
 
   const layerStyle = {
-    '--ambient-glow-a': effectivePalette.glowA,
-    '--ambient-glow-b': effectivePalette.glowB,
-    '--ambient-glow-c': effectivePalette.glowC
+    '--ambient-ink': darkMode ? effectivePalette.accentDarkRgb : effectivePalette.accentLightRgb
   } as CSSProperties
 
   return (
@@ -121,10 +115,8 @@ export function BlogAmbientBackdrop({
         className={`blog-ambient-stage${isVisible ? ' is-visible' : ''}`}
         style={{ opacity: cfg.opacity }}
       >
-        {stageMounted &&
-          (stageFallback ? (
-            <div className="blog-ambient-css-fallback" />
-          ) : (
+        {stageMounted && <>
+            {failedEffect === cfg.effect && <div className="blog-ambient-css-fallback" />}
             <Suspense fallback={null}>
               <StageComponent
                 effect={cfg.effect}
@@ -134,11 +126,11 @@ export function BlogAmbientBackdrop({
                 reducedMotion={reducedMotion}
                 getAudioFrame={getAudioFrame}
                 onFallback={handleFallback}
+                onRecovered={handleRecovered}
               />
             </Suspense>
-          ))}
+          </>}
       </div>
-      <div className="blog-ambient-grain" />
     </div>
   )
 }
